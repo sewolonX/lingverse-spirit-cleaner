@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Message = "",
     [string]$Version = "",
     [string[]]$Notes = @(),
@@ -7,6 +7,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$utf8 = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $utf8
+[Console]::InputEncoding = $utf8
+$OutputEncoding = $utf8
 
 function Fail($Text) {
     Write-Host "ERROR: $Text" -ForegroundColor Red
