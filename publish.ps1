@@ -1,5 +1,8 @@
 param(
     [string]$Message = "",
+    [string]$Version = "",
+    [string[]]$Notes = @(),
+    [switch]$Interactive,
     [switch]$NoPush
 )
 
@@ -8,6 +11,29 @@ $ErrorActionPreference = "Stop"
 function Fail($Text) {
     Write-Host "ERROR: $Text" -ForegroundColor Red
     exit 1
+}
+
+function Write-Utf8NoBom($Path, $Text) {
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
+}
+
+function Get-NextPatchVersion($CurrentVersion) {
+    $match = [regex]::Match($CurrentVersion, "^(\d+)\.(\d+)\.(\d+)$")
+    if (-not $match.Success) { return $CurrentVersion }
+    $patch = [int]$match.Groups[3].Value + 1
+    return "$($match.Groups[1].Value).$($match.Groups[2].Value).$patch"
+}
+
+function Read-ReleaseNotes() {
+    Write-Host "输入更新内容，一行一条。直接回车结束：" -ForegroundColor Cyan
+    $items = @()
+    while ($true) {
+        $line = Read-Host "更新内容"
+        if ([string]::IsNullOrWhiteSpace($line)) { break }
+        $items += $line.Trim()
+    }
+    return $items
 }
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,7 +50,8 @@ if (-not (Test-Path $scriptPath)) { Fail "Missing lingverse-spirit-cleaner.user.
 if (-not (Test-Path $releasePath)) { Fail "Missing release.json" }
 
 $scriptText = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
-$release = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+$releaseText = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8
+$release = $releaseText | ConvertFrom-Json
 
 $metaVersion = [regex]::Match($scriptText, "@version\s+([^\s]+)").Groups[1].Value
 $scriptVersion = [regex]::Match($scriptText, "SCRIPT_VERSION\s*=\s*'([^']+)'").Groups[1].Value
@@ -33,6 +60,62 @@ $releaseVersion = [string]$release.version
 if (-not $metaVersion) { Fail "Cannot find @version in userscript metadata." }
 if (-not $scriptVersion) { Fail "Cannot find SCRIPT_VERSION in userscript body." }
 if (-not $releaseVersion) { Fail "Cannot find version in release.json." }
+
+if ($Interactive) {
+    Write-Host "当前版本：$metaVersion" -ForegroundColor Cyan
+    $defaultVersion = Get-NextPatchVersion $metaVersion
+    $inputVersion = Read-Host "输入新版本号 [$defaultVersion]"
+    if ([string]::IsNullOrWhiteSpace($inputVersion)) {
+        $Version = $defaultVersion
+    } else {
+        $Version = $inputVersion.Trim()
+    }
+
+    $Notes = Read-ReleaseNotes
+    if (-not $Notes -or $Notes.Count -eq 0) {
+        $Notes = @("更新脚本")
+    }
+}
+
+if ($Version) {
+    $Version = $Version.Trim()
+    if ($Version -notmatch "^\d+\.\d+\.\d+([-.][0-9A-Za-z]+)?$") {
+        Fail "Invalid version: $Version. Use a version like 0.9.6."
+    }
+
+    if (-not $Notes -or $Notes.Count -eq 0) {
+        if ($release.notes) {
+            $Notes = @($release.notes)
+        } else {
+            $Notes = @("更新脚本")
+        }
+    }
+
+    $scriptText = [regex]::Replace($scriptText, "(@version\s+)[^\s]+", ('${1}' + $Version), 1)
+    $scriptText = [regex]::Replace($scriptText, "(SCRIPT_VERSION\s*=\s*')[^']+(')", ('${1}' + $Version + '${2}'), 1)
+    Write-Utf8NoBom $scriptPath $scriptText
+
+    $downloadUrl = [string]$release.downloadUrl
+    if (-not $downloadUrl) {
+        $downloadUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
+    }
+    $releaseOut = [ordered]@{
+        version = $Version
+        title = "神识清理 v$Version"
+        notes = @($Notes)
+        downloadUrl = $downloadUrl
+    }
+    $releaseJson = ($releaseOut | ConvertTo-Json -Depth 5)
+    Write-Utf8NoBom $releasePath ($releaseJson + [Environment]::NewLine)
+
+    $scriptText = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
+    $releaseText = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8
+    $release = $releaseText | ConvertFrom-Json
+    $metaVersion = [regex]::Match($scriptText, "@version\s+([^\s]+)").Groups[1].Value
+    $scriptVersion = [regex]::Match($scriptText, "SCRIPT_VERSION\s*=\s*'([^']+)'").Groups[1].Value
+    $releaseVersion = [string]$release.version
+}
+
 if ($metaVersion -ne $scriptVersion -or $metaVersion -ne $releaseVersion) {
     Fail "Version mismatch: @version=$metaVersion, SCRIPT_VERSION=$scriptVersion, release.json=$releaseVersion"
 }
@@ -67,7 +150,7 @@ if (-not $status) {
 Write-Host "Changes to publish:" -ForegroundColor Cyan
 $status | ForEach-Object { Write-Host "  $_" }
 
-git add README.md release.json lingverse-spirit-cleaner.user.js publish.ps1
+git add -A
 if ($LASTEXITCODE -ne 0) { Fail "git add failed." }
 
 if (-not $Message) {
