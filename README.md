@@ -18,3 +18,10 @@ When publishing a new version:
 2. Update `release.json` with the same version and release notes.
 3. Commit and push to `main`.
 
+Or run the publish script from PowerShell:
+
+```powershell
+.\publish.ps1 -Message "Publish v0.9.6"
+```
+
+The script checks version consistency, validates JavaScript syntax when Node.js is available, commits the changed files, pushes to GitHub, and verifies the raw GitHub URLs.
