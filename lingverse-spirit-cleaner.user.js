@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      0.9.9
+// @version      0.9.10
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -30,15 +30,15 @@
     var loopTimer = null;
     var busyEvent = false;
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
-    var SCRIPT_VERSION = '0.9.9';
+    var SCRIPT_VERSION = '0.9.10';
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json';
     var BUILTIN_RELEASE = {
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '修复收起横栏宽度异常，收起后不会只剩一条细线。',
-            '一键发布脚本会先读取 GitHub 远端版本和本地版本，再提示默认新版本号。',
-            '顶部事件通知和收起横栏通知继续保留。'
+            '弱怪自战新增战力判断，优先使用遭遇妖兽给出的“稍弱、接近”等评价。',
+            '新增“自战上限”选项，可选择自动打到“稍弱及以下”或“接近及以下”。',
+            '拿不到战力评价时仍回退到旧的生命、攻击、防御和境界判断。'
         ]
     };
 
@@ -58,6 +58,7 @@
         meditateStopSpirit: readNumber('lvSpiritCleaner.meditateStopSpirit', 0),
         monitorStartSpirit: readNumber('lvSpiritCleaner.monitorStartSpirit', 0),
         autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
+        selfFightPowerLimit: localStorage.getItem('lvSpiritCleaner.selfFightPowerLimit') || 'slightlyWeak',
         selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
         autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
@@ -211,6 +212,7 @@
         var meditateStopInput = document.getElementById('lvscMeditateStopSpirit');
         var monitorStartInput = document.getElementById('lvscMonitorStartSpirit');
         var selfFightInput = document.getElementById('lvscAutoSelfFightWeak');
+        var selfFightPowerLimitInput = document.getElementById('lvscSelfFightPowerLimit');
         var selfFightMarginInput = document.getElementById('lvscSelfFightMargin');
         var recoveryModeInput = document.getElementById('lvscAutoRecoveryMode');
         var recoveryThresholdInput = document.getElementById('lvscAutoRecoveryThreshold');
@@ -239,6 +241,8 @@
         state.meditateStopSpirit = Math.max(0, Number(meditateStopInput && meditateStopInput.value || 0));
         state.monitorStartSpirit = Math.max(0, Number(monitorStartInput && monitorStartInput.value || 0));
         state.autoSelfFightWeak = !!(selfFightInput && selfFightInput.checked);
+        state.selfFightPowerLimit = (selfFightPowerLimitInput && selfFightPowerLimitInput.value) || 'slightlyWeak';
+        if (['veryWeak', 'weak', 'slightlyWeak', 'close', 'equal', 'slightlyStrong'].indexOf(state.selfFightPowerLimit) < 0) state.selfFightPowerLimit = 'slightlyWeak';
         state.selfFightMargin = Math.max(1, Math.min(3, Number(selfFightMarginInput && selfFightMarginInput.value || 1.15)));
         state.autoRecoveryMode = (recoveryModeInput && recoveryModeInput.value) || 'both';
         if (['none', 'hp', 'mp', 'both'].indexOf(state.autoRecoveryMode) < 0) state.autoRecoveryMode = 'both';
@@ -268,6 +272,7 @@
         localStorage.setItem('lvSpiritCleaner.meditateStopSpirit', String(state.meditateStopSpirit));
         localStorage.setItem('lvSpiritCleaner.monitorStartSpirit', String(state.monitorStartSpirit));
         localStorage.setItem('lvSpiritCleaner.autoSelfFightWeak', state.autoSelfFightWeak ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.selfFightPowerLimit', state.selfFightPowerLimit);
         localStorage.setItem('lvSpiritCleaner.selfFightMargin', String(state.selfFightMargin));
         localStorage.setItem('lvSpiritCleaner.autoRecoveryMode', state.autoRecoveryMode);
         localStorage.setItem('lvSpiritCleaner.autoRecoveryThreshold', String(state.autoRecoveryThreshold));
@@ -771,7 +776,113 @@
     function combatNumber(value) {
         if (typeof window.parseCombatNumber === 'function') return window.parseCombatNumber(value);
         if (typeof value === 'number') return value;
-        return parseInt(String(value || '').replace(/[^\d-]/g, ''), 10) || 0;
+        var text = String(value || '').replace(/,/g, '').trim();
+        var match = text.match(/-?\d+(?:\.\d+)?/);
+        if (!match) return 0;
+        var num = Number(match[0]);
+        if (!Number.isFinite(num)) return 0;
+        if (/亿/.test(text)) num *= 100000000;
+        else if (/万/.test(text)) num *= 10000;
+        return Math.round(num);
+    }
+
+    function firstCombatValue(source, keys) {
+        source = source || {};
+        for (var i = 0; i < keys.length; i++) {
+            var value = source[keys[i]];
+            if (value === 0 || value) {
+                var parsed = combatNumber(value);
+                if (parsed > 0) return parsed;
+            }
+        }
+        return 0;
+    }
+
+    function textFromFirstElement(ids) {
+        for (var i = 0; i < ids.length; i++) {
+            var el = document.getElementById(ids[i]);
+            if (el && el.textContent) return el.textContent.trim();
+        }
+        return '';
+    }
+
+    function overlayText() {
+        var overlay = document.getElementById('encounterOverlay');
+        return overlay && overlay.textContent || '';
+    }
+
+    function relationRank(value) {
+        value = String(value || '').trim();
+        if (!value) return null;
+        if (/碾压|极弱|很弱|明显弱|远弱|弱很多/.test(value)) return { key: 'weak', score: 1, label: '明显弱' };
+        if (/稍弱|略弱|偏弱|较弱|更弱|弱于|低于/.test(value)) return { key: 'slightlyWeak', score: 2, label: '稍弱' };
+        if (/接近|相近|差不多|相当|持平/.test(value)) return { key: 'close', score: 3, label: '接近' };
+        if (/同等|相等|相同/.test(value)) return { key: 'equal', score: 4, label: '同等' };
+        if (/稍强|略强|偏强|小强/.test(value)) return { key: 'slightlyStrong', score: 5, label: '稍强' };
+        if (/更强|较强|很强|明显强|远强|强于|高于/.test(value)) return { key: 'strong', score: 6, label: '更强' };
+        if (/弱/.test(value)) return { key: 'slightlyWeak', score: 2, label: '稍弱' };
+        if (/强/.test(value)) return { key: 'strong', score: 6, label: '更强' };
+        return null;
+    }
+
+    function relationLimitScore() {
+        var key = state.selfFightPowerLimit || 'slightlyWeak';
+        var scores = {
+            veryWeak: 1,
+            weak: 1,
+            slightlyWeak: 2,
+            close: 3,
+            equal: 4,
+            slightlyStrong: 5
+        };
+        return scores[key] || 2;
+    }
+
+    function relationLabelByScore(score) {
+        if (score <= 1) return '明显弱';
+        if (score === 2) return '稍弱';
+        if (score === 3) return '接近';
+        if (score === 4) return '同等';
+        if (score === 5) return '稍强';
+        return '更强';
+    }
+
+    function relationFromPower(playerPower, monsterPower) {
+        if (!(playerPower > 0) || !(monsterPower > 0)) return null;
+        var ratio = monsterPower / playerPower;
+        var score = 6;
+        if (ratio <= 0.7) score = 1;
+        else if (ratio <= 0.95) score = 2;
+        else if (ratio <= 1.1) score = 3;
+        else if (ratio <= 1.25) score = 5;
+        return {
+            key: score <= 1 ? 'weak' : score === 2 ? 'slightlyWeak' : score === 3 ? 'close' : score === 5 ? 'slightlyStrong' : 'strong',
+            score: score,
+            label: relationLabelByScore(score),
+            ratio: ratio
+        };
+    }
+
+    function readEncounterPowerRelation(encounterData, playerPower, monsterPower) {
+        encounterData = encounterData || {};
+        var candidates = [
+            encounterData.powerRelation,
+            encounterData.combatPowerRelation,
+            encounterData.powerComparison,
+            encounterData.combatPowerComparison,
+            encounterData.strengthRelation,
+            encounterData.relativePower,
+            encounterData.powerLevelText,
+            textFromFirstElement(['encounterPowerRelation', 'encounterCombatPowerRelation', 'encounterPowerCompare', 'encounterPowerComparison'])
+        ];
+        var text = overlayText();
+        var overlayMatch = text.match(/(?:战力|实力|威胁|强度)[^，。；\n]*(碾压|明显弱|稍弱|略弱|接近|相近|相当|同等|稍强|略强|更强|明显强)/);
+        if (overlayMatch) candidates.push(overlayMatch[1]);
+        for (var i = 0; i < candidates.length; i++) {
+            var relation = relationRank(candidates[i]);
+            if (relation) return relation;
+        }
+        return relationFromPower(playerPower, monsterPower);
     }
 
     async function loadCurrentEncounterData() {
@@ -795,7 +906,9 @@
             monsterHp: window._currentEncounterMonsterHp || ((document.getElementById('encounterMonsterHp') || {}).textContent || 0),
             monsterAtk: window._currentEncounterMonsterAtk || ((document.getElementById('encounterMonsterAtk') || {}).textContent || 0),
             monsterDef: ((document.getElementById('encounterMonsterDef') || {}).textContent || 0),
-            monsterRealmLevel: window._currentEncounterMonsterLevel || 1
+            monsterRealmLevel: window._currentEncounterMonsterLevel || 1,
+            monsterPower: window._currentEncounterMonsterPower || textFromFirstElement(['encounterMonsterPower', 'encounterMonsterCombatPower']),
+            powerRelation: textFromFirstElement(['encounterPowerRelation', 'encounterCombatPowerRelation', 'encounterPowerCompare', 'encounterPowerComparison'])
         };
     }
 
@@ -811,6 +924,19 @@
         var pHp = Number(p.hp || 0);
         var pAtk = Number(p.attack || 0);
         var pDef = Number(p.defense || 0);
+        var playerPower = firstCombatValue(p, ['combatPower', 'battlePower', 'power', 'fightPower', 'strength', 'totalPower']);
+        var monsterPower = firstCombatValue(encounterData, ['monsterPower', 'monsterCombatPower', 'combatPower', 'battlePower', 'power', 'fightPower', 'strength', 'totalPower']);
+        var powerRelation = readEncounterPowerRelation(encounterData, playerPower, monsterPower);
+        if (powerRelation) {
+            var limit = relationLimitScore();
+            if (powerRelation.score > limit) {
+                return {
+                    safe: false,
+                    reason: '战力' + powerRelation.label + '，超过自战上限“' + relationLabelByScore(limit) + '及以下”',
+                    summary: '自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')
+                };
+            }
+        }
 
         var mStage = Number(window._currentEncounterMonsterStage || 0);
         if (!mStage && typeof window.parseRealmStageName === 'function') {
@@ -841,8 +967,8 @@
 
         return {
             safe: true,
-            reason: '妖兽数值未明显高于自身',
-            summary: '妖兽 HP/攻/防 ' + mHp + '/' + mAtk + '/' + mDef + '；自身 ' + pHp + '/' + pAtk + '/' + pDef
+            reason: powerRelation ? ('战力' + powerRelation.label + '，未超过自战上限') : '妖兽数值未明显高于自身',
+            summary: powerRelation ? ('自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')) : ('妖兽 HP/攻/防 ' + mHp + '/' + mAtk + '/' + mDef + '；自身 ' + pHp + '/' + pAtk + '/' + pDef)
         };
     }
 
@@ -2002,11 +2128,12 @@
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title-row"><span>妖兽遭遇</span><label class="lvsc-check"><input id="lvscAutoSelfFightWeak" type="checkbox">弱怪自战</label></div>' +
             '<div class="lvsc-grid2">' +
+            '<label>自战上限<select id="lvscSelfFightPowerLimit"><option value="weak">明显弱及以下</option><option value="slightlyWeak">稍弱及以下</option><option value="close">接近及以下</option><option value="equal">同等及以下</option><option value="slightlyStrong">稍强及以下</option></select></label>' +
             '<label>接近倍率<input id="lvscSelfFightMargin" type="number" min="1" max="3" step="0.05" title="1.15 表示妖兽数值不超过自身 115% 时可自战"></label>' +
             '<button id="lvscSelfFightBtn">检查并自战</button>' +
             '</div>' +
             '<label class="lvsc-check"><input id="lvscAutoHire" type="checkbox">无法自战时自动雇最低价护道</label>' +
-            '<div class="lvsc-help">先判断生命、攻击、防御和境界；可自战时优先于护道。</div>' +
+            '<div class="lvsc-help">优先按战力评价判断；没有战力时回退到生命、攻击、防御和境界。可自战时优先于护道。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title">自动恢复</div>' +
@@ -2076,6 +2203,7 @@
         document.getElementById('lvscMerchantMode').value = String(state.merchantMode);
         document.getElementById('lvscAutoMerchant').checked = state.autoMerchantLegend;
         document.getElementById('lvscAutoSelfFightWeak').checked = state.autoSelfFightWeak;
+        document.getElementById('lvscSelfFightPowerLimit').value = String(state.selfFightPowerLimit);
         document.getElementById('lvscSelfFightMargin').value = String(state.selfFightMargin);
         document.getElementById('lvscAutoHire').checked = state.autoHireCheapest;
         document.getElementById('lvscAutoRecoveryMode').value = String(state.autoRecoveryMode);
@@ -2135,6 +2263,7 @@
         document.getElementById('lvscMerchantMode').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMerchant').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoSelfFightWeak').onchange = syncSettingsFromUi;
+        document.getElementById('lvscSelfFightPowerLimit').onchange = syncSettingsFromUi;
         document.getElementById('lvscSelfFightMargin').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHire').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryMode').onchange = syncSettingsFromUi;
