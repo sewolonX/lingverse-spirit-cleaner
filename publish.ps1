@@ -30,8 +30,8 @@ function Get-NextPatchVersion($CurrentVersion) {
 }
 
 function Compare-Semver($A, $B) {
-    $pa = ([string]$A).TrimStart("v", "V").Split(".", "-")
-    $pb = ([string]$B).TrimStart("v", "V").Split(".", "-")
+    $pa = [regex]::Split(([string]$A).TrimStart("v", "V"), "[.-]")
+    $pb = [regex]::Split(([string]$B).TrimStart("v", "V"), "[.-]")
     $len = [Math]::Max($pa.Count, $pb.Count)
     for ($i = 0; $i -lt $len; $i++) {
         $na = 0
