@@ -1,0 +1,10 @@
+{
+    "version":  "0.9.12",
+    "title":  "神识清理 v0.9.12",
+    "notes":  [
+                  "商人自动购买新增商品关键词、品质优先和高价阈值配置。",
+                  "面板改成顶部菜单切换不同功能分类，窗口缩放时不再把大类混在一起。",
+                  "商人购买会先按筛选规则挑商品，买不到符合条件的商品再自动离开。"
+              ],
+    "downloadUrl":  "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
+}

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      0.9.13
+// @version      0.9.12
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -27,28 +27,18 @@
     var monitoringSpirit = false;
     var autoTrialRunning = false;
     var autoTreasureRunning = false;
-    var autoInscriptionRunning = false;
     var loopTimer = null;
     var busyEvent = false;
-    var checkingCloudUpdate = false;
-    var inscriptionStats = { total: 0, kept: 0, discarded: 0, best: '' };
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
-    var SCRIPT_VERSION = '0.9.13';
-    var CLOUD_UPDATE_POLL_MS = 60000;
+    var SCRIPT_VERSION = '0.9.12';
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json';
     var BUILTIN_RELEASE = {
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '新增页面不刷新时的云端版本轮询：脚本运行期间每 60 秒检测一次 release.json。',
-            '发现 GitHub 上有更高版本时，会自动弹出更新公告和更新地址。',
-            '自动流程新增“陨落后自动引渡归来”，死亡弹窗出现后可自动复活并继续流程。',
-            '自动流程新增“启动前检查道韵加成”，开始清理或刷藏宝图前会确认加成状态。',
-            '冥想流程新增“优先仙缘高级冥想”，失败后自动回退普通冥想。',
-            '铭文洗练目标改为最低等级、属性、最小数值分开选择，不再需要手写关键词。',
-            '藏宝图配置改成“最多用几张 / 一次用几张 / 每次间隔”，并补充说明示例。',
-            '新增浏览器通知开关，新版本和铭文命中目标时可弹系统通知。',
-            '更新公告和 README 已整理为功能列表、安装、使用、配置、发布和回滚说明。'
+            '商人自动购买新增商品关键词、品质优先和高价阈值配置。',
+            '面板改成顶部菜单切换不同功能分类，窗口缩放时不再把大类混在一起。',
+            '商人购买会先按筛选规则挑商品，买不到符合条件的商品再自动离开。'
         ]
     };
 
@@ -68,22 +58,7 @@
         autoMeditate: localStorage.getItem('lvSpiritCleaner.autoMeditate') !== '0',
         autoExploreAfterMeditate: localStorage.getItem('lvSpiritCleaner.autoExploreAfterMeditate') !== '0',
         nightOnlyExplore: localStorage.getItem('lvSpiritCleaner.nightOnlyExplore') === '1',
-        autoReviveDeath: localStorage.getItem('lvSpiritCleaner.autoReviveDeath') !== '0',
-        checkDaoyunBoost: localStorage.getItem('lvSpiritCleaner.checkDaoyunBoost') !== '0',
-        useAdvancedMeditate: localStorage.getItem('lvSpiritCleaner.useAdvancedMeditate') === '1',
         meditateStopSpirit: readNumber('lvSpiritCleaner.meditateStopSpirit', 0),
-        inscriptionTargets: localStorage.getItem('lvSpiritCleaner.inscriptionTargets') || '攻击:50,防御:50,气血:100,神识:20',
-        inscriptionQuality: localStorage.getItem('lvSpiritCleaner.inscriptionQuality') || 'any',
-        inscriptionStat: localStorage.getItem('lvSpiritCleaner.inscriptionStat') || '攻击',
-        inscriptionMinValue: readNumber('lvSpiritCleaner.inscriptionMinValue', 50),
-        inscriptionStopMode: localStorage.getItem('lvSpiritCleaner.inscriptionStopMode') || 'any',
-        inscriptionMaxAttempts: readNumber('lvSpiritCleaner.inscriptionMaxAttempts', 0),
-        inscriptionResultDelay: readNumber('lvSpiritCleaner.inscriptionResultDelay', 1500),
-        inscriptionDiscardDelay: readNumber('lvSpiritCleaner.inscriptionDiscardDelay', 600),
-        treasureBatchSize: readNumber('lvSpiritCleaner.treasureBatchSize', 0),
-        treasureUseQuantity: readNumber('lvSpiritCleaner.treasureUseQuantity', 1),
-        treasureIntervalMs: readNumber('lvSpiritCleaner.treasureIntervalMs', 0),
-        desktopNotify: localStorage.getItem('lvSpiritCleaner.desktopNotify') !== '0',
         monitorStartSpirit: readNumber('lvSpiritCleaner.monitorStartSpirit', 0),
         autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
         selfFightPowerLimit: localStorage.getItem('lvSpiritCleaner.selfFightPowerLimit') || 'stable',
@@ -113,21 +88,6 @@
     function toast(message) {
         if (typeof window.showToast === 'function') window.showToast(message);
         setStatus(message, 'warn');
-    }
-
-    function notifyUser(title, body) {
-        if (!state.desktopNotify || typeof Notification === 'undefined') return;
-        if (Notification.permission === 'granted') {
-            try { new Notification(title, { body: body || '' }); } catch (_) {}
-            return;
-        }
-        if (Notification.permission !== 'denied') {
-            Notification.requestPermission().then(function (permission) {
-                if (permission === 'granted') {
-                    try { new Notification(title, { body: body || '' }); } catch (_) {}
-                }
-            }).catch(function () {});
-        }
     }
 
     function getPlayer() {
@@ -237,10 +197,6 @@
         if (treasureBtn) {
             treasureBtn.textContent = autoTreasureRunning ? '停止刷图' : '自动刷藏宝图';
         }
-        var inscriptionBtn = document.getElementById('lvscAutoInscriptionBtn');
-        if (inscriptionBtn) {
-            inscriptionBtn.textContent = autoInscriptionRunning ? '停止洗练' : '自动刷铭文';
-        }
     }
 
     function syncSettingsFromUi() {
@@ -259,21 +215,7 @@
         var meditateInput = document.getElementById('lvscAutoMeditate');
         var exploreAfterMeditateInput = document.getElementById('lvscAutoExploreAfterMeditate');
         var nightOnlyInput = document.getElementById('lvscNightOnlyExplore');
-        var reviveDeathInput = document.getElementById('lvscAutoReviveDeath');
-        var daoyunBoostInput = document.getElementById('lvscCheckDaoyunBoost');
-        var advancedMeditateInput = document.getElementById('lvscUseAdvancedMeditate');
         var meditateStopInput = document.getElementById('lvscMeditateStopSpirit');
-        var inscriptionQualityInput = document.getElementById('lvscInscriptionQuality');
-        var inscriptionStatInput = document.getElementById('lvscInscriptionStat');
-        var inscriptionMinValueInput = document.getElementById('lvscInscriptionMinValue');
-        var inscriptionStopModeInput = document.getElementById('lvscInscriptionStopMode');
-        var inscriptionMaxAttemptsInput = document.getElementById('lvscInscriptionMaxAttempts');
-        var inscriptionResultDelayInput = document.getElementById('lvscInscriptionResultDelay');
-        var inscriptionDiscardDelayInput = document.getElementById('lvscInscriptionDiscardDelay');
-        var treasureBatchInput = document.getElementById('lvscTreasureBatchSize');
-        var treasureQtyInput = document.getElementById('lvscTreasureUseQuantity');
-        var treasureIntervalInput = document.getElementById('lvscTreasureIntervalMs');
-        var desktopNotifyInput = document.getElementById('lvscDesktopNotify');
         var monitorStartInput = document.getElementById('lvscMonitorStartSpirit');
         var selfFightInput = document.getElementById('lvscAutoSelfFightWeak');
         var selfFightPowerLimitInput = document.getElementById('lvscSelfFightPowerLimit');
@@ -305,25 +247,7 @@
         state.autoMeditate = !!(meditateInput && meditateInput.checked);
         state.autoExploreAfterMeditate = !!(exploreAfterMeditateInput && exploreAfterMeditateInput.checked);
         state.nightOnlyExplore = !!(nightOnlyInput && nightOnlyInput.checked);
-        state.autoReviveDeath = !!(reviveDeathInput && reviveDeathInput.checked);
-        state.checkDaoyunBoost = !!(daoyunBoostInput && daoyunBoostInput.checked);
-        state.useAdvancedMeditate = !!(advancedMeditateInput && advancedMeditateInput.checked);
         state.meditateStopSpirit = Math.max(0, Number(meditateStopInput && meditateStopInput.value || 0));
-        state.inscriptionQuality = (inscriptionQualityInput && inscriptionQualityInput.value) || 'any';
-        if (['any', '普通', '优良', '稀有', '史诗', '传说'].indexOf(state.inscriptionQuality) < 0) state.inscriptionQuality = 'any';
-        state.inscriptionStat = (inscriptionStatInput && inscriptionStatInput.value) || '攻击';
-        if (['攻击', '防御', '气血', '神识'].indexOf(state.inscriptionStat) < 0) state.inscriptionStat = '攻击';
-        state.inscriptionMinValue = Math.max(0, Number(inscriptionMinValueInput && inscriptionMinValueInput.value || 0));
-        state.inscriptionTargets = state.inscriptionStat + ':' + state.inscriptionMinValue;
-        state.inscriptionStopMode = (inscriptionStopModeInput && inscriptionStopModeInput.value) || 'any';
-        if (['any', 'all', 'manual'].indexOf(state.inscriptionStopMode) < 0) state.inscriptionStopMode = 'any';
-        state.inscriptionMaxAttempts = Math.max(0, Number(inscriptionMaxAttemptsInput && inscriptionMaxAttemptsInput.value || 0));
-        state.inscriptionResultDelay = Math.max(500, Number(inscriptionResultDelayInput && inscriptionResultDelayInput.value || 1500));
-        state.inscriptionDiscardDelay = Math.max(300, Number(inscriptionDiscardDelayInput && inscriptionDiscardDelayInput.value || 600));
-        state.treasureBatchSize = Math.max(0, Number(treasureBatchInput && treasureBatchInput.value || 0));
-        state.treasureUseQuantity = Math.max(1, Number(treasureQtyInput && treasureQtyInput.value || 1));
-        state.treasureIntervalMs = Math.max(0, Number(treasureIntervalInput && treasureIntervalInput.value || 0));
-        state.desktopNotify = !!(desktopNotifyInput && desktopNotifyInput.checked);
         state.monitorStartSpirit = Math.max(0, Number(monitorStartInput && monitorStartInput.value || 0));
         state.autoSelfFightWeak = !!(selfFightInput && selfFightInput.checked);
         state.selfFightPowerLimit = (selfFightPowerLimitInput && selfFightPowerLimitInput.value) || 'stable';
@@ -357,22 +281,7 @@
         localStorage.setItem('lvSpiritCleaner.autoMeditate', state.autoMeditate ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoExploreAfterMeditate', state.autoExploreAfterMeditate ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.nightOnlyExplore', state.nightOnlyExplore ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoReviveDeath', state.autoReviveDeath ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.checkDaoyunBoost', state.checkDaoyunBoost ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.useAdvancedMeditate', state.useAdvancedMeditate ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.meditateStopSpirit', String(state.meditateStopSpirit));
-        localStorage.setItem('lvSpiritCleaner.inscriptionTargets', state.inscriptionTargets);
-        localStorage.setItem('lvSpiritCleaner.inscriptionQuality', state.inscriptionQuality);
-        localStorage.setItem('lvSpiritCleaner.inscriptionStat', state.inscriptionStat);
-        localStorage.setItem('lvSpiritCleaner.inscriptionMinValue', String(state.inscriptionMinValue));
-        localStorage.setItem('lvSpiritCleaner.inscriptionStopMode', state.inscriptionStopMode);
-        localStorage.setItem('lvSpiritCleaner.inscriptionMaxAttempts', String(state.inscriptionMaxAttempts));
-        localStorage.setItem('lvSpiritCleaner.inscriptionResultDelay', String(state.inscriptionResultDelay));
-        localStorage.setItem('lvSpiritCleaner.inscriptionDiscardDelay', String(state.inscriptionDiscardDelay));
-        localStorage.setItem('lvSpiritCleaner.treasureBatchSize', String(state.treasureBatchSize));
-        localStorage.setItem('lvSpiritCleaner.treasureUseQuantity', String(state.treasureUseQuantity));
-        localStorage.setItem('lvSpiritCleaner.treasureIntervalMs', String(state.treasureIntervalMs));
-        localStorage.setItem('lvSpiritCleaner.desktopNotify', state.desktopNotify ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.monitorStartSpirit', String(state.monitorStartSpirit));
         localStorage.setItem('lvSpiritCleaner.autoSelfFightWeak', state.autoSelfFightWeak ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.selfFightPowerLimit', state.selfFightPowerLimit);
@@ -399,26 +308,6 @@
         updateMeter();
     }
 
-    async function checkDaoyunBeforeStart(modeLabel) {
-        if (!state.checkDaoyunBoost || !gameApi()) return true;
-        try {
-            var res = await gameApi().get('/api/master/overview');
-            if (!res || res.code !== 200 || !res.data) {
-                setStatus('道韵加成检查失败，等待手动确认', 'warn');
-                return window.confirm('道韵加成状态读取失败，是否继续' + modeLabel + '？');
-            }
-            if (res.data.exploreBoostEnabled) {
-                setStatus('道韵加成已开启', 'run');
-                return true;
-            }
-            return window.confirm('道韵加成未开启，是否继续' + modeLabel + '？');
-        } catch (err) {
-            console.warn('[LingVerse Spirit Cleaner] daoyun boost check failed', err);
-            setStatus('道韵加成检查异常，等待手动确认', 'warn');
-            return window.confirm('道韵加成检查异常，是否继续' + modeLabel + '？');
-        }
-    }
-
     function normalizeMultiplier() {
         if (state.keepCurrentMultiplier) return;
         var select = document.getElementById('exploreMultiplier');
@@ -434,7 +323,7 @@
         if (!info.player || !gameApi() || typeof window.handleExplore !== 'function') {
             return '页面还没加载完成';
         }
-        if ((info.player.isDead || window.playerDead) && !state.autoReviveDeath) {
+        if (info.player.isDead || window.playerDead) {
             return '角色已陨落';
         }
         if (isEncounterActive()) {
@@ -447,74 +336,6 @@
             return state.autoMeditate ? 'need_meditate' : '已到保留神识';
         }
         return '';
-    }
-
-    function isDeathActive() {
-        if (window.playerDead) return true;
-        var player = getPlayer() || {};
-        if (player.isDead) return true;
-        var overlay = document.getElementById('deathOverlay');
-        if (!overlay) return false;
-        var hidden = overlay.classList.contains('hidden') || overlay.style.display === 'none';
-        return !hidden && String(overlay.textContent || '').indexOf('引渡归来') >= 0;
-    }
-
-    function visibleButtonByText(root, text) {
-        root = root || document;
-        var buttons = root.querySelectorAll('button, .btn, [role=button]');
-        for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i];
-            if (String(btn.textContent || '').indexOf(text) < 0) continue;
-            if (btn.disabled) continue;
-            return btn;
-        }
-        return null;
-    }
-
-    async function handleDeathReviveEvent(manual) {
-        if ((!manual && !state.autoReviveDeath) || busyEvent || !isDeathActive()) return false;
-        busyEvent = true;
-        try {
-            setStatus('检测到陨落，尝试引渡归来', 'warn');
-            var revived = false;
-            if (typeof window.revivePlayer === 'function') {
-                try {
-                    await window.revivePlayer();
-                    revived = true;
-                } catch (err) {
-                    console.warn('[LingVerse Spirit Cleaner] native revivePlayer failed', err);
-                }
-            }
-
-            if (!revived) {
-                var overlay = document.getElementById('deathOverlay');
-                var btn = visibleButtonByText(overlay || document, '引渡归来');
-                if (btn) {
-                    btn.click();
-                    revived = true;
-                }
-            }
-
-            if (!revived) {
-                setStatus('未找到“引渡归来”按钮', 'warn');
-                return false;
-            }
-
-            await sleep(1200);
-            window.playerDead = false;
-            var deathOverlay = document.getElementById('deathOverlay');
-            if (deathOverlay) deathOverlay.classList.add('hidden');
-            if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
-            await refreshPlayer();
-            setStatus('已引渡归来，继续流程', 'run');
-            return true;
-        } catch (err2) {
-            console.warn('[LingVerse Spirit Cleaner] death revive failed', err2);
-            setStatus('自动复活失败，等待处理', 'warn');
-            return false;
-        } finally {
-            busyEvent = false;
-        }
     }
 
     function isGameNight() {
@@ -633,29 +454,6 @@
         return true;
     }
 
-    async function tryAdvancedMeditateOnce() {
-        if (!state.useAdvancedMeditate || !gameApi()) return false;
-        try {
-            setStatus('尝试仙缘高级冥想', 'run');
-            var res = await gameApi().post('/api/game/meditate/instant', { grade: 2 });
-            if (!res || res.code !== 200) {
-                setStatus('高级冥想失败，转普通冥想：' + ((res && res.message) || '未知原因'), 'warn');
-                return false;
-            }
-            if (res.data && Array.isArray(res.data.logs)) {
-                if (typeof window.appendLogs === 'function') window.appendLogs(res.data.logs, 'cultivation');
-            }
-            if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
-            await refreshPlayer();
-            setStatus('高级冥想已完成', 'run');
-            return true;
-        } catch (err) {
-            console.warn('[LingVerse Spirit Cleaner] advanced meditate failed', err);
-            setStatus('高级冥想异常，转普通冥想', 'warn');
-            return false;
-        }
-    }
-
     async function meditateUntilSpiritFull() {
         if (!state.autoMeditate || !gameApi()) return false;
         var info = getSpiritInfo();
@@ -664,10 +462,6 @@
         if (info.maxSpirit <= 0 || info.spirit >= targetSpirit) return true;
 
         setStatus('神识不足，开始冥想到 ' + targetSpirit, 'run');
-        if (await tryAdvancedMeditateOnce()) {
-            info = getSpiritInfo();
-            if (info.spirit >= targetSpirit) return true;
-        }
         var startRes = await gameApi().post('/api/game/meditate/start', {});
         if (!startRes || (startRes.code !== 200 && String(startRes.message || '').indexOf('冥想') < 0)) {
             toast('自动冥想启动失败：' + ((startRes && startRes.message) || '未知错误'));
@@ -1264,10 +1058,6 @@
                 var p = getPlayer() || {};
                 window.showDeathOverlay(!!window.playerCanSelfRevive, p.reviveCost || 0, p.adPoints || 0, data.lastBattle);
             }
-            if (state.autoReviveDeath) {
-                await sleep(500);
-                return await handleDeathReviveEvent(false);
-            }
             stop(sourceLabel + '后角色陨落');
             return false;
         }
@@ -1490,10 +1280,6 @@
                 if (typeof window.showDeathOverlay === 'function') {
                     window.showDeathOverlay(true, data.reviveCost || 0, data.adPoints || 0);
                 }
-                if (state.autoReviveDeath) {
-                    await sleep(500);
-                    return await handleDeathReviveEvent(false);
-                }
                 stop('护道后角色陨落');
                 return false;
             }
@@ -1513,9 +1299,6 @@
     }
 
     async function handleSpecialEvents() {
-        if (state.autoReviveDeath && isDeathActive()) {
-            return await handleDeathReviveEvent(false);
-        }
         if (isMerchantActive() && state.autoMerchantLegend) {
             return await handleMerchantEvent();
         }
@@ -1661,13 +1444,7 @@
 
     async function autoTreasureLoop() {
         if (autoTreasureRunning || running) return;
-        syncSettingsFromUi();
-        if (!await checkDaoyunBeforeStart('自动刷藏宝图')) {
-            setStatus('道韵加成未确认，已取消刷图', 'warn');
-            return;
-        }
         autoTreasureRunning = true;
-        var usedCount = 0;
         updateMeter();
         setStatus('自动刷藏宝图启动', 'run');
 
@@ -1697,11 +1474,6 @@
                     autoTreasureRunning = false;
                     break;
                 }
-                if (state.treasureBatchSize > 0 && usedCount >= state.treasureBatchSize) {
-                    setStatus('本批藏宝图已使用 ' + usedCount + ' 次，停止刷图', 'run');
-                    autoTreasureRunning = false;
-                    break;
-                }
 
                 var map = await findTreasureMap();
                 if (!map) {
@@ -1710,208 +1482,19 @@
                     break;
                 }
 
-                var qty = Math.max(1, Math.min(state.treasureUseQuantity, itemQuantity(map)));
-                setStatus('使用藏宝图：本次 ' + qty + '，剩余 ' + itemQuantity(map) + (state.treasureBatchSize > 0 ? '，批次 ' + usedCount + '/' + state.treasureBatchSize : ''), 'run');
+                setStatus('使用藏宝图：剩余 ' + itemQuantity(map), 'run');
                 var used = callPageFunction('useItem', [Number(map.id || map.itemId || 0)]);
                 if (used && typeof used.then === 'function') await used;
-                else if (!used) await gameApi().post('/api/game/use-item', { itemId: Number(map.id || map.itemId || 0), quantity: qty });
-                usedCount += qty;
-                await sleep(state.treasureIntervalMs || state.delayMs);
+                else if (!used) await gameApi().post('/api/game/use-item', { itemId: Number(map.id || map.itemId || 0) });
+                await sleep(state.delayMs);
             } catch (err) {
                 console.warn('[LingVerse Spirit Cleaner] auto treasure failed', err);
                 setStatus('自动刷藏宝图异常，等待重试', 'warn');
-                await sleep(state.treasureIntervalMs || state.delayMs);
+                await sleep(state.delayMs);
             }
         }
 
         updateMeter();
-    }
-
-    var INSCRIPTION_QUALITY_RANK = {
-        '普通': 1,
-        '优良': 2,
-        '稀有': 3,
-        '史诗': 4,
-        '传说': 5
-    };
-
-    function inscriptionQualityRank(quality) {
-        return INSCRIPTION_QUALITY_RANK[String(quality || '').trim()] || 0;
-    }
-
-    function parseInscriptionTargets() {
-        if (state.inscriptionStat) {
-            return [{
-                quality: state.inscriptionQuality || 'any',
-                stat: state.inscriptionStat,
-                minValue: Number(state.inscriptionMinValue || 0)
-            }];
-        }
-        return String(state.inscriptionTargets || '').split(/[,，;；\n]+/).map(function (item) {
-            var parts = item.split(/[:：>=]+/);
-            var stat = String(parts[0] || '').trim();
-            var minValue = Number(String(parts[1] || '0').replace(/[^\d.-]/g, '')) || 0;
-            return stat ? { quality: 'any', stat: stat, minValue: minValue } : null;
-        }).filter(Boolean);
-    }
-
-    function updateInscriptionPanel() {
-        var stats = document.getElementById('lvscInscriptionStats');
-        if (stats) {
-            stats.textContent = '次数 ' + inscriptionStats.total + ' / 达成 ' + inscriptionStats.kept + ' / 放弃 ' + inscriptionStats.discarded + (inscriptionStats.best ? ' / 最佳 ' + inscriptionStats.best : '');
-        }
-        var log = document.getElementById('lvscInscriptionLog');
-        if (log && !log.textContent) log.textContent = '待命';
-        updateMeter();
-    }
-
-    function inscriptionLog(message) {
-        var log = document.getElementById('lvscInscriptionLog');
-        if (!log) return;
-        var time = new Date().toLocaleTimeString();
-        log.textContent = '[' + time + '] ' + message + '\n' + (log.textContent || '');
-    }
-
-    function parseInscriptionResultCards() {
-        var cards = document.querySelectorAll('.insc-result-card');
-        return Array.prototype.map.call(cards, function (card) {
-            var quality = ((card.querySelector('.insc-result-card__quality') || {}).textContent || '').trim();
-            var stat = ((card.querySelector('.insc-result-card__stat') || {}).textContent || '').trim();
-            var valueText = ((card.querySelector('.insc-result-card__value') || {}).textContent || '').trim();
-            var value = Number(valueText.replace(/[^\d.-]/g, '')) || 0;
-            return stat ? { quality: quality, stat: stat, value: value, text: (quality ? quality + ' ' : '') + stat + '+' + value } : null;
-        }).filter(Boolean);
-    }
-
-    function inscriptionTargetDecision(results) {
-        var targets = parseInscriptionTargets();
-        if (!targets.length) return { met: true, matches: [], reason: '未设置目标' };
-        var matches = [];
-        results.forEach(function (result) {
-            targets.forEach(function (target) {
-                var qualityOk = !target.quality || target.quality === 'any' || inscriptionQualityRank(result.quality) >= inscriptionQualityRank(target.quality);
-                if (qualityOk && String(result.stat || '').indexOf(target.stat) >= 0 && Number(result.value || 0) >= Number(target.minValue || 0)) {
-                    matches.push({ result: result, target: target });
-                }
-            });
-        });
-        if (state.inscriptionStopMode === 'manual') return { met: false, matches: matches, reason: '手动停止模式' };
-        if (state.inscriptionStopMode === 'all') {
-            var matchedStats = {};
-            matches.forEach(function (match) { matchedStats[match.target.stat] = true; });
-            var allMet = targets.every(function (target) { return matchedStats[target.stat]; });
-            return { met: allMet, matches: matches, reason: allMet ? '全部目标达成' : '未满足全部目标' };
-        }
-        return { met: matches.length > 0, matches: matches, reason: matches.length ? '任一目标达成' : '未命中目标' };
-    }
-
-    async function clickInscriptionTenPull() {
-        var buttons = document.querySelectorAll('button, .modal-action-btn__text');
-        for (var i = 0; i < buttons.length; i++) {
-            var text = String(buttons[i].textContent || '').trim();
-            if (text === '十连灵纹' || text.indexOf('十连') >= 0) {
-                var target = buttons[i].closest && buttons[i].closest('button') || buttons[i];
-                if (target && !target.disabled) {
-                    target.click();
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    async function clickInscriptionDiscardAll() {
-        var labels = ['全部放弃', '一键放弃'];
-        for (var i = 0; i < labels.length; i++) {
-            var btn = visibleButtonByText(document, labels[i]);
-            if (btn) {
-                btn.click();
-                await sleep(300);
-                var confirmBtn = document.getElementById('gameDialogConfirmBtn') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '确 定');
-                if (confirmBtn) confirmBtn.click();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    async function waitInscriptionResults(timeoutMs) {
-        var started = Date.now();
-        while (autoInscriptionRunning && Date.now() - started < timeoutMs) {
-            var results = parseInscriptionResultCards();
-            if (results.length) return results;
-            await sleep(250);
-        }
-        return [];
-    }
-
-    async function autoInscriptionLoop() {
-        if (autoInscriptionRunning) return;
-        if (running || autoTreasureRunning) {
-            setStatus('清理或刷图运行中，不能同时刷铭文', 'warn');
-            return;
-        }
-        syncSettingsFromUi();
-        inscriptionStats = { total: 0, kept: 0, discarded: 0, best: '' };
-        autoInscriptionRunning = true;
-        inscriptionLog('开始铭文洗练：' + (state.inscriptionQuality === 'any' ? '不限等级' : state.inscriptionQuality + '及以上') + ' / ' + state.inscriptionStat + ' ≥ ' + state.inscriptionMinValue);
-        updateInscriptionPanel();
-        try {
-            while (autoInscriptionRunning) {
-                if (state.inscriptionMaxAttempts > 0 && inscriptionStats.total >= state.inscriptionMaxAttempts) {
-                    inscriptionLog('达到最大次数，停止');
-                    break;
-                }
-                if (!await clickInscriptionTenPull()) {
-                    inscriptionLog('未找到“十连灵纹”按钮，请先打开铭文洗练界面');
-                    break;
-                }
-                inscriptionStats.total += 1;
-                updateInscriptionPanel();
-                await sleep(state.inscriptionResultDelay);
-                var results = await waitInscriptionResults(5000);
-                if (!results.length) {
-                    inscriptionLog('第 ' + inscriptionStats.total + ' 次没有解析到结果');
-                    break;
-                }
-                var best = results.slice().sort(function (a, b) { return Number(b.value || 0) - Number(a.value || 0); })[0];
-                if (best) inscriptionStats.best = best.text;
-                var decision = inscriptionTargetDecision(results);
-                inscriptionLog('第 ' + inscriptionStats.total + ' 次：' + results.map(function (item) { return item.text; }).join('，') + '；' + decision.reason);
-                if (decision.met) {
-                    inscriptionStats.kept += 1;
-                    updateInscriptionPanel();
-                    setStatus('铭文目标达成，已停止', 'run');
-                    notifyUser('铭文目标达成', results.map(function (item) { return item.text; }).join('，'));
-                    break;
-                }
-                if (await clickInscriptionDiscardAll()) {
-                    inscriptionStats.discarded += 1;
-                    updateInscriptionPanel();
-                    await sleep(state.inscriptionDiscardDelay);
-                } else {
-                    inscriptionLog('未找到放弃按钮，停止以免误操作');
-                    break;
-                }
-            }
-        } catch (err) {
-            console.warn('[LingVerse Spirit Cleaner] inscription loop failed', err);
-            inscriptionLog('铭文洗练异常：' + (err.message || '未知错误'));
-            notifyUser('铭文洗练异常', err.message || '未知错误');
-        } finally {
-            autoInscriptionRunning = false;
-            updateInscriptionPanel();
-        }
-    }
-
-    function toggleAutoInscription() {
-        if (autoInscriptionRunning) {
-            autoInscriptionRunning = false;
-            inscriptionLog('手动停止');
-            updateInscriptionPanel();
-            return;
-        }
-        autoInscriptionLoop();
     }
 
     function toggleAutoTreasure() {
@@ -1923,10 +1506,6 @@
         }
         if (running) {
             setStatus('清理运行中，不能同时刷藏宝图', 'warn');
-            return;
-        }
-        if (autoInscriptionRunning) {
-            setStatus('铭文洗练中，不能同时刷藏宝图', 'warn');
             return;
         }
         autoTreasureLoop();
@@ -2009,22 +1588,12 @@
 
     async function runLoop() {
         if (running) return;
-        if (autoInscriptionRunning) {
-            setStatus('铭文洗练中，不能开始清理', 'warn');
-            return;
-        }
         monitoringSpirit = false;
         running = true;
         syncSettingsFromUi();
         normalizeMultiplier();
         updateMeter();
         setStatus('启动中', 'run');
-        if (!await checkDaoyunBeforeStart('自动清理')) {
-            running = false;
-            updateMeter();
-            setStatus('道韵加成未确认，已取消启动', 'warn');
-            return;
-        }
         await stopMeditationBeforeRun();
         if (!running) return;
         setStatus('运行中', 'run');
@@ -2482,16 +2051,14 @@
     }
 
     async function checkCloudUpdate(manual) {
-        if (checkingCloudUpdate) return false;
         syncSettingsFromUi();
         var url = state.updateManifestUrl;
         if (!url) {
             if (manual) setStatus('请先填写云端公告 JSON 地址', 'warn');
             return;
         }
-        checkingCloudUpdate = true;
         try {
-            if (manual) setStatus('检测云端更新中', 'run');
+            setStatus('检测云端更新中', 'run');
             var sep = url.indexOf('?') >= 0 ? '&' : '?';
             var res = await fetch(url + sep + '_lvsc=' + Date.now(), { cache: 'no-store' });
             if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -2505,25 +2072,22 @@
             var newer = compareVersion(release.version, SCRIPT_VERSION) > 0;
             var seenKey = 'lvSpiritCleaner.seenCloudVersion.' + simpleHash(url);
             if (newer && localStorage.getItem(seenKey) !== release.version) {
-                if (!document.getElementById('lvscUpdateModal')) {
-                    showUpdateNotice(release, { seenKey: seenKey, kicker: '发现云端新版本' });
-                }
+                showUpdateNotice(release, { seenKey: seenKey, kicker: '发现云端新版本' });
                 setStatus('发现云端新版本 ' + release.version, 'warn');
-                notifyUser('发现神识清理新版本', 'v' + release.version);
             } else if (manual) {
                 showUpdateNotice(release, { kicker: newer ? '云端新版本' : '云端公告' });
                 setStatus(newer ? '云端有新版本 ' + release.version : '当前已是最新：' + SCRIPT_VERSION, newer ? 'warn' : 'run');
+            } else {
+                setStatus(newer ? '云端有新版本 ' + release.version : '云端更新检测完成', newer ? 'warn' : 'idle');
             }
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] cloud update check failed', err);
             if (manual) setStatus('云端更新检测失败：' + (err.message || '未知错误'), 'warn');
-        } finally {
-            checkingCloudUpdate = false;
         }
     }
 
     function activatePanelTab(tabName) {
-        var allowed = ['basic', 'merchant', 'combat', 'flow', 'inscription', 'update'];
+        var allowed = ['basic', 'merchant', 'combat', 'flow', 'update'];
         if (allowed.indexOf(tabName) < 0) tabName = 'basic';
         Array.prototype.forEach.call(document.querySelectorAll('#lvscTabs .lvsc-tab'), function (button) {
             var active = button.getAttribute('data-tab') === tabName;
@@ -2570,7 +2134,6 @@
             '#lvscPanel.lvsc-collapsed header{display:none}',
             '#lvscPanel.lvsc-collapsed #lvscStatus{display:none}',
             '#lvscPanel.lvsc-collapsed #lvscBody{display:none}',
-            '#lvscPanel.lvsc-collapsed #lvscActions{display:none}',
             '#lvscPanel.lvsc-collapsed #lvscCompactBar{display:flex}',
             '#lvscPanel.lvsc-collapsed #lvscResizeHandle{display:none}',
             '#lvscPanel label{display:grid;gap:4px;min-width:0;color:#cfc6b2;font-size:12px}',
@@ -2578,7 +2141,7 @@
             '#lvscPanel input[type=checkbox]{margin-right:6px}',
             '#lvscPanel select option{background:#17141d;color:#fff}',
             '.lvsc-meter{display:grid;gap:7px;padding:9px;border:1px solid rgba(216,180,254,.2);border-radius:8px;background:rgba(216,180,254,.05)}',
-            '#lvscTabs{position:sticky;top:-12px;z-index:3;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin:-2px -2px 0;padding:4px 2px 6px;background:rgba(17,20,29,.96);border-bottom:1px solid rgba(255,255,255,.08)}',
+            '#lvscTabs{position:sticky;top:-12px;z-index:3;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:-2px -2px 0;padding:4px 2px 6px;background:rgba(17,20,29,.96);border-bottom:1px solid rgba(255,255,255,.08)}',
             '.lvsc-tab{height:30px;padding:0 6px;background:rgba(255,255,255,.06);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
             '.lvsc-tab.lvsc-active{background:#dbb970;color:#17141d;border-color:#dbb970!important}',
             '.lvsc-category{display:grid;gap:9px;min-width:0;padding:10px;border:1px solid rgba(219,185,112,.16);border-radius:9px;background:rgba(255,255,255,.025)}',
@@ -2599,15 +2162,12 @@
             '#lvscSpiritFill{height:100%;width:0;background:linear-gradient(90deg,#8667ff,#d8b4fe)}',
             '#lvscSpiritValue{font-size:12px;color:#d8b4fe}',
             '#lvscAuthor{font-size:11px;color:#8f846f;text-align:center;border-top:1px solid rgba(255,255,255,.08);padding-top:8px}',
-            '#lvscActions{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px 12px;background:linear-gradient(180deg,rgba(17,20,29,.9),rgba(17,20,29,.98));border-top:1px solid rgba(255,255,255,.08)}',
+            '#lvscActions{position:sticky;bottom:-12px;z-index:2;display:flex;gap:8px;margin:0 -12px -12px;padding:10px 12px 12px;background:linear-gradient(180deg,rgba(17,20,29,.72),rgba(17,20,29,.98) 35%)}',
             '#lvscRunBtn{flex:1;height:34px;background:#dbb970;color:#17141d}',
             '#lvscRefreshBtn{width:72px;height:34px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.12)!important}',
             '#lvscMonitorBtn{height:34px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoTrialBtn,#lvscAutoTreasureBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
             '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
-            '#lvscAutoInscriptionBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
-            '#lvscInscriptionStats{font-size:12px;color:#9be7c3}',
-            '#lvscInscriptionLog{min-height:130px;max-height:190px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px}',
             '#lvscAutoRecoveryBtn{align-self:end}',
             '#lvscUpdateModal{position:fixed;inset:0;z-index:100000;color:#f5f1e8;font:13px/1.55 "Microsoft YaHei",sans-serif}',
             '.lvsc-update-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}',
@@ -2638,7 +2198,6 @@
             '<button class="lvsc-tab" data-tab="merchant">商人护道</button>' +
             '<button class="lvsc-tab" data-tab="combat">妖兽恢复</button>' +
             '<button class="lvsc-tab" data-tab="flow">自动流程</button>' +
-            '<button class="lvsc-tab" data-tab="inscription">铭文</button>' +
             '<button class="lvsc-tab" data-tab="update">更新</button>' +
             '</div>' +
             '<div class="lvsc-category lvsc-tab-panel" data-tab-panel="basic">' +
@@ -2699,20 +2258,14 @@
             '<label>收功神识<input id="lvscMeditateStopSpirit" type="number" min="0" step="1" title="填 0 表示冥想到神识上限"></label>' +
             '<label class="lvsc-check"><input id="lvscAutoExploreAfterMeditate" type="checkbox">收功后自动继续探索</label>' +
             '<label class="lvsc-check"><input id="lvscNightOnlyExplore" type="checkbox">只在游戏夜晚探索</label>' +
-            '<label class="lvsc-check"><input id="lvscAutoReviveDeath" type="checkbox">陨落后自动引渡归来</label>' +
-            '<label class="lvsc-check"><input id="lvscCheckDaoyunBoost" type="checkbox">启动前检查道韵加成</label>' +
-            '<label class="lvsc-check"><input id="lvscUseAdvancedMeditate" type="checkbox">优先仙缘高级冥想</label>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title">藏宝图</div>' +
             '<div class="lvsc-grid2">' +
-            '<label>最多用几张<input id="lvscTreasureBatchSize" type="number" min="0" step="1" title="填 0 表示一直用到没有藏宝图"></label>' +
-            '<label>一次用几张<input id="lvscTreasureUseQuantity" type="number" min="1" step="1"></label>' +
-            '<label>每次间隔(ms)<input id="lvscTreasureIntervalMs" type="number" min="0" step="100" title="填 0 表示沿用基础间隔"></label>' +
             '<button id="lvscAutoTrialBtn">自动试炼</button>' +
             '<button id="lvscAutoTreasureBtn">自动刷藏宝图</button>' +
             '</div>' +
-            '<div class="lvsc-help">例：最多用 10、一次用 2，就是这轮最多消耗 10 张，每次向游戏提交 2 张；最多用 0 表示一直刷到没图。遇守卫按护道配置处理。</div>' +
+            '<div class="lvsc-help">试炼会消耗重置所需资源；刷图会使用背包藏宝图，遇守卫按护道配置处理。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title">虚空淬体</div>' +
@@ -2725,36 +2278,17 @@
             '</div>' +
             '</div>' +
             '</div>' +
-            '<div class="lvsc-category lvsc-tab-panel" data-tab-panel="inscription">' +
-            '<div class="lvsc-category-title">铭文洗练</div>' +
-            '<div class="lvsc-section">' +
-            '<div id="lvscInscriptionStats">次数 0 / 达成 0 / 放弃 0</div>' +
-            '<div class="lvsc-grid2">' +
-            '<label>最低等级<select id="lvscInscriptionQuality"><option value="any">不限</option><option value="普通">普通及以上</option><option value="优良">优良及以上</option><option value="稀有">稀有及以上</option><option value="史诗">史诗及以上</option><option value="传说">传说</option></select></label>' +
-            '<label>目标属性<select id="lvscInscriptionStat"><option value="攻击">攻击</option><option value="防御">防御</option><option value="气血">气血</option><option value="神识">神识</option></select></label>' +
-            '<label>最小数值<input id="lvscInscriptionMinValue" type="number" min="0" step="1"></label>' +
-            '<label>停止模式<select id="lvscInscriptionStopMode"><option value="any">任一满足即停</option><option value="all">全部满足才停</option><option value="manual">永不停</option></select></label>' +
-            '<label>最大次数<input id="lvscInscriptionMaxAttempts" type="number" min="0" step="1" title="填 0 表示无限"></label>' +
-            '<label>结果等待(ms)<input id="lvscInscriptionResultDelay" type="number" min="500" step="100"></label>' +
-            '<label>放弃等待(ms)<input id="lvscInscriptionDiscardDelay" type="number" min="300" step="100"></label>' +
-            '<button id="lvscAutoInscriptionBtn">自动刷铭文</button>' +
-            '</div>' +
-            '<div class="lvsc-help">先打开游戏里的铭文洗练界面。脚本会点“十连灵纹”，命中目标就停止；没命中会点“全部放弃/一键放弃”。</div>' +
-            '<div id="lvscInscriptionLog">待命</div>' +
-            '</div>' +
-            '</div>' +
             '<div class="lvsc-category lvsc-tab-panel" data-tab-panel="update">' +
             '<div class="lvsc-category-title">更新公告<small>v' + SCRIPT_VERSION + '</small></div>' +
             '<div class="lvsc-field-grid">' +
             '<label>云端公告 JSON<input id="lvscUpdateManifestUrl" type="text" placeholder="' + DEFAULT_UPDATE_MANIFEST_URL + '"></label>' +
-            '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
             '</div>' +
             '<div class="lvsc-help">默认读取 GitHub 公告。脚本管理器会根据 updateURL/downloadURL 检测并提示下载安装。</div>' +
             '</div>' +
+            '<div id="lvscActions"><button id="lvscRunBtn">开始清理</button><button id="lvscMonitorBtn">监测神识</button><button id="lvscRefreshBtn">刷新</button></div>' +
             '<div id="lvscAuthor">作者：SuH2RanZ1</div>' +
             '</div>' +
-            '<div id="lvscActions"><button id="lvscRunBtn">开始清理</button><button id="lvscMonitorBtn">监测神识</button><button id="lvscRefreshBtn">刷新</button></div>' +
             '<div id="lvscResizeHandle" title="拖拽调节面板大小"></div>';
         document.body.appendChild(panel);
         restorePanelSize(panel);
@@ -2787,20 +2321,6 @@
         document.getElementById('lvscMonitorStartSpirit').value = String(state.monitorStartSpirit);
         document.getElementById('lvscAutoExploreAfterMeditate').checked = state.autoExploreAfterMeditate;
         document.getElementById('lvscNightOnlyExplore').checked = state.nightOnlyExplore;
-        document.getElementById('lvscAutoReviveDeath').checked = state.autoReviveDeath;
-        document.getElementById('lvscCheckDaoyunBoost').checked = state.checkDaoyunBoost;
-        document.getElementById('lvscUseAdvancedMeditate').checked = state.useAdvancedMeditate;
-        document.getElementById('lvscInscriptionQuality').value = String(state.inscriptionQuality);
-        document.getElementById('lvscInscriptionStat').value = String(state.inscriptionStat);
-        document.getElementById('lvscInscriptionMinValue').value = String(state.inscriptionMinValue);
-        document.getElementById('lvscInscriptionStopMode').value = String(state.inscriptionStopMode);
-        document.getElementById('lvscInscriptionMaxAttempts').value = String(state.inscriptionMaxAttempts);
-        document.getElementById('lvscInscriptionResultDelay').value = String(state.inscriptionResultDelay);
-        document.getElementById('lvscInscriptionDiscardDelay').value = String(state.inscriptionDiscardDelay);
-        document.getElementById('lvscTreasureBatchSize').value = String(state.treasureBatchSize);
-        document.getElementById('lvscTreasureUseQuantity').value = String(state.treasureUseQuantity);
-        document.getElementById('lvscTreasureIntervalMs').value = String(state.treasureIntervalMs);
-        document.getElementById('lvscDesktopNotify').checked = state.desktopNotify;
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
         document.getElementById('lvscVoidBuyQty').value = String(state.voidBodyBuyQty);
@@ -2817,7 +2337,6 @@
         document.getElementById('lvscRefreshBtn').onclick = refreshPlayer;
         document.getElementById('lvscAutoTrialBtn').onclick = toggleAutoTrial;
         document.getElementById('lvscAutoTreasureBtn').onclick = toggleAutoTreasure;
-        document.getElementById('lvscAutoInscriptionBtn').onclick = toggleAutoInscription;
         document.getElementById('lvscSelfFightBtn').onclick = function () {
             syncSettingsFromUi();
             handleSelfFightEvent(true);
@@ -2870,20 +2389,6 @@
         document.getElementById('lvscMonitorStartSpirit').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoExploreAfterMeditate').onchange = syncSettingsFromUi;
         document.getElementById('lvscNightOnlyExplore').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoReviveDeath').onchange = syncSettingsFromUi;
-        document.getElementById('lvscCheckDaoyunBoost').onchange = syncSettingsFromUi;
-        document.getElementById('lvscUseAdvancedMeditate').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionQuality').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionStat').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionMinValue').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionStopMode').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionMaxAttempts').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionResultDelay').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionDiscardDelay').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureBatchSize').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureUseQuantity').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureIntervalMs').onchange = syncSettingsFromUi;
-        document.getElementById('lvscDesktopNotify').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidBuyQty').onchange = syncSettingsFromUi;
@@ -2893,7 +2398,6 @@
         refreshPlayer();
         showBuiltinReleaseOnce();
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
-        setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
         setInterval(updateMeter, 2000);
     }
 

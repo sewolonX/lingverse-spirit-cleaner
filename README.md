@@ -1,35 +1,118 @@
-# LingVerse Spirit Cleaner
+# 神识清理
 
-LingVerse userscript for Tampermonkey / Violentmonkey.
+适用于 `ling.muge.info` 的浏览器用户脚本，主要用于神识消耗、商人处理、护道雇佣、妖兽遭遇、自动恢复、冥想续跑、藏宝图与更新公告。
 
-## Install
+## 功能列表
 
-Open this raw script URL in your browser extension:
+- 自动清理神识：可设置保留神识、执行间隔、监测触发神识和探索倍率。
+- 护道处理：支持最低价、合击、单独护道，可设置灵石上限和重试次数。
+- 商人购买：支持传说才买、按条件购买、直接离去；可配置商品关键词、品质优先和高价阈值。
+- 妖兽遭遇：按游戏真实战力标签判断是否自战，支持可稳战、势均力敌、略强等上限选择。
+- 自动恢复：支持回血、回灵或同时恢复，可设置触发百分比、目标百分比和资源优先级。
+- 冥想探索：神识不足可自动冥想，支持优先仙缘高级冥想、收功后继续探索，也可限制只在游戏夜晚探索。
+- 死亡复活：陨落弹窗出现后可自动点击“引渡归来”，复活后继续当前流程。
+- 道韵检查：开始清理或刷藏宝图前检查道韵加成是否开启，未开启时由你确认是否继续。
+- 藏宝图流程：支持自动试炼和自动刷藏宝图，可设置最多用几张、一次用几张和每次间隔，遇到守卫时沿用护道与自战配置。
+- 铭文洗练：支持按最低等级、目标属性、最小值、停止模式和最大次数分类配置，自动十连洗练并放弃不符合目标的结果。
+- 浏览器通知：发现新版本、铭文命中目标和关键异常时可弹系统通知。
+- 虚空淬体：探索前自动检查加成，可按丹药等级和购买数量补充。
+- 更新公告：内置版本公告，支持读取 GitHub `release.json`，页面不刷新时也会定时检查云端新版本。
+- 面板交互：顶部菜单分类、可拖拽、可收起、可调节窗口大小，设置会保存在浏览器本地。
 
+## 安装
+
+1. 安装 Tampermonkey、Violentmonkey 或其他兼容的用户脚本管理器。
+2. 打开脚本地址：
+
+```text
 https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
-
-## Updates
-
-The script metadata includes `@updateURL` and `@downloadURL`, so script managers can detect newer versions automatically.
-
-When publishing a new version:
-
-1. Update `@version` and `SCRIPT_VERSION` in `lingverse-spirit-cleaner.user.js`.
-2. Update `release.json` with the same version and release notes.
-3. Commit and push to `main`.
-
-Double-click `一键发布.bat` to publish interactively. It asks for the new version and release notes, then updates files, commits, pushes, and verifies GitHub raw URLs.
-
-Or run the publish script from PowerShell:
-
-```powershell
-.\publish.ps1 -Message "Publish v0.9.6"
 ```
 
-Interactive PowerShell mode:
+3. 脚本管理器弹出安装页后确认安装。
+4. 打开游戏页面 `https://ling.muge.info/game.html`。
 
-```powershell
-.\publish.ps1 -Interactive
+## 使用
+
+安装后进入游戏页面，右下角会出现“神识清理”面板。面板顶部按功能分为：
+
+- `基础`：神识保留、间隔、监测触发和探索倍率。
+- `商人护道`：护道方式、灵石上限、商人购买规则。
+- `妖兽恢复`：弱怪自战、自动回血回灵。
+- `自动流程`：冥想续跑、藏宝图、虚空淬体。
+- `更新`：云端公告地址和手动检查更新。
+
+点击“开始清理”会按当前配置循环执行。点击“监测神识”会在神识达到设定值后自动开始。
+
+## 配置说明
+
+### 商人购买
+
+- `传说才买`：只购买传说品质商品，找不到就离开。
+- `按条件购买`：按关键词、价格和品质排序挑选商品。
+- `商品关键词`：多个关键词可用空格、逗号、顿号或分号分隔，命中任意一个即可。
+- `品质优先`：开启后先买更高品质，同品质再买更便宜的。
+- `高价阈值(灵石)`：填 `0` 表示不限制，超过阈值的商品不会购买。
+
+### 妖兽遭遇
+
+脚本优先读取游戏页面的战力评价标签。当前支持：
+
+```text
+可稳战 / 势均力敌 / 略强 / 高层压制 / 强敌 / 越阶强敌 / 仅供参考
 ```
 
-The script checks version consistency, validates JavaScript syntax when Node.js is available, commits the changed files, pushes to GitHub, and verifies the raw GitHub URLs.
+你可以在“自战上限”里选择自动打到哪个等级。无法读取标签时，脚本会回退到战力数值和生命、攻击、防御、境界判断。
+
+### 更新提醒
+
+脚本管理器会根据 `@updateURL` 和 `@downloadURL` 检测新脚本。除此之外，脚本面板也会读取：
+
+```text
+https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json
+```
+
+页面不刷新时，脚本会每 60 秒检测一次云端公告。发现云端版本高于当前脚本版本时，会弹出更新公告和下载地址。
+
+## 发布流程
+
+以后发布由本地脚本完成，不需要手动改多个文件。
+
+双击：
+
+```text
+一键发布.bat
+```
+
+脚本会显示本地版本、公告版本和 GitHub 远端版本，然后只询问新版本号。更新公告内容由 `release.json` 和脚本内置公告决定，不会再要求你临时输入公告。
+
+发布脚本会自动执行：
+
+- 更新 `@version`、`SCRIPT_VERSION` 和 `release.json` 版本。
+- 保留当前公告内容。
+- 保存上一个版本和最新版本到 `versions` 目录。
+- 检查 JavaScript 语法。
+- 提交并推送到 GitHub。
+- 推送后验证 raw 脚本和 `release.json`。
+
+## 回滚
+
+发布时会生成这些文件：
+
+```text
+versions/previous.user.js
+versions/previous.release.json
+versions/latest.user.js
+versions/latest.release.json
+versions/lingverse-spirit-cleaner-v版本号.user.js
+versions/release-v版本号.json
+```
+
+如果新版本有问题，可以从 `versions` 目录找回上一个版本的脚本和公告。
+
+## 技术说明
+
+- 脚本类型：Userscript。
+- 目标页面：`https://ling.muge.info/game.html*` 和 `http://ling.muge.info/game.html*`。
+- 数据存储：使用 `localStorage` 保存面板设置。
+- 更新源：GitHub raw 脚本和 `release.json`。
+- 发布工具：`publish.ps1` 与 `一键发布.bat`。

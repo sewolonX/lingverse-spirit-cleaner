@@ -22,6 +22,16 @@ function Write-Utf8NoBom($Path, $Text) {
     [System.IO.File]::WriteAllText($Path, $Text, $encoding)
 }
 
+function Save-VersionSnapshot($Root, $Version, $ScriptText, $ReleaseText, $Name) {
+    $dir = Join-Path $Root "versions"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $safeVersion = ([string]$Version).Replace("/", "-").Replace("\", "-")
+    Write-Utf8NoBom (Join-Path $dir "lingverse-spirit-cleaner-v$safeVersion.user.js") $ScriptText
+    Write-Utf8NoBom (Join-Path $dir "release-v$safeVersion.json") $ReleaseText
+    Write-Utf8NoBom (Join-Path $dir "$Name.user.js") $ScriptText
+    Write-Utf8NoBom (Join-Path $dir "$Name.release.json") $ReleaseText
+}
+
 function Get-NextPatchVersion($CurrentVersion) {
     $match = [regex]::Match($CurrentVersion, "^(\d+)\.(\d+)\.(\d+)$")
     if (-not $match.Success) { return $CurrentVersion }
@@ -66,15 +76,14 @@ function Get-RemoteScriptVersion() {
     }
 }
 
-function Read-ReleaseNotes() {
-    Write-Host "输入更新内容，一行一条。直接回车结束：" -ForegroundColor Cyan
-    $items = @()
-    while ($true) {
-        $line = Read-Host "更新内容"
-        if ([string]::IsNullOrWhiteSpace($line)) { break }
-        $items += $line.Trim()
+function Get-RemoteText($Url) {
+    try {
+        $sep = if ($Url.Contains("?")) { "&" } else { "?" }
+        return (Invoke-WebRequest -UseBasicParsing ($Url + $sep + "cb=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())") -Headers @{ "Cache-Control" = "no-cache" }).Content
+    } catch {
+        Write-Host "WARN: 读取远端文件失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        return ""
     }
-    return $items
 }
 
 function ConvertTo-JsSingleQuotedString($Text) {
@@ -127,7 +136,11 @@ if ($Interactive) {
     } else {
         Write-Host "GitHub 远端版本：读取失败，将按本地版本提示" -ForegroundColor Yellow
     }
-    $defaultVersion = Get-NextPatchVersion $baseVersion
+    if ($remoteVersion -and (Compare-Semver $metaVersion $remoteVersion) -gt 0) {
+        $defaultVersion = $metaVersion
+    } else {
+        $defaultVersion = Get-NextPatchVersion $baseVersion
+    }
     $inputVersion = Read-Host "输入新版本号 [$defaultVersion]"
     if ([string]::IsNullOrWhiteSpace($inputVersion)) {
         $Version = $defaultVersion
@@ -135,13 +148,32 @@ if ($Interactive) {
         $Version = $inputVersion.Trim()
     }
 
-    $Notes = Read-ReleaseNotes
     if (-not $Notes -or $Notes.Count -eq 0) {
-        $Notes = @("更新脚本")
+        if ($release.notes) {
+            $Notes = @($release.notes)
+        } else {
+            $Notes = @("更新脚本")
+        }
     }
 }
 
 if ($Version) {
+    $previousVersion = $metaVersion
+    $previousScriptText = $scriptText
+    $previousReleaseText = $releaseText
+    $remoteForArchive = Get-RemoteScriptVersion
+    if ($remoteForArchive -and (Compare-Semver $metaVersion $remoteForArchive) -gt 0) {
+        $remoteScriptForArchive = Get-RemoteText "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
+        $remoteReleaseForArchive = Get-RemoteText "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json"
+        if ($remoteScriptForArchive) {
+            $previousVersion = $remoteForArchive
+            $previousScriptText = $remoteScriptForArchive
+        }
+        if ($remoteReleaseForArchive) {
+            $previousReleaseText = $remoteReleaseForArchive
+        }
+    }
+
     $Version = $Version.Trim()
     if ($Version -notmatch "^\d+\.\d+\.\d+([-.][0-9A-Za-z]+)?$") {
         Fail "Invalid version: $Version. Use a version like 0.9.6."
@@ -182,6 +214,9 @@ if ($Version) {
     }
     $releaseJson = ($releaseOut | ConvertTo-Json -Depth 5)
     Write-Utf8NoBom $releasePath ($releaseJson + [Environment]::NewLine)
+
+    Save-VersionSnapshot $root $previousVersion $previousScriptText $previousReleaseText "previous"
+    Save-VersionSnapshot $root $Version $scriptText ($releaseJson + [Environment]::NewLine) "latest"
 
     $scriptText = Get-Content -LiteralPath $scriptPath -Raw -Encoding UTF8
     $releaseText = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8
