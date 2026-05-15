@@ -105,6 +105,22 @@ function Get-GitAheadCount() {
     return $value
 }
 
+function Invoke-GitPushWithRetry() {
+    param([int]$MaxAttempts = 3)
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Host "Retrying git push ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds ([Math]::Min(8, 2 * $attempt))
+        }
+
+        git push
+        if ($LASTEXITCODE -eq 0) { return $true }
+    }
+
+    return $false
+}
+
 function ConvertTo-JsSingleQuotedString($Text) {
     return "'" + ([string]$Text).Replace("\", "\\").Replace("'", "\'") + "'"
 }
@@ -289,8 +305,9 @@ if (-not $status) {
     }
 
     Write-Host "No local file changes. Retrying push for $aheadCount pending commit(s)..." -ForegroundColor Cyan
-    git push
-    if ($LASTEXITCODE -ne 0) { Fail "git push failed." }
+    if (-not (Invoke-GitPushWithRetry)) {
+        Fail "git push failed. Local commits are kept; check GitHub network/login and rerun this script to retry pushing."
+    }
     Write-Host "Pushed pending commit(s)." -ForegroundColor Green
     exit 0
 }
@@ -313,8 +330,9 @@ if ($NoPush) {
     exit 0
 }
 
-git push
-if ($LASTEXITCODE -ne 0) { Fail "git push failed." }
+if (-not (Invoke-GitPushWithRetry)) {
+    Fail "git push failed. Local commit was created; check GitHub network/login and rerun this script to retry pushing."
+}
 
 $rawScriptUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
 $rawReleaseUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json?cb=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
