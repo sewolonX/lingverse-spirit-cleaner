@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      0.9.13
+// @version      0.9.14
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -32,16 +32,29 @@
     var busyEvent = false;
     var checkingCloudUpdate = false;
     var inscriptionStats = { total: 0, kept: 0, discarded: 0, best: '' };
+    var hiddenCharmLastUseAt = 0;
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
-    var SCRIPT_VERSION = '0.9.13';
+    var PANEL_Z_INDEX = 2147483000;
+    var UPDATE_MODAL_Z_INDEX = 2147483001;
+    var SCRIPT_VERSION = '0.9.14';
     var CLOUD_UPDATE_POLL_MS = 60000;
+    var ONLINE_HEARTBEAT_MS = 30000;
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json';
+    var DEFAULT_ONLINE_STATS_ENDPOINT = 'https://place-myth-tail-instrumentation.trycloudflare.com/api/heartbeat';
+    var onlineHeartbeatStarted = false;
     var BUILTIN_RELEASE = {
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
             '新增页面不刷新时的云端版本轮询：脚本运行期间每 60 秒检测一次 release.json。',
             '发现 GitHub 上有更高版本时，会自动弹出更新公告和更新地址。',
+            '铭文洗练遇到按钮缺失、结果为空、放弃失败、异常、命中目标或达到最大次数时保持运行，改为等待重试或保留结果。',
+            '铭文点击改为模拟人工点击，并把等级改为按页面显示文本/数字匹配，避免固定等级表不适配。',
+            '铭文新增“命中后自动装配”开关：优先空槽，其次非目标槽，最后替换目标槽最低值。',
+            '妖兽自战修复：战力标签已判断可打时直接自战，不再被境界或三围回退逻辑误拦。',
+            '脚本面板层级提升到接近浏览器上限，打开游戏铭文页面时不会被页面覆盖。',
+            '自动流程新增隐秘符：探索和刷藏宝图前可从背包使用，缺少时尝试按“隐秘符”从坊市购买。',
+            '藏宝图和主探索流程的明显暂停点改为等待处理后继续，除非手动点击停止。',
             '自动流程新增“陨落后自动引渡归来”，死亡弹窗出现后可自动复活并继续流程。',
             '自动流程新增“启动前检查道韵加成”，开始清理或刷藏宝图前会确认加成状态。',
             '冥想流程新增“优先仙缘高级冥想”，失败后自动回退普通冥想。',
@@ -77,6 +90,7 @@
         inscriptionStat: localStorage.getItem('lvSpiritCleaner.inscriptionStat') || '攻击',
         inscriptionMinValue: readNumber('lvSpiritCleaner.inscriptionMinValue', 50),
         inscriptionStopMode: localStorage.getItem('lvSpiritCleaner.inscriptionStopMode') || 'any',
+        inscriptionAutoEquip: localStorage.getItem('lvSpiritCleaner.inscriptionAutoEquip') === '1',
         inscriptionMaxAttempts: readNumber('lvSpiritCleaner.inscriptionMaxAttempts', 0),
         inscriptionResultDelay: readNumber('lvSpiritCleaner.inscriptionResultDelay', 1500),
         inscriptionDiscardDelay: readNumber('lvSpiritCleaner.inscriptionDiscardDelay', 600),
@@ -94,9 +108,14 @@
         autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || 'mp,pill,adpoint',
         autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || 'stone,pill,adpoint',
         updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
+        onlineStatsEndpoint: localStorage.getItem('lvSpiritCleaner.onlineStatsEndpoint') || DEFAULT_ONLINE_STATS_ENDPOINT,
         autoVoidBody: localStorage.getItem('lvSpiritCleaner.autoVoidBody') !== '0',
         voidBodyRarity: readNumber('lvSpiritCleaner.voidBodyRarity', 5),
-        voidBodyBuyQty: readNumber('lvSpiritCleaner.voidBodyBuyQty', 1)
+        voidBodyBuyQty: readNumber('lvSpiritCleaner.voidBodyBuyQty', 1),
+        autoHiddenCharm: localStorage.getItem('lvSpiritCleaner.autoHiddenCharm') === '1',
+        hiddenCharmRarity: readNumber('lvSpiritCleaner.hiddenCharmRarity', 0),
+        hiddenCharmBuyQty: readNumber('lvSpiritCleaner.hiddenCharmBuyQty', 1),
+        hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000)
     };
 
     function readNumber(key, fallback) {
@@ -128,6 +147,58 @@
                 }
             }).catch(function () {});
         }
+    }
+
+    function onlineClientId() {
+        var key = 'lvSpiritCleaner.onlineClientId';
+        var saved = localStorage.getItem(key);
+        if (saved) return saved;
+        var id = '';
+        try {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') id = window.crypto.randomUUID();
+        } catch (_) {}
+        if (!id) id = 'lvsc-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(key, id);
+        return id;
+    }
+
+    function onlineStatsPayload() {
+        return {
+            clientId: onlineClientId(),
+            version: SCRIPT_VERSION,
+            page: location.origin + location.pathname,
+            running: !!running,
+            monitoringSpirit: !!monitoringSpirit,
+            autoTrialRunning: !!autoTrialRunning,
+            autoTreasureRunning: !!autoTreasureRunning,
+            autoInscriptionRunning: !!autoInscriptionRunning,
+            timestamp: Date.now()
+        };
+    }
+
+    async function sendOnlineHeartbeat() {
+        var endpoint = state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT;
+        if (!endpoint || typeof fetch !== 'function') return;
+        try {
+            await fetch(endpoint, {
+                method: 'POST',
+                mode: 'cors',
+                cache: 'no-store',
+                keepalive: true,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(onlineStatsPayload())
+            });
+        } catch (_) {}
+    }
+
+    function startOnlineHeartbeat() {
+        if (onlineHeartbeatStarted) return;
+        onlineHeartbeatStarted = true;
+        setTimeout(sendOnlineHeartbeat, 2500);
+        setInterval(sendOnlineHeartbeat, ONLINE_HEARTBEAT_MS);
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) sendOnlineHeartbeat();
+        });
     }
 
     function getPlayer() {
@@ -267,6 +338,7 @@
         var inscriptionStatInput = document.getElementById('lvscInscriptionStat');
         var inscriptionMinValueInput = document.getElementById('lvscInscriptionMinValue');
         var inscriptionStopModeInput = document.getElementById('lvscInscriptionStopMode');
+        var inscriptionAutoEquipInput = document.getElementById('lvscInscriptionAutoEquip');
         var inscriptionMaxAttemptsInput = document.getElementById('lvscInscriptionMaxAttempts');
         var inscriptionResultDelayInput = document.getElementById('lvscInscriptionResultDelay');
         var inscriptionDiscardDelayInput = document.getElementById('lvscInscriptionDiscardDelay');
@@ -287,6 +359,10 @@
         var voidInput = document.getElementById('lvscAutoVoidBody');
         var voidRarityInput = document.getElementById('lvscVoidRarity');
         var voidQtyInput = document.getElementById('lvscVoidBuyQty');
+        var hiddenCharmInput = document.getElementById('lvscAutoHiddenCharm');
+        var hiddenCharmRarityInput = document.getElementById('lvscHiddenCharmRarity');
+        var hiddenCharmQtyInput = document.getElementById('lvscHiddenCharmBuyQty');
+        var hiddenCharmRetryInput = document.getElementById('lvscHiddenCharmRetryMs');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
         state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
@@ -309,14 +385,15 @@
         state.checkDaoyunBoost = !!(daoyunBoostInput && daoyunBoostInput.checked);
         state.useAdvancedMeditate = !!(advancedMeditateInput && advancedMeditateInput.checked);
         state.meditateStopSpirit = Math.max(0, Number(meditateStopInput && meditateStopInput.value || 0));
-        state.inscriptionQuality = (inscriptionQualityInput && inscriptionQualityInput.value) || 'any';
-        if (['any', '普通', '优良', '稀有', '史诗', '传说'].indexOf(state.inscriptionQuality) < 0) state.inscriptionQuality = 'any';
+        state.inscriptionQuality = String(inscriptionQualityInput && inscriptionQualityInput.value || 'any').trim();
+        if (!state.inscriptionQuality || state.inscriptionQuality === '不限') state.inscriptionQuality = 'any';
         state.inscriptionStat = (inscriptionStatInput && inscriptionStatInput.value) || '攻击';
         if (['攻击', '防御', '气血', '神识'].indexOf(state.inscriptionStat) < 0) state.inscriptionStat = '攻击';
         state.inscriptionMinValue = Math.max(0, Number(inscriptionMinValueInput && inscriptionMinValueInput.value || 0));
         state.inscriptionTargets = state.inscriptionStat + ':' + state.inscriptionMinValue;
         state.inscriptionStopMode = (inscriptionStopModeInput && inscriptionStopModeInput.value) || 'any';
         if (['any', 'all', 'manual'].indexOf(state.inscriptionStopMode) < 0) state.inscriptionStopMode = 'any';
+        state.inscriptionAutoEquip = !!(inscriptionAutoEquipInput && inscriptionAutoEquipInput.checked);
         state.inscriptionMaxAttempts = Math.max(0, Number(inscriptionMaxAttemptsInput && inscriptionMaxAttemptsInput.value || 0));
         state.inscriptionResultDelay = Math.max(500, Number(inscriptionResultDelayInput && inscriptionResultDelayInput.value || 1500));
         state.inscriptionDiscardDelay = Math.max(300, Number(inscriptionDiscardDelayInput && inscriptionDiscardDelayInput.value || 600));
@@ -341,6 +418,10 @@
         state.autoVoidBody = !!(voidInput && voidInput.checked);
         state.voidBodyRarity = Math.max(1, Math.min(5, Number(voidRarityInput && voidRarityInput.value || 5)));
         state.voidBodyBuyQty = Math.max(1, Math.min(999, Number(voidQtyInput && voidQtyInput.value || 1)));
+        state.autoHiddenCharm = !!(hiddenCharmInput && hiddenCharmInput.checked);
+        state.hiddenCharmRarity = Math.max(0, Math.min(5, Number(hiddenCharmRarityInput && hiddenCharmRarityInput.value || 0)));
+        state.hiddenCharmBuyQty = Math.max(1, Math.min(999, Number(hiddenCharmQtyInput && hiddenCharmQtyInput.value || 1)));
+        state.hiddenCharmRetryMs = Math.max(3000, Number(hiddenCharmRetryInput && hiddenCharmRetryInput.value || 60000));
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
         localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
@@ -366,6 +447,7 @@
         localStorage.setItem('lvSpiritCleaner.inscriptionStat', state.inscriptionStat);
         localStorage.setItem('lvSpiritCleaner.inscriptionMinValue', String(state.inscriptionMinValue));
         localStorage.setItem('lvSpiritCleaner.inscriptionStopMode', state.inscriptionStopMode);
+        localStorage.setItem('lvSpiritCleaner.inscriptionAutoEquip', state.inscriptionAutoEquip ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.inscriptionMaxAttempts', String(state.inscriptionMaxAttempts));
         localStorage.setItem('lvSpiritCleaner.inscriptionResultDelay', String(state.inscriptionResultDelay));
         localStorage.setItem('lvSpiritCleaner.inscriptionDiscardDelay', String(state.inscriptionDiscardDelay));
@@ -386,6 +468,10 @@
         localStorage.setItem('lvSpiritCleaner.autoVoidBody', state.autoVoidBody ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.voidBodyRarity', String(state.voidBodyRarity));
         localStorage.setItem('lvSpiritCleaner.voidBodyBuyQty', String(state.voidBodyBuyQty));
+        localStorage.setItem('lvSpiritCleaner.autoHiddenCharm', state.autoHiddenCharm ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.hiddenCharmRarity', String(state.hiddenCharmRarity));
+        localStorage.setItem('lvSpiritCleaner.hiddenCharmBuyQty', String(state.hiddenCharmBuyQty));
+        localStorage.setItem('lvSpiritCleaner.hiddenCharmRetryMs', String(state.hiddenCharmRetryMs));
     }
 
     async function refreshPlayer() {
@@ -465,10 +551,39 @@
         for (var i = 0; i < buttons.length; i++) {
             var btn = buttons[i];
             if (String(btn.textContent || '').indexOf(text) < 0) continue;
-            if (btn.disabled) continue;
+            if (isElementDisabled(btn) || !isElementVisible(btn)) continue;
             return btn;
         }
         return null;
+    }
+
+    function isElementVisible(el) {
+        if (!el || !el.getBoundingClientRect) return false;
+        var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0)) return false;
+        var rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    function isElementDisabled(el) {
+        if (!el) return true;
+        var node = el.closest && el.closest('button,[aria-disabled],[disabled]') || el;
+        return !!(node.disabled || node.getAttribute && (node.getAttribute('disabled') !== null || node.getAttribute('aria-disabled') === 'true') || node.classList && node.classList.contains('disabled'));
+    }
+
+    async function humanClick(el) {
+        if (!el || isElementDisabled(el)) return false;
+        var target = el.closest && el.closest('button,[role=button],.modal-action-btn,.modal-btn') || el;
+        if (!isElementVisible(target)) target = el;
+        try { target.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+        await sleep(80);
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (type) {
+            try {
+                target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            } catch (_) {}
+        });
+        try { target.click(); } catch (_) {}
+        return true;
     }
 
     async function handleDeathReviveEvent(manual) {
@@ -527,7 +642,7 @@
 
         var timeEl = document.getElementById('headerGameTime');
         if (!timeEl) return false;
-        return timeEl.classList.contains('is-night') || String(timeEl.textContent || '').indexOf('(夜)') >= 0;
+        return timeEl.classList.contains('is-night') || String(timeEl.textContent || '').indexOf('(夜') >= 0;
     }
 
     function getMeditateTargetSpirit(info) {
@@ -739,6 +854,10 @@
         return Number(item.quantity || item.count || item.stackCount || 1);
     }
 
+    function itemIdOf(item) {
+        return Number(item && (item.id || item.itemId || item.inventoryId || item.instanceId) || 0);
+    }
+
     function isVoidBodyPill(item, rarity) {
         var name = String(item.name || item.itemName || '');
         var templateId = String(item.templateId || item.itemTemplateId || item.blueprintTemplateId || '');
@@ -761,7 +880,7 @@
 
     async function useVoidBodyPill(item) {
         if (!item) return false;
-        var itemId = Number(item.id || item.itemId || item.inventoryId || 0);
+        var itemId = itemIdOf(item);
         if (!itemId) return false;
 
         setStatus('使用' + (item.name || rarityName(state.voidBodyRarity) + '虚空淬体丹'), 'run');
@@ -815,7 +934,7 @@
             var buyQty = Math.min(remaining, canBuy);
             if (!listingId || buyQty <= 0) continue;
 
-            setStatus('坊市购买' + rarityName(rarity) + '虚空淬体丹 x' + buyQty, 'run');
+            setStatus('坊市购买' + rarityName(rarity) + '虚空淬体丹x' + buyQty, 'run');
             var res = await gameApi().post('/api/game/market/buy', { listingId: listingId, quantity: buyQty });
             if (!res || res.code !== 200) {
                 toast('坊市购买失败：' + ((res && res.message) || '未知错误'));
@@ -856,7 +975,128 @@
         }
 
         var ok = await useVoidBodyPill(item);
-        if (ok) setStatus('虚空淬体已补充', 'run');
+        if (ok) setStatus('虚空淬体已补齐', 'run');
+        return ok;
+    }
+
+    function isHiddenCharmItem(item, rarity) {
+        var name = String(item.name || item.itemName || item.title || item.goodsName || item.displayName || '');
+        var templateId = String(item.templateId || item.itemTemplateId || item.blueprintTemplateId || '').toLowerCase();
+        var haystack = (name + ' ' + templateId).toLowerCase();
+        var keywordMatch = name.indexOf('隐秘符') >= 0 || name.indexOf('隐匿符') >= 0 || name.indexOf('隐身符') >= 0 || name.indexOf('秘符') >= 0 || /hidden|stealth|secret|charm|talisman/.test(haystack);
+        if (!keywordMatch || itemQuantity(item) <= 0) return false;
+        var desiredRarity = Number(rarity || 0);
+        if (!desiredRarity) return true;
+        var itemRarity = Number(item.rarity || item.grade || 0);
+        return itemRarity === desiredRarity || name.indexOf(rarityName(desiredRarity)) >= 0 || templateId.indexOf(String(desiredRarity)) >= 0;
+    }
+
+    async function findHiddenCharmInInventory(rarity) {
+        var items = await loadInventoryItems();
+        return items.filter(function (item) {
+            return isHiddenCharmItem(item, rarity);
+        }).sort(function (a, b) {
+            return itemIdOf(a) - itemIdOf(b);
+        })[0] || null;
+    }
+
+    async function useHiddenCharm(item) {
+        var itemId = itemIdOf(item);
+        if (!itemId) return false;
+        setStatus('使用' + (item.name || '隐秘符'), 'run');
+        if (gameApi()) {
+            var res = await gameApi().post('/api/game/use-item', { itemId: itemId });
+            if (!res || res.code !== 200) {
+                toast('隐秘符使用失败：' + ((res && res.message) || '未知错误'));
+                return false;
+            }
+        } else {
+            var used = callPageFunction('useItem', [itemId]);
+            if (used && typeof used.then === 'function') await used;
+            if (!used) return false;
+        }
+        await sleep(800);
+        await refreshPlayer();
+        hiddenCharmLastUseAt = Date.now();
+        setStatus('隐秘符已尝试使用', 'run');
+        return true;
+    }
+
+    async function loadHiddenCharmMarketListings(rarity) {
+        var urls = [
+            '/api/game/market/listings?page=1&sort=price_asc&keyword=' + encodeURIComponent('隐秘符'),
+            '/api/game/market/listings?page=1&type=item&sort=price_asc&keyword=' + encodeURIComponent('隐秘符'),
+            '/api/game/market/listings?page=1&type=talisman&sort=price_asc&keyword=' + encodeURIComponent('隐秘符')
+        ];
+        var seen = {};
+        var results = [];
+        for (var i = 0; i < urls.length; i++) {
+            var res = null;
+            try {
+                res = await gameApi().get(urls[i]);
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] hidden charm listing failed', err);
+                continue;
+            }
+            if (!res || res.code !== 200) continue;
+            normalizeMarketItems(res.data).forEach(function (item) {
+                var listingId = Number(item.id || item.listingId || 0);
+                if (!listingId || seen[listingId] || item.isMine || !isHiddenCharmItem(item, rarity)) return;
+                seen[listingId] = true;
+                results.push(item);
+            });
+        }
+        return results.sort(function (a, b) {
+            return Number(a.unitPrice || a.price || 0) - Number(b.unitPrice || b.price || 0);
+        });
+    }
+
+    async function buyHiddenCharms(rarity, quantity) {
+        var listings = await loadHiddenCharmMarketListings(rarity);
+        var remaining = Math.max(1, Number(quantity || 1));
+        if (!listings.length) {
+            toast('坊市没有找到隐秘符');
+            return false;
+        }
+        for (var i = 0; i < listings.length && remaining > 0; i++) {
+            var listing = listings[i];
+            var listingId = Number(listing.id || listing.listingId || 0);
+            var canBuy = Math.max(1, Number(listing.quantity || listing.qty || 1));
+            var buyQty = Math.min(remaining, canBuy);
+            if (!listingId || buyQty <= 0) continue;
+            setStatus('坊市购买隐秘符x' + buyQty, 'run');
+            var res = await gameApi().post('/api/game/market/buy', { listingId: listingId, quantity: buyQty });
+            if (!res || res.code !== 200) {
+                toast('隐秘符购买失败：' + ((res && res.message) || '未知错误'));
+                return false;
+            }
+            remaining -= buyQty;
+            await sleep(600);
+        }
+        if (typeof window.loadMarketListings === 'function') {
+            try { window.loadMarketListings(true); } catch (_) {}
+        }
+        return remaining < quantity;
+    }
+
+    async function ensureHiddenCharm(manual) {
+        if (!gameApi()) return false;
+        syncSettingsFromUi();
+        if (!manual && hiddenCharmLastUseAt && Date.now() - hiddenCharmLastUseAt < state.hiddenCharmRetryMs) return true;
+        var rarity = state.hiddenCharmRarity;
+        var item = await findHiddenCharmInInventory(rarity);
+        if (!item) {
+            var bought = await buyHiddenCharms(rarity, state.hiddenCharmBuyQty);
+            if (!bought) return false;
+            await sleep(1000);
+            item = await findHiddenCharmInInventory(rarity);
+        }
+        if (!item) {
+            toast('购买后仍未在背包找到隐秘符');
+            return false;
+        }
+        var ok = await useHiddenCharm(item);
+        if (ok && manual) setStatus('隐秘符已尝试使用', 'run');
         return ok;
     }
 
@@ -917,7 +1157,7 @@
     }
 
     function merchantKeywordList() {
-        return String(state.merchantKeyword || '').split(/[\s,，、;；|]+/).map(function (part) {
+        return String(state.merchantKeyword || '').split(/[\s,，、；|]+/).map(function (part) {
             return part.trim();
         }).filter(Boolean);
     }
@@ -991,7 +1231,7 @@
         if (!state.autoMerchantLegend || busyEvent || !isMerchantActive() || !gameApi()) return false;
         busyEvent = true;
         try {
-            setStatus('处理商人中', 'run');
+            setStatus('处理商人事件', 'run');
             if (state.merchantMode === 'leave') {
                 if (await leaveMerchantSafely()) {
                     toast('遇到商人，已直接离去');
@@ -1093,7 +1333,7 @@
     function relationRank(value) {
         value = String(value || '').trim();
         if (!value) return null;
-        if (/可稳战|碾压|极弱|很弱|明显弱|远弱|弱很多/.test(value)) return { key: 'stable', score: 1, label: '可稳战' };
+        if (/可稳战|碾压|极弱|很弱|明显弱|稍弱|略弱|偏弱|远弱|弱很多/.test(value)) return { key: 'stable', score: 1, label: '可稳战' };
         if (/势均力敌|接近|相近|差不多|相当|持平|同等|相等|相同/.test(value)) return { key: 'balanced', score: 2, label: '势均力敌' };
         if (/略强|稍强|偏强|小强/.test(value)) return { key: 'slightlyStrong', score: 3, label: '略强' };
         if (/高层压制/.test(value)) return { key: 'levelSuppress', score: 4, label: '高层压制' };
@@ -1209,10 +1449,15 @@
             if (powerRelation.score > limit) {
                 return {
                     safe: false,
-                    reason: '战力' + powerRelation.label + '，超过自战上限“' + relationLabelByScore(limit) + '及以下”',
+                    reason: '战力' + powerRelation.label + '，超过自战上限：' + relationLabelByScore(limit) + '及以下',
                     summary: '自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')
                 };
             }
+            return {
+                safe: true,
+                reason: '战力' + powerRelation.label + '，未超过自战上限',
+                summary: '自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')
+            };
         }
 
         var mStage = Number(window._currentEncounterMonsterStage || 0);
@@ -1268,13 +1513,13 @@
                 await sleep(500);
                 return await handleDeathReviveEvent(false);
             }
-            stop(sourceLabel + '后角色陨落');
+            setStatus(sourceLabel + '后角色陨落，等待处理', 'warn');
             return false;
         }
         if (data && data.status === 'encounter_expired') {
             setStatus('妖兽遭遇已结束', 'warn');
         } else if (data && data.status === 'defeat') {
-            stop(sourceLabel + '失败，已暂停');
+            setStatus(sourceLabel + '失败，等待重试或手动处理', 'warn');
         } else {
             setStatus(sourceLabel + '完成', 'run');
         }
@@ -1395,13 +1640,13 @@
             var aloneFee = Math.max(0, Number(p.feeAlone || 0));
             candidates.push({
                 id: p.playerId,
-                name: p.name || '护道者',
+                name: p.name || '护道',
                 fee: togetherFee,
                 mode: 'together'
             });
             candidates.push({
                 id: p.playerId,
-                name: p.name || '护道者',
+                name: p.name || '护道',
                 fee: aloneFee,
                 mode: 'alone'
             });
@@ -1494,18 +1739,18 @@
                     await sleep(500);
                     return await handleDeathReviveEvent(false);
                 }
-                stop('护道后角色陨落');
+                setStatus('护道后角色陨落，等待处理', 'warn');
                 return false;
             }
 
-            toast('已雇佣护道：' + cheapest.name + '（' + cheapest.fee + '灵石，' + (cheapest.mode === 'alone' ? '单独' : '协同') + '）');
+            toast('已雇佣护道：' + cheapest.name + '，' + cheapest.fee + '灵石，' + (cheapest.mode === 'alone' ? '单独' : '协同') + '。');
             if (typeof window.loadInventory === 'function') window.loadInventory();
             if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
             await refreshPlayer();
             return true;
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] protector hiring failed', err);
-            stop('护道处理异常，已暂停');
+            setStatus('护道处理异常，等待重试', 'warn');
             return false;
         } finally {
             busyEvent = false;
@@ -1587,9 +1832,9 @@
                     setStatus('开始新一轮试炼', 'run');
                     var startRes = await gameApi().post('/api/trial-tower/start', { useAdPoints: false });
                     if (!startRes || startRes.code !== 200) {
-                        setStatus('试炼开始失败：' + ((startRes && startRes.message) || '未知错误'), 'warn');
-                        autoTrialRunning = false;
-                        break;
+                        setStatus('试炼开始失败，等待重试：' + ((startRes && startRes.message) || '未知错误'), 'warn');
+                        await sleep(state.delayMs);
+                        continue;
                     }
                     await refreshTrialPanel();
                     await sleep(state.delayMs);
@@ -1608,7 +1853,7 @@
                     continue;
                 }
 
-                setStatus('试炼挑战第 ' + (info.activeFloor || '?') + ' 层', 'run');
+                setStatus('试炼挑战第' + (info.activeFloor || '?') + '层', 'run');
                 var fightRes = await gameApi().post('/api/trial-tower/fight', {});
                 if (!fightRes || fightRes.code !== 200 || !fightRes.data) {
                     setStatus('试炼挑战失败，等待重试', 'warn');
@@ -1688,33 +1933,47 @@
 
                 var info = getSpiritInfo();
                 if (info.player && (info.player.isDead || window.playerDead)) {
-                    setStatus('角色已陨落，停止刷图', 'warn');
-                    autoTreasureRunning = false;
-                    break;
+                    setStatus('角色已陨落，等待处理后继续刷图', 'warn');
+                    await sleep(state.treasureIntervalMs || state.delayMs);
+                    continue;
                 }
                 if (info.player && info.spirit < 3) {
-                    setStatus('神识不足 3，停止刷图', 'warn');
-                    autoTreasureRunning = false;
-                    break;
+                    setStatus('神识不足 3，等待恢复后继续刷图', 'warn');
+                    await sleep(state.treasureIntervalMs || state.delayMs);
+                    continue;
                 }
                 if (state.treasureBatchSize > 0 && usedCount >= state.treasureBatchSize) {
-                    setStatus('本批藏宝图已使用 ' + usedCount + ' 次，停止刷图', 'run');
-                    autoTreasureRunning = false;
-                    break;
+                    setStatus('本批藏宝图已使用 ' + usedCount + ' 次，等待手动停止或调整上限', 'run');
+                    await sleep(state.treasureIntervalMs || state.delayMs);
+                    continue;
                 }
 
                 var map = await findTreasureMap();
                 if (!map) {
-                    setStatus('背包没有藏宝图，停止刷图', 'warn');
-                    autoTreasureRunning = false;
-                    break;
+                    setStatus('背包没有藏宝图，等待补充后继续刷图', 'warn');
+                    await sleep(state.treasureIntervalMs || state.delayMs);
+                    continue;
+                }
+
+                if (state.autoHiddenCharm) {
+                    if (!await ensureHiddenCharm(false)) {
+                        setStatus('隐秘符未能使用，等待重试', 'warn');
+                        await sleep(state.hiddenCharmRetryMs || state.delayMs);
+                        continue;
+                    }
                 }
 
                 var qty = Math.max(1, Math.min(state.treasureUseQuantity, itemQuantity(map)));
-                setStatus('使用藏宝图：本次 ' + qty + '，剩余 ' + itemQuantity(map) + (state.treasureBatchSize > 0 ? '，批次 ' + usedCount + '/' + state.treasureBatchSize : ''), 'run');
-                var used = callPageFunction('useItem', [Number(map.id || map.itemId || 0)]);
-                if (used && typeof used.then === 'function') await used;
-                else if (!used) await gameApi().post('/api/game/use-item', { itemId: Number(map.id || map.itemId || 0), quantity: qty });
+                setStatus('使用藏宝图：本次 ' + qty + '，剩余' + itemQuantity(map) + (state.treasureBatchSize > 0 ? '，批次' + usedCount + '/' + state.treasureBatchSize : ''), 'run');
+                var mapItemId = Number(map.id || map.itemId || 0);
+                if (gameApi()) {
+                    var useMapRes = await gameApi().post('/api/game/use-item', { itemId: mapItemId, quantity: qty });
+                    if (!useMapRes || useMapRes.code !== 200) throw new Error((useMapRes && useMapRes.message) || '藏宝图使用失败');
+                } else {
+                    var used = callPageFunction('useItem', [mapItemId]);
+                    if (used && typeof used.then === 'function') await used;
+                    if (!used) throw new Error('藏宝图使用失败');
+                }
                 usedCount += qty;
                 await sleep(state.treasureIntervalMs || state.delayMs);
             } catch (err) {
@@ -1732,11 +1991,38 @@
         '优良': 2,
         '稀有': 3,
         '史诗': 4,
-        '传说': 5
+        '传说': 5,
+        '凡品': 1,
+        '下品': 2,
+        '中品': 3,
+        '上品': 4,
+        '极品': 5,
+        '绝品': 6,
+        '仙品': 7,
+        '神品': 8
     };
 
     function inscriptionQualityRank(quality) {
         return INSCRIPTION_QUALITY_RANK[String(quality || '').trim()] || 0;
+    }
+
+    function inscriptionQualityNumber(quality) {
+        var match = String(quality || '').match(/(\d+(?:\.\d+)?)/);
+        return match ? Number(match[1]) : 0;
+    }
+
+    function inscriptionQualityOk(resultQuality, targetQuality) {
+        var target = String(targetQuality || '').trim();
+        if (!target || target === 'any' || target === '不限') return true;
+        var result = String(resultQuality || '').trim();
+        if (!result) return false;
+        var targetRank = inscriptionQualityRank(target);
+        var resultRank = inscriptionQualityRank(result);
+        if (targetRank || resultRank) return resultRank >= targetRank;
+        var targetNumber = inscriptionQualityNumber(target);
+        var resultNumber = inscriptionQualityNumber(result);
+        if (targetNumber || resultNumber) return resultNumber >= targetNumber;
+        return result.indexOf(target) >= 0 || target.indexOf(result) >= 0;
     }
 
     function parseInscriptionTargets() {
@@ -1747,8 +2033,8 @@
                 minValue: Number(state.inscriptionMinValue || 0)
             }];
         }
-        return String(state.inscriptionTargets || '').split(/[,，;；\n]+/).map(function (item) {
-            var parts = item.split(/[:：>=]+/);
+        return String(state.inscriptionTargets || '').split(/[,，；\n]+/).map(function (item) {
+            var parts = item.split(/[:：=]+/);
             var stat = String(parts[0] || '').trim();
             var minValue = Number(String(parts[1] || '0').replace(/[^\d.-]/g, '')) || 0;
             return stat ? { quality: 'any', stat: stat, minValue: minValue } : null;
@@ -1758,7 +2044,7 @@
     function updateInscriptionPanel() {
         var stats = document.getElementById('lvscInscriptionStats');
         if (stats) {
-            stats.textContent = '次数 ' + inscriptionStats.total + ' / 达成 ' + inscriptionStats.kept + ' / 放弃 ' + inscriptionStats.discarded + (inscriptionStats.best ? ' / 最佳 ' + inscriptionStats.best : '');
+            stats.textContent = '次数 ' + inscriptionStats.total + ' / 达成 ' + inscriptionStats.kept + ' / 放弃 ' + inscriptionStats.discarded + (inscriptionStats.best ? ' / 最高' + inscriptionStats.best : '');
         }
         var log = document.getElementById('lvscInscriptionLog');
         if (log && !log.textContent) log.textContent = '待命';
@@ -1779,8 +2065,116 @@
             var stat = ((card.querySelector('.insc-result-card__stat') || {}).textContent || '').trim();
             var valueText = ((card.querySelector('.insc-result-card__value') || {}).textContent || '').trim();
             var value = Number(valueText.replace(/[^\d.-]/g, '')) || 0;
-            return stat ? { quality: quality, stat: stat, value: value, text: (quality ? quality + ' ' : '') + stat + '+' + value } : null;
+            return stat ? { quality: quality, stat: stat, value: value, element: card, text: (quality ? quality + ' ' : '') + stat + '+' + value } : null;
         }).filter(Boolean);
+    }
+
+    function inscriptionResultLabel(result) {
+        return (result && result.quality ? result.quality + '·' : '') + (result && result.stat || '') + '+' + (result && result.value || 0);
+    }
+
+    function readInscriptionSlots() {
+        var slots = [];
+        var container = document.getElementById('customModal') || document;
+        Array.prototype.forEach.call(container.querySelectorAll('span,.insc-slot-btn__value'), function (el) {
+            var text = String(el.textContent || '').trim();
+            if (!text || text === '-') return;
+            var match = text.match(/(?:槽位\d+\s*[:：]\s*)?(.+?)\s*\+(\d+)/);
+            if (!match) return;
+            var name = match[1].trim();
+            var parts = name.split(/[·.]/);
+            slots.push({
+                quality: parts.length > 1 ? parts[0] : '',
+                stat: parts.length > 1 ? parts.slice(1).join('·') : name,
+                value: Number(match[2]) || 0,
+                text: text
+            });
+        });
+        return slots;
+    }
+
+    function slotMatchesTargets(slot) {
+        var targets = parseInscriptionTargets();
+        return targets.some(function (target) {
+            return String(slot.stat || '').indexOf(target.stat) >= 0 && inscriptionQualityOk(slot.quality, target.quality);
+        });
+    }
+
+    function chooseInscriptionSlotButton(value) {
+        var buttons = document.querySelectorAll('.insc-slot-btn, button');
+        var fallback = null;
+        var lowestTargetButton = null;
+        var lowestTargetValue = Infinity;
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i];
+            var text = String(btn.textContent || '').trim();
+            if (!text) continue;
+            if (text.indexOf('空') >= 0) return { button: btn, reason: '空槽' };
+            var match = text.match(/(.+?)\s*\+(\d+)/);
+            if (!match) continue;
+            var name = match[1].trim();
+            var parts = name.split(/[·.]/);
+            var slot = {
+                quality: parts.length > 1 ? parts[0] : '',
+                stat: parts.length > 1 ? parts.slice(1).join('·') : name,
+                value: Number(match[2]) || 0,
+                text: text
+            };
+            if (!slotMatchesTargets(slot)) {
+                fallback = fallback || { button: btn, reason: '替换非目标槽：' + text };
+                continue;
+            }
+            if (slot.value < lowestTargetValue) {
+                lowestTargetValue = slot.value;
+                lowestTargetButton = btn;
+            }
+        }
+        if (fallback) return fallback;
+        if (lowestTargetButton && Number(value || 0) > lowestTargetValue) {
+            return { button: lowestTargetButton, reason: '替换最低值+' + lowestTargetValue };
+        }
+        return null;
+    }
+
+    async function clickInscriptionDetailButton(result) {
+        if (result && result.element) {
+            var localBtn = Array.prototype.filter.call(result.element.querySelectorAll('button,[role=button]'), function (btn) {
+                return String(btn.textContent || '').indexOf('详情') >= 0 || String(btn.textContent || '').indexOf('装配') >= 0 || String(btn.textContent || '').indexOf('铭刻') >= 0;
+            })[0];
+            if (localBtn && await humanClick(localBtn)) return true;
+        }
+        var detailBtn = visibleButtonByText(document, '查看详情') || visibleButtonByText(document, '详情');
+        if (detailBtn) return await humanClick(detailBtn);
+        return false;
+    }
+
+    async function autoEquipInscriptionResults(matches) {
+        if (!state.inscriptionAutoEquip) return false;
+        var sorted = (matches || []).slice().sort(function (a, b) {
+            return Number((b.result || {}).value || 0) - Number((a.result || {}).value || 0);
+        });
+        var equipped = 0;
+        for (var i = 0; i < sorted.length && autoInscriptionRunning; i++) {
+            var result = sorted[i].result;
+            if (!result) continue;
+            inscriptionLog('自动装配：准备处理 ' + inscriptionResultLabel(result));
+            await clickInscriptionDetailButton(result);
+            await sleep(600);
+            var choice = chooseInscriptionSlotButton(result.value);
+            if (!choice) {
+                inscriptionLog('自动装配：跳过 ' + inscriptionResultLabel(result) + '，没有空槽或更低值槽位');
+                continue;
+            }
+            inscriptionLog('自动装配：' + inscriptionResultLabel(result) + ' -> ' + choice.reason);
+            await humanClick(choice.button);
+            await sleep(300);
+            var confirmBtn = document.getElementById('gameDialogConfirmBtn') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '确认');
+            if (confirmBtn) await humanClick(confirmBtn);
+            equipped += 1;
+            await sleep(900);
+        }
+        if (equipped) inscriptionLog('自动装配完成：' + equipped + ' 个');
+        return equipped > 0;
     }
 
     function inscriptionTargetDecision(results) {
@@ -1789,7 +2183,7 @@
         var matches = [];
         results.forEach(function (result) {
             targets.forEach(function (target) {
-                var qualityOk = !target.quality || target.quality === 'any' || inscriptionQualityRank(result.quality) >= inscriptionQualityRank(target.quality);
+                var qualityOk = inscriptionQualityOk(result.quality, target.quality);
                 if (qualityOk && String(result.stat || '').indexOf(target.stat) >= 0 && Number(result.value || 0) >= Number(target.minValue || 0)) {
                     matches.push({ result: result, target: target });
                 }
@@ -1806,13 +2200,24 @@
     }
 
     async function clickInscriptionTenPull() {
-        var buttons = document.querySelectorAll('button, .modal-action-btn__text');
+        var selectors = [
+            '.modal-action-btn__text',
+            'button',
+            '.modal-action-btn',
+            '[role=button]',
+            '[onclick*="TenPull"]',
+            '[onclick*="tenPull"]',
+            '[onclick*="Inscription"]',
+            '[onclick*="inscription"]'
+        ];
+        var buttons = document.querySelectorAll(selectors.join(','));
         for (var i = 0; i < buttons.length; i++) {
             var text = String(buttons[i].textContent || '').trim();
-            if (text === '十连灵纹' || text.indexOf('十连') >= 0) {
+            var onclickText = String(buttons[i].getAttribute && buttons[i].getAttribute('onclick') || '');
+            if (text === '十连灵纹' || text.indexOf('十连') >= 0 || onclickText.indexOf('TenPull') >= 0 || onclickText.indexOf('tenPull') >= 0) {
                 var target = buttons[i].closest && buttons[i].closest('button') || buttons[i];
-                if (target && !target.disabled) {
-                    target.click();
+                if (target && !isElementDisabled(target) && isElementVisible(target)) {
+                    await humanClick(target);
                     return true;
                 }
             }
@@ -1825,11 +2230,16 @@
         for (var i = 0; i < labels.length; i++) {
             var btn = visibleButtonByText(document, labels[i]);
             if (btn) {
-                btn.click();
+                await humanClick(btn);
                 await sleep(300);
-                var confirmBtn = document.getElementById('gameDialogConfirmBtn') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '确 定');
-                if (confirmBtn) confirmBtn.click();
-                return true;
+                var confirmBtn = document.getElementById('gameDialogConfirmBtn') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '确认');
+                if (confirmBtn) {
+                    await humanClick(confirmBtn);
+                    await sleep(500);
+                    return parseInscriptionResultCards().length === 0;
+                }
+                await sleep(500);
+                return parseInscriptionResultCards().length === 0;
             }
         }
         return false;
@@ -1854,54 +2264,101 @@
         syncSettingsFromUi();
         inscriptionStats = { total: 0, kept: 0, discarded: 0, best: '' };
         autoInscriptionRunning = true;
+        var targetHeld = false;
         inscriptionLog('开始铭文洗练：' + (state.inscriptionQuality === 'any' ? '不限等级' : state.inscriptionQuality + '及以上') + ' / ' + state.inscriptionStat + ' ≥ ' + state.inscriptionMinValue);
         updateInscriptionPanel();
-        try {
-            while (autoInscriptionRunning) {
+        while (autoInscriptionRunning) {
+            try {
+                var existingResults = parseInscriptionResultCards();
+                if (existingResults.length) {
+                    var existingDecision = inscriptionTargetDecision(existingResults);
+                    if (existingDecision.met) {
+                        if (state.inscriptionAutoEquip && await autoEquipInscriptionResults(existingDecision.matches)) {
+                            inscriptionStats.kept += 1;
+                            updateInscriptionPanel();
+                            await clickInscriptionDiscardAll();
+                            await sleep(state.inscriptionDiscardDelay);
+                            continue;
+                        }
+                        setStatus('铭文目标达成，已保留结果等待处理', 'run');
+                        await sleep(Math.max(state.inscriptionResultDelay, 2000));
+                        continue;
+                    }
+                    if (!await clickInscriptionDiscardAll()) {
+                        inscriptionLog('已有未命中结果但放弃失败，等待重试');
+                        setStatus('放弃已有铭文结果失败，等待重试', 'warn');
+                        await sleep(Math.max(state.inscriptionDiscardDelay, 2000));
+                        continue;
+                    }
+                    inscriptionStats.discarded += 1;
+                    updateInscriptionPanel();
+                    await sleep(state.inscriptionDiscardDelay);
+                    continue;
+                }
                 if (state.inscriptionMaxAttempts > 0 && inscriptionStats.total >= state.inscriptionMaxAttempts) {
-                    inscriptionLog('达到最大次数，停止');
-                    break;
+                    inscriptionLog('达到最大次数，等待手动停止或调整上限');
+                    setStatus('铭文已达到最大次数，仍保持运行', 'warn');
+                    await sleep(Math.max(state.inscriptionResultDelay, 2000));
+                    continue;
                 }
                 if (!await clickInscriptionTenPull()) {
-                    inscriptionLog('未找到“十连灵纹”按钮，请先打开铭文洗练界面');
-                    break;
+                    inscriptionLog('未找到“十连灵纹”按钮，等待重试');
+                    setStatus('未找到十连按钮，等待重试', 'warn');
+                    await sleep(Math.max(state.inscriptionResultDelay, 2000));
+                    continue;
                 }
                 inscriptionStats.total += 1;
+                targetHeld = false;
                 updateInscriptionPanel();
                 await sleep(state.inscriptionResultDelay);
                 var results = await waitInscriptionResults(5000);
                 if (!results.length) {
-                    inscriptionLog('第 ' + inscriptionStats.total + ' 次没有解析到结果');
-                    break;
+                    inscriptionLog('第' + inscriptionStats.total + ' 次没有解析到结果，等待重试');
+                    setStatus('铭文结果为空，等待重试', 'warn');
+                    await sleep(Math.max(state.inscriptionResultDelay, 2000));
+                    continue;
                 }
                 var best = results.slice().sort(function (a, b) { return Number(b.value || 0) - Number(a.value || 0); })[0];
                 if (best) inscriptionStats.best = best.text;
                 var decision = inscriptionTargetDecision(results);
-                inscriptionLog('第 ' + inscriptionStats.total + ' 次：' + results.map(function (item) { return item.text; }).join('，') + '；' + decision.reason);
+                inscriptionLog('第' + inscriptionStats.total + ' 次：' + results.map(function (item) { return item.text; }).join('，') + '：' + decision.reason);
                 if (decision.met) {
                     inscriptionStats.kept += 1;
                     updateInscriptionPanel();
-                    setStatus('铭文目标达成，已停止', 'run');
+                    setStatus('铭文目标达成，已保留结果等待处理', 'run');
                     notifyUser('铭文目标达成', results.map(function (item) { return item.text; }).join('，'));
-                    break;
+                    if (state.inscriptionAutoEquip && await autoEquipInscriptionResults(decision.matches)) {
+                        await clickInscriptionDiscardAll();
+                        await sleep(state.inscriptionDiscardDelay);
+                        continue;
+                    }
+                    targetHeld = true;
+                    while (autoInscriptionRunning && targetHeld) {
+                        await sleep(Math.max(state.inscriptionResultDelay, 2000));
+                        var heldResults = parseInscriptionResultCards();
+                        var heldDecision = inscriptionTargetDecision(heldResults);
+                        if (!heldResults.length || !heldDecision.met) targetHeld = false;
+                    }
+                    continue;
                 }
                 if (await clickInscriptionDiscardAll()) {
                     inscriptionStats.discarded += 1;
                     updateInscriptionPanel();
                     await sleep(state.inscriptionDiscardDelay);
                 } else {
-                    inscriptionLog('未找到放弃按钮，停止以免误操作');
-                    break;
+                    inscriptionLog('未找到放弃按钮，等待重试以免误操作');
+                    setStatus('未找到放弃按钮，等待重试', 'warn');
+                    await sleep(Math.max(state.inscriptionDiscardDelay, 2000));
+                    continue;
                 }
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] inscription loop failed', err);
+                inscriptionLog('铭文洗练异常：' + (err.message || '未知错误') + '，等待重试');
+                notifyUser('铭文洗练异常', err.message || '未知错误');
+                await sleep(Math.max(state.inscriptionResultDelay, 2000));
             }
-        } catch (err) {
-            console.warn('[LingVerse Spirit Cleaner] inscription loop failed', err);
-            inscriptionLog('铭文洗练异常：' + (err.message || '未知错误'));
-            notifyUser('铭文洗练异常', err.message || '未知错误');
-        } finally {
-            autoInscriptionRunning = false;
-            updateInscriptionPanel();
         }
+        updateInscriptionPanel();
     }
 
     function toggleAutoInscription() {
@@ -2056,13 +2513,29 @@
                 continue;
             }
 
-            if (state.autoVoidBody && !hasVoidBodyBuff()) {
-                if (await ensureVoidBodyBuff(false)) {
+            try {
+                if (state.autoVoidBody && !hasVoidBodyBuff()) {
+                    if (await ensureVoidBodyBuff(false)) {
+                        await sleep(state.delayMs);
+                        continue;
+                    }
+                    setStatus('虚空淬体补充失败，等待重试', 'warn');
                     await sleep(state.delayMs);
                     continue;
                 }
-                stop('虚空淬体补充失败，已暂停');
-                return;
+
+                if (state.autoHiddenCharm) {
+                    if (!await ensureHiddenCharm(false)) {
+                        setStatus('隐秘符未能使用，等待重试', 'warn');
+                        await sleep(state.hiddenCharmRetryMs || state.delayMs);
+                        continue;
+                    }
+                }
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] pre explore buff failed', err);
+                setStatus('探索前加成处理异常，等待重试', 'warn');
+                await sleep(state.hiddenCharmRetryMs || state.delayMs);
+                continue;
             }
 
             var stopReason = shouldStopBeforeAction();
@@ -2070,17 +2543,20 @@
                 if (stopReason === 'need_meditate') {
                     if (await meditateUntilSpiritFull()) {
                         if (!state.autoExploreAfterMeditate) {
-                            stop('已收功，自动探索关闭');
-                            return;
+                            setStatus('已收功，等待手动停止或开启自动继续探索', 'warn');
+                            await sleep(state.delayMs);
+                            continue;
                         }
                         await sleep(state.delayMs);
                         continue;
                     }
-                    stop('神识不足，自动冥想失败');
-                    return;
+                    setStatus('神识不足，自动冥想失败，等待重试', 'warn');
+                    await sleep(state.delayMs);
+                    continue;
                 }
-                stop(stopReason);
-                return;
+                setStatus(stopReason + '，等待重试', 'warn');
+                await sleep(state.delayMs);
+                continue;
             }
 
             try {
@@ -2111,20 +2587,23 @@
                     if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
                         if (await meditateUntilSpiritFull()) {
                             if (!state.autoExploreAfterMeditate) {
-                                stop('已收功，自动探索关闭');
-                                return;
+                                setStatus('已收功，等待手动停止或开启自动继续探索', 'warn');
+                                await sleep(state.delayMs);
+                                continue;
                             }
                             await sleep(state.delayMs);
                             continue;
                         }
                     }
-                    stop('游戏事件触发，已暂停');
-                    return;
+                    setStatus('游戏事件触发，等待处理后重试', 'warn');
+                    await sleep(state.delayMs);
+                    continue;
                 }
             } catch (err) {
                 console.warn('[LingVerse Spirit Cleaner] explore failed', err);
-                stop('探索异常，已暂停');
-                return;
+                setStatus('探索异常，等待重试', 'warn');
+                await sleep(state.delayMs);
+                continue;
             }
 
             var jitter = Math.floor(Math.random() * 350);
@@ -2466,6 +2945,7 @@
             '<button id="lvscUpdateCloseBtn">知道了</button>' +
             '</div>';
         document.body.appendChild(modal);
+        modal.style.zIndex = String(UPDATE_MODAL_Z_INDEX);
 
         document.getElementById('lvscUpdateCloseBtn').onclick = function () {
             if (options.seenKey) localStorage.setItem(options.seenKey, String(release.version || SCRIPT_VERSION));
@@ -2506,12 +2986,12 @@
             var seenKey = 'lvSpiritCleaner.seenCloudVersion.' + simpleHash(url);
             if (newer && localStorage.getItem(seenKey) !== release.version) {
                 if (!document.getElementById('lvscUpdateModal')) {
-                    showUpdateNotice(release, { seenKey: seenKey, kicker: '发现云端新版本' });
+                    showUpdateNotice(release, { seenKey: seenKey, kicker: '发现云端新版' });
                 }
-                setStatus('发现云端新版本 ' + release.version, 'warn');
-                notifyUser('发现神识清理新版本', 'v' + release.version);
+                setStatus('发现云端新版：' + release.version, 'warn');
+                notifyUser('发现神识清理新版', 'v' + release.version);
             } else if (manual) {
-                showUpdateNotice(release, { kicker: newer ? '云端新版本' : '云端公告' });
+                showUpdateNotice(release, { kicker: newer ? '云端新版' : '云端公告' });
                 setStatus(newer ? '云端有新版本 ' + release.version : '当前已是最新：' + SCRIPT_VERSION, newer ? 'warn' : 'run');
             }
         } catch (err) {
@@ -2546,7 +3026,7 @@
         var style = document.createElement('style');
         style.id = 'lvscStyle';
         style.textContent = [
-            '#lvscPanel{position:fixed;right:18px;bottom:18px;z-index:99999;width:min(460px,calc(100vw - 36px));height:min(720px,calc(100vh - 36px));min-width:300px;min-height:260px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);display:flex;flex-direction:column;background:rgba(17,20,29,.94);color:#f5f1e8;border:1px solid rgba(219,185,112,.45);box-shadow:0 16px 48px rgba(0,0,0,.38);border-radius:10px;font:13px/1.45 "Microsoft YaHei",sans-serif;overflow:hidden;resize:none;touch-action:none;container-type:inline-size}',
+            '#lvscPanel{position:fixed;right:18px;bottom:18px;z-index:' + PANEL_Z_INDEX + ';width:min(460px,calc(100vw - 36px));height:min(720px,calc(100vh - 36px));min-width:300px;min-height:260px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);display:flex;flex-direction:column;background:rgba(17,20,29,.94);color:#f5f1e8;border:1px solid rgba(219,185,112,.45);box-shadow:0 16px 48px rgba(0,0,0,.38);border-radius:10px;font:13px/1.45 "Microsoft YaHei",sans-serif;overflow:hidden;resize:none;touch-action:none;container-type:inline-size}',
             '#lvscPanel header{display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;padding:10px 12px;background:rgba(219,185,112,.12);font-weight:700}',
             '#lvscTitle{display:flex;align-items:center;gap:8px;min-width:0}',
             '#lvscTitleText{white-space:nowrap}',
@@ -2604,12 +3084,12 @@
             '#lvscRefreshBtn{width:72px;height:34px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.12)!important}',
             '#lvscMonitorBtn{height:34px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoTrialBtn,#lvscAutoTreasureBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
-            '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
+            '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoInscriptionBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
             '#lvscInscriptionStats{font-size:12px;color:#9be7c3}',
             '#lvscInscriptionLog{min-height:130px;max-height:190px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px}',
             '#lvscAutoRecoveryBtn{align-self:end}',
-            '#lvscUpdateModal{position:fixed;inset:0;z-index:100000;color:#f5f1e8;font:13px/1.55 "Microsoft YaHei",sans-serif}',
+            '#lvscUpdateModal{position:fixed;inset:0;z-index:' + UPDATE_MODAL_Z_INDEX + ';color:#f5f1e8;font:13px/1.55 "Microsoft YaHei",sans-serif}',
             '.lvsc-update-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}',
             '.lvsc-update-card{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,calc(100vw - 28px));max-height:82vh;overflow:auto;padding:18px;border-radius:12px;background:rgba(17,20,29,.98);border:1px solid rgba(219,185,112,.5);box-shadow:0 18px 60px rgba(0,0,0,.55)}',
             '.lvsc-update-kicker{font-size:12px;color:#dbb970;font-weight:700;margin-bottom:4px}',
@@ -2621,14 +3101,14 @@
             '#lvscUpdateCloseBtn{width:100%;height:34px;background:#dbb970;color:#17141d}',
             '#lvscResizeHandle{position:absolute;right:3px;bottom:3px;z-index:5;width:18px;height:18px;cursor:nwse-resize;border-radius:3px;background:linear-gradient(135deg,transparent 0 45%,rgba(219,185,112,.75) 46% 52%,transparent 53% 62%,rgba(219,185,112,.65) 63% 69%,transparent 70%);opacity:.85}',
             '@container (max-width: 380px){.lvsc-grid2,.lvsc-field-grid,.lvsc-card-grid{grid-template-columns:1fr}#lvscTabs{grid-template-columns:repeat(3,minmax(0,1fr))}.lvsc-tab{font-size:11px}}',
-            '@media (max-width: 520px){#lvscPanel{right:8px;bottom:8px;width:min(340px,calc(100vw - 16px));height:min(620px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:78vh;font-size:12px}#lvscBody{gap:8px;padding:10px}#lvscTabs{top:-10px}#lvscPanel input[type=number],#lvscPanel input[type=text],#lvscPanel select{height:34px}#lvscActions button,#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscCheckUpdateBtn{height:38px}#lvscPanel.lvsc-collapsed{width:calc(100vw - 16px)!important;border-radius:12px}#lvscCompactStatus{max-width:none}}'
+            '@media (max-width: 520px){#lvscPanel{right:8px;bottom:8px;width:min(340px,calc(100vw - 16px));height:min(620px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:78vh;font-size:12px}#lvscBody{gap:8px;padding:10px}#lvscTabs{top:-10px}#lvscPanel input[type=number],#lvscPanel input[type=text],#lvscPanel select{height:34px}#lvscActions button,#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:38px}#lvscPanel.lvsc-collapsed{width:calc(100vw - 16px)!important;border-radius:12px}#lvscCompactStatus{max-width:none}}'
         ].join('');
         document.head.appendChild(style);
 
         var panel = document.createElement('div');
         panel.id = 'lvscPanel';
         panel.innerHTML =
-            '<header><span id="lvscTitle"><span id="lvscTitleText">神识清理</span></span><span id="lvscHeaderActions"><button id="lvscCollapseBtn" title="收起成横栏">收起</button><button id="lvscClose" title="隐藏">×</button></span></header>' +
+            '<header><span id="lvscTitle"><span id="lvscTitleText">神识清理</span></span><span id="lvscHeaderActions"><button id="lvscCollapseBtn" title="收起成横幅">收起</button><button id="lvscClose" title="隐藏">×</button></span></header>' +
             '<div id="lvscStatus" data-tone="idle">待命</div>' +
             '<div id="lvscCompactBar"><span id="lvscCompactSpirit">读取中</span><span id="lvscCompactStatus" data-tone="idle">待命</span><button id="lvscCompactRunBtn">开始</button><button id="lvscCompactMonitorBtn">监测</button><button id="lvscExpandBtn">展开</button></div>' +
             '<div id="lvscBody">' +
@@ -2654,11 +3134,11 @@
             '<div class="lvsc-category-title">护道与商人</div>' +
             '<div class="lvsc-field-grid">' +
             '<label>护道方式<select id="lvscHireMode"><option value="cheapest">最低价</option><option value="together">合击</option><option value="alone">单独</option></select></label>' +
-            '<label>灵石上限<input id="lvscHireMaxFee" type="number" min="0" step="1" title="填 0 表示不限制"></label>' +
+            '<label>灵石上限<input id="lvscHireMaxFee" type="number" min="0" step="1" title="填 0 表示不限"></label>' +
             '<label>护道重试上限<input id="lvscHireRetryLimit" type="number" min="1" max="10" step="1"></label>' +
             '<label>商人策略<select id="lvscMerchantMode"><option value="legend">传说才买</option><option value="custom">按条件购买</option><option value="leave">直接离去</option></select></label>' +
             '<label>商品关键词<input id="lvscMerchantKeyword" type="text" placeholder="多个用空格或逗号隔开"></label>' +
-            '<label>高价阈值(灵石)<input id="lvscMerchantMaxPrice" type="number" min="0" step="1" title="填 0 表示不限制"></label>' +
+            '<label>高价阈值(灵石)<input id="lvscMerchantMaxPrice" type="number" min="0" step="1" title="填 0 表示不限"></label>' +
             '<label class="lvsc-check"><input id="lvscMerchantQualityFirst" type="checkbox">品质优先</label>' +
             '<label class="lvsc-check"><input id="lvscAutoMerchant" type="checkbox">自动处理商人</label>' +
             '</div>' +
@@ -2719,9 +3199,18 @@
             '<label class="lvsc-check"><input id="lvscAutoVoidBody" type="checkbox">探索前自动补加成</label>' +
             '<div class="lvsc-grid2">' +
             '<label>丹药等级<select id="lvscVoidRarity"><option value="1">普通</option><option value="2">优良</option><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label>' +
-            '<label>坊市购买数<input id="lvscVoidBuyQty" type="number" min="1" max="999" step="1"></label>' +
+            '<label>坊市购买量<input id="lvscVoidBuyQty" type="number" min="1" max="999" step="1"></label>' +
             '</div>' +
             '<button id="lvscVoidBodyBtn">检查/补淬体</button>' +
+            '<div class="lvsc-section-title">隐秘符</div>' +
+            '<label class="lvsc-check"><input id="lvscAutoHiddenCharm" type="checkbox">探索/刷图前自动尝试使用</label>' +
+            '<div class="lvsc-grid2">' +
+            '<label>符等级<select id="lvscHiddenCharmRarity"><option value="0">不限</option><option value="1">普通</option><option value="2">优良</option><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label>' +
+            '<label>坊市购买量<input id="lvscHiddenCharmBuyQty" type="number" min="1" max="999" step="1"></label>' +
+            '<label>使用/重试间隔(ms)<input id="lvscHiddenCharmRetryMs" type="number" min="3000" step="1000"></label>' +
+            '</div>' +
+            '<button id="lvscHiddenCharmBtn">检查/用隐秘符</button>' +
+            '<div class="lvsc-help">无法可靠检测隐秘符加成时，以使用接口成功为准；成功后会按间隔等待，避免每次探索都消耗。</div>' +
             '</div>' +
             '</div>' +
             '</div>' +
@@ -2730,16 +3219,17 @@
             '<div class="lvsc-section">' +
             '<div id="lvscInscriptionStats">次数 0 / 达成 0 / 放弃 0</div>' +
             '<div class="lvsc-grid2">' +
-            '<label>最低等级<select id="lvscInscriptionQuality"><option value="any">不限</option><option value="普通">普通及以上</option><option value="优良">优良及以上</option><option value="稀有">稀有及以上</option><option value="史诗">史诗及以上</option><option value="传说">传说</option></select></label>' +
+            '<label>等级关键词<input id="lvscInscriptionQuality" type="text" placeholder="不限，或填页面显示的等级"></label>' +
             '<label>目标属性<select id="lvscInscriptionStat"><option value="攻击">攻击</option><option value="防御">防御</option><option value="气血">气血</option><option value="神识">神识</option></select></label>' +
             '<label>最小数值<input id="lvscInscriptionMinValue" type="number" min="0" step="1"></label>' +
-            '<label>停止模式<select id="lvscInscriptionStopMode"><option value="any">任一满足即停</option><option value="all">全部满足才停</option><option value="manual">永不停</option></select></label>' +
+            '<label>命中模式<select id="lvscInscriptionStopMode"><option value="any">任一满足即保留</option><option value="all">全部满足才保留</option><option value="manual">只手动停止</option></select></label>' +
+            '<label class="lvsc-check"><input id="lvscInscriptionAutoEquip" type="checkbox">命中后自动装配</label>' +
             '<label>最大次数<input id="lvscInscriptionMaxAttempts" type="number" min="0" step="1" title="填 0 表示无限"></label>' +
             '<label>结果等待(ms)<input id="lvscInscriptionResultDelay" type="number" min="500" step="100"></label>' +
             '<label>放弃等待(ms)<input id="lvscInscriptionDiscardDelay" type="number" min="300" step="100"></label>' +
             '<button id="lvscAutoInscriptionBtn">自动刷铭文</button>' +
             '</div>' +
-            '<div class="lvsc-help">先打开游戏里的铭文洗练界面。脚本会点“十连灵纹”，命中目标就停止；没命中会点“全部放弃/一键放弃”。</div>' +
+            '<div class="lvsc-help">先打开游戏里的铭文洗练界面。自动装配优先级：空槽位 → 非目标槽位 → 目标槽最低值且新值更高。关闭自动装配时，命中目标会保留结果等待处理。</div>' +
             '<div id="lvscInscriptionLog">待命</div>' +
             '</div>' +
             '</div>' +
@@ -2757,6 +3247,7 @@
             '<div id="lvscActions"><button id="lvscRunBtn">开始清理</button><button id="lvscMonitorBtn">监测神识</button><button id="lvscRefreshBtn">刷新</button></div>' +
             '<div id="lvscResizeHandle" title="拖拽调节面板大小"></div>';
         document.body.appendChild(panel);
+        panel.style.zIndex = String(PANEL_Z_INDEX);
         restorePanelSize(panel);
         makePanelDraggable(panel);
         makePanelResizable(panel);
@@ -2794,6 +3285,7 @@
         document.getElementById('lvscInscriptionStat').value = String(state.inscriptionStat);
         document.getElementById('lvscInscriptionMinValue').value = String(state.inscriptionMinValue);
         document.getElementById('lvscInscriptionStopMode').value = String(state.inscriptionStopMode);
+        document.getElementById('lvscInscriptionAutoEquip').checked = state.inscriptionAutoEquip;
         document.getElementById('lvscInscriptionMaxAttempts').value = String(state.inscriptionMaxAttempts);
         document.getElementById('lvscInscriptionResultDelay').value = String(state.inscriptionResultDelay);
         document.getElementById('lvscInscriptionDiscardDelay').value = String(state.inscriptionDiscardDelay);
@@ -2804,6 +3296,10 @@
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
         document.getElementById('lvscVoidBuyQty').value = String(state.voidBodyBuyQty);
+        document.getElementById('lvscAutoHiddenCharm').checked = state.autoHiddenCharm;
+        document.getElementById('lvscHiddenCharmRarity').value = String(state.hiddenCharmRarity);
+        document.getElementById('lvscHiddenCharmBuyQty').value = String(state.hiddenCharmBuyQty);
+        document.getElementById('lvscHiddenCharmRetryMs').value = String(state.hiddenCharmRetryMs);
         document.getElementById('lvscRunBtn').onclick = function () {
             if (running) stop('手动停止');
             else runLoop();
@@ -2834,6 +3330,9 @@
         };
         document.getElementById('lvscVoidBodyBtn').onclick = function () {
             ensureVoidBodyBuff(true);
+        };
+        document.getElementById('lvscHiddenCharmBtn').onclick = function () {
+            ensureHiddenCharm(true);
         };
         document.getElementById('lvscClose').onclick = function () {
             stop('已隐藏');
@@ -2880,6 +3379,7 @@
         document.getElementById('lvscInscriptionMaxAttempts').onchange = syncSettingsFromUi;
         document.getElementById('lvscInscriptionResultDelay').onchange = syncSettingsFromUi;
         document.getElementById('lvscInscriptionDiscardDelay').onchange = syncSettingsFromUi;
+        document.getElementById('lvscInscriptionAutoEquip').onchange = syncSettingsFromUi;
         document.getElementById('lvscTreasureBatchSize').onchange = syncSettingsFromUi;
         document.getElementById('lvscTreasureUseQuantity').onchange = syncSettingsFromUi;
         document.getElementById('lvscTreasureIntervalMs').onchange = syncSettingsFromUi;
@@ -2887,11 +3387,16 @@
         document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidBuyQty').onchange = syncSettingsFromUi;
+        document.getElementById('lvscAutoHiddenCharm').onchange = syncSettingsFromUi;
+        document.getElementById('lvscHiddenCharmRarity').onchange = syncSettingsFromUi;
+        document.getElementById('lvscHiddenCharmBuyQty').onchange = syncSettingsFromUi;
+        document.getElementById('lvscHiddenCharmRetryMs').onchange = syncSettingsFromUi;
 
         setPanelCollapsed(panel, localStorage.getItem('lvSpiritCleaner.collapsed') === '1');
         activatePanelTab(localStorage.getItem('lvSpiritCleaner.activeTab') || 'basic');
         refreshPlayer();
         showBuiltinReleaseOnce();
+        startOnlineHeartbeat();
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
         setInterval(updateMeter, 2000);

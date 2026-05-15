@@ -39,6 +39,15 @@ function Get-NextPatchVersion($CurrentVersion) {
     return "$($match.Groups[1].Value).$($match.Groups[2].Value).$patch"
 }
 
+function Normalize-VersionInput($InputVersion) {
+    $value = ([string]$InputVersion).Trim().TrimStart("v", "V")
+    $match = [regex]::Match($value, "^(\d+)\.(\d+)(?:\.(\d+))?([-.][0-9A-Za-z]+)?$")
+    if (-not $match.Success) { return $value }
+
+    $patch = if ($match.Groups[3].Success) { $match.Groups[3].Value } else { "0" }
+    return "$($match.Groups[1].Value).$($match.Groups[2].Value).$patch$($match.Groups[4].Value)"
+}
+
 function Compare-Semver($A, $B) {
     $pa = [regex]::Split(([string]$A).TrimStart("v", "V"), "[.-]")
     $pb = [regex]::Split(([string]$B).TrimStart("v", "V"), "[.-]")
@@ -175,8 +184,9 @@ if ($Version) {
     }
 
     $Version = $Version.Trim()
+    $Version = Normalize-VersionInput $Version
     if ($Version -notmatch "^\d+\.\d+\.\d+([-.][0-9A-Za-z]+)?$") {
-        Fail "Invalid version: $Version. Use a version like 0.9.6."
+        Fail "Invalid version: $Version. Use a version like 0.9.6 or 1.0."
     }
 
     if (-not $Notes -or $Notes.Count -eq 0) {
