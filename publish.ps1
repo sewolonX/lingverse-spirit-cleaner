@@ -243,9 +243,7 @@ if ($Version) {
     Write-Utf8NoBom $scriptPath $scriptText
 
     $downloadUrl = [string]$release.downloadUrl
-    if (-not $downloadUrl) {
-        $downloadUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
-    }
+    $downloadUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=$Version"
     $releaseOut = [ordered]@{
         version = $Version
         title = "神识清理 v$Version"

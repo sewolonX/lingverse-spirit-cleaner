@@ -19,5 +19,5 @@
     "新增浏览器通知开关，新版本和铭文命中目标时可弹系统通知。",
     "更新公告和 README 已整理为功能列表、安装、使用、配置、发布和回滚说明。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.0.0"
 }
