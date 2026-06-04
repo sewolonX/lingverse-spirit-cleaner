@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.5
+// @version      1.0.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,10 +63,12 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.5';
+    var SCRIPT_VERSION = '1.0.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
+    var CLOUD_UPDATE_TIMEOUT_MS = 10000;
     var ONLINE_HEARTBEAT_MS = 30000;
+    var GITHUB_REPO_SLUG = 'SuRanHF/lingverse-spirit-cleaner';
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json';
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
@@ -3262,13 +3264,33 @@
         checkingCloudUpdate = true;
         try {
             if (manual) setStatus('检测云端更新中', 'run');
-            var sep = url.indexOf('?') >= 0 ? '&' : '?';
-            var res = await fetch(url + sep + '_lvsc=' + Date.now(), { cache: 'no-store' });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            var text = await res.text();
-            var release = normalizeReleaseData(text, url);
-            if (!release.version) {
-                setStatus('云端公告缺少 version 字段', 'warn');
+
+            var release = null;
+            var urls = [url];
+
+            // CDN fallback: if using the default GitHub raw URL, also try jsDelivr mirror
+            if (url.indexOf('raw.githubusercontent.com/' + GITHUB_REPO_SLUG) >= 0) {
+                urls.push('https://cdn.jsdelivr.net/gh/' + GITHUB_REPO_SLUG + '@main/release.json');
+            }
+
+            for (var u = 0; u < urls.length; u++) {
+                try {
+                    var controller = new AbortController();
+                    var timer = setTimeout(function () { controller.abort(); }, CLOUD_UPDATE_TIMEOUT_MS);
+                    var sep = urls[u].indexOf('?') >= 0 ? '&' : '?';
+                    var res = await fetch(urls[u] + sep + '_lvsc=' + Date.now(), { cache: 'no-store', signal: controller.signal });
+                    clearTimeout(timer);
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    var text = await res.text();
+                    release = normalizeReleaseData(text, urls[u]);
+                    if (release.version) break;
+                } catch (fetchErr) {
+                    console.warn('[LingVerse Spirit Cleaner] CDN fetch failed: ' + urls[u], fetchErr.message || fetchErr);
+                }
+            }
+
+            if (!release || !release.version) {
+                if (manual) setStatus('云端公告获取失败，请检查网络或公告地址', 'warn');
                 return;
             }
 

@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5",
-  "title": "神识清理 v1.0.5",
+  "version": "1.0.6",
+  "title": "神识清理 v1.0.6",
   "notes": [
     "新增页面不刷新时的云端版本轮询：脚本运行期间每 60 秒检测一次 release.json。",
     "发现 GitHub 上有更高版本时，会自动弹出更新公告和更新地址。",
@@ -24,5 +24,5 @@
     "在线统计改为绑定域名的阿里云 ECS 服务，电脑关机后仍可由云服务器接收心跳。",
     "在线心跳增加油猴跨域请求兜底，并提升版本号，确保同版本缓存不会导致旧脚本继续运行。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.0.5"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.0.6"
 }
