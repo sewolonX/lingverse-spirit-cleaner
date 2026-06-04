@@ -1727,7 +1727,10 @@
 
         var info = extractChatPlayerInfo(msgEl);
         if (!info.playerId || !info.realm) return;
-        if (!canRecruitFromRealm(info.realm)) return;
+        if (!canRecruitFromRealm(info.realm)) {
+            recruitLog('跳过 ' + info.name + ' [' + info.realm + '] — 未达招收条件');
+            return;
+        }
 
         var me = getPlayer() || {};
         var myId = Number(me.playerId || me.id || 0);
@@ -1735,20 +1738,25 @@
 
         recruitLastActionAt = now;
         var myRealm = String(me.realm || me.playerRealm || '').trim();
+        var diff = Math.floor(realmRank(myRealm) / 4) - Math.floor(realmRank(info.realm) / 4);
         setStatus('收徒 ' + info.name + ' [' + info.realm + '] (我' + myRealm + ')', 'run');
+        recruitLog('检测 ' + info.name + ' [' + info.realm + '] 低于' + diff + '大境 → 发起收徒');
 
         try {
             var apiRes = await gameApi().post('/api/master/invite', { apprenticeId: info.playerId });
             if (apiRes && apiRes.code === 200) {
                 setStatus('已收徒：' + info.name, 'run');
                 toast('收徒成功：' + info.name);
+                recruitLog('✔ ' + info.name + ' [' + info.realm + '] 收徒成功');
                 return true;
             }
             if (apiRes && apiRes.message) {
                 setStatus('收徒 ' + info.name + ' 失败：' + apiRes.message, 'warn');
+                recruitLog('✘ ' + info.name + ' [' + info.realm + '] ' + apiRes.message);
             }
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] recruit failed', err);
+            recruitLog('✘ ' + info.name + ' [' + info.realm + '] 网络异常: ' + (err.message || ''));
         }
         return false;
     }
@@ -2248,6 +2256,16 @@
         if (!log) return;
         var time = new Date().toLocaleTimeString();
         log.textContent = '[' + time + '] ' + message + '\n' + (log.textContent || '');
+    }
+
+    function recruitLog(message) {
+        var log = document.getElementById('lvscRecruitLog');
+        if (!log) return;
+        var time = new Date().toLocaleTimeString();
+        log.textContent = '[' + time + '] ' + message + '\n' + (log.textContent || '');
+        if (log.textContent.length > 8000) {
+            log.textContent = log.textContent.substring(0, 8000);
+        }
     }
 
     function parseInscriptionResultCards() {
@@ -3349,7 +3367,7 @@
             '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscSectRecoveryBtn,#lvscRepairBtn,#lvscRecruitBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoInscriptionBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
             '#lvscInscriptionStats{font-size:12px;color:#9be7c3}',
-            '#lvscInscriptionLog{min-height:130px;max-height:190px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px}',
+            '#lvscInscriptionLog,#lvscRecruitLog{min-height:130px;max-height:190px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px}',
             '#lvscAutoRecoveryBtn{align-self:end}',
             '#lvscUpdateModal{position:fixed;inset:0;z-index:' + UPDATE_MODAL_Z_INDEX + ';color:#f5f1e8;font:13px/1.55 "Microsoft YaHei",sans-serif}',
             '.lvsc-update-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)}',
@@ -3448,6 +3466,7 @@
             '<button id="lvscRecruitBtn">手动收徒</button>' +
             '</div>' +
             '<div class="lvsc-help">监控世界聊天新发言，自动筛选低于自己 2 个大境界的玩家（如元婴期→练气期），通过 API 直接收徒。</div>' +
+            '<div id="lvscRecruitLog">待命</div>' +
             '</div>' +
             '</div>' +
             '</div>' +
