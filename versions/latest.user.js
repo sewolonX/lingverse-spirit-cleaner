@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.6
+// @version      1.0.7
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,7 +63,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.6';
+    var SCRIPT_VERSION = '1.0.7';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -154,7 +154,6 @@
         autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
         repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
-        recruitMaxRealm: localStorage.getItem('lvSpiritCleaner.recruitMaxRealm') || '筑基期',
         recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000)
     };
 
@@ -424,7 +423,6 @@
         var autoRepairInput = document.getElementById('lvscAutoRepair');
         var repairThresholdInput = document.getElementById('lvscRepairThreshold');
         var autoRecruitInput = document.getElementById('lvscAutoRecruit');
-        var recruitMaxRealmInput = document.getElementById('lvscRecruitMaxRealm');
         var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
@@ -487,7 +485,6 @@
         state.autoRepair = !!(autoRepairInput && autoRepairInput.checked);
         state.repairThreshold = Math.max(0, Math.min(100, Number(repairThresholdInput && repairThresholdInput.value || 70)));
         state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
-        state.recruitMaxRealm = (recruitMaxRealmInput && recruitMaxRealmInput.value) || '筑基期';
         state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
@@ -542,7 +539,6 @@
         localStorage.setItem('lvSpiritCleaner.autoRepair', state.autoRepair ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.repairThreshold', String(state.repairThreshold));
         localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.recruitMaxRealm', state.recruitMaxRealm);
         localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
     }
 
@@ -1658,37 +1654,19 @@
         return 0;
     }
 
-    function findRepairButtons() {
-        var buttons = [];
-        var allButtons = document.querySelectorAll('button, .btn, [role=button]');
-        var repairKeywords = ['全部修理', '一键修理', '修理全部', '修理', '维修', '修复装备', '修复', '装备维修', '耐久修复'];
-        for (var i = 0; i < allButtons.length; i++) {
-            var btn = allButtons[i];
-            if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
-            var text = String(btn.textContent || '').replace(/\s/g, '');
-            for (var k = 0; k < repairKeywords.length; k++) {
-                if (text.indexOf(repairKeywords[k]) >= 0) {
-                    buttons.push({ btn: btn, keyword: repairKeywords[k] });
-                    break;
+    async function hasLowDurabilityFromApi() {
+        if (!gameApi()) return false;
+        try {
+            var res = await gameApi().get('/api/equipment');
+            if (res && res.code === 200 && Array.isArray(res.data)) {
+                for (var i = 0; i < res.data.length; i++) {
+                    var eq = res.data[i];
+                    var dur = Number(eq.durability !== undefined ? eq.durability : eq.currentDurability || 0);
+                    var maxDur = Number(eq.maxDurability !== undefined ? eq.maxDurability : eq.durabilityMax || 100);
+                    if (maxDur > 0 && dur / maxDur * 100 <= state.repairThreshold) return true;
                 }
             }
-        }
-        return buttons;
-    }
-
-    function hasLowDurability() {
-        var rows = document.querySelectorAll('[class*=durability],[class*=耐久],[class*=wear]');
-        for (var i = 0; i < rows.length; i++) {
-            var text = String(rows[i].textContent || '').replace(/\s/g, '');
-            var match = text.match(/(\d+)\/(\d+)/);
-            if (match) {
-                var current = Number(match[1]);
-                var max = Number(match[2]);
-                if (max > 0 && current / max * 100 <= state.repairThreshold) return true;
-            }
-            var pctMatch = text.match(/(\d+)%/);
-            if (pctMatch && Number(pctMatch[1]) <= state.repairThreshold) return true;
-        }
+        } catch (_) {}
         return false;
     }
 
@@ -1697,33 +1675,29 @@
         syncSettingsFromUi();
         if (!state.autoRepair && !manual) return false;
 
-        if (!manual && !hasLowDurability()) return false;
-
-        setStatus('查找维修按钮', 'run');
-        var buttons = findRepairButtons();
-        if (!buttons.length) {
-            if (manual) setStatus('未找到维修按钮，请打开装备/背包界面', 'warn');
-            return false;
+        if (!manual) {
+            var low = await hasLowDurabilityFromApi();
+            if (!low) return false;
         }
 
-        var clicked = 0;
-        for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i].btn;
-            try {
-                await humanClick(btn);
-                clicked++;
-                await sleep(800);
-            } catch (err) {
-                console.warn('[LingVerse Spirit Cleaner] repair click failed', err);
+        setStatus('调用装备维修 API', 'run');
+        try {
+            var res = await gameApi().post('/api/equipment/repair-all', {});
+            if (res && res.code === 200) {
+                setStatus('装备维修完成', 'run');
+                await sleep(500);
+                await refreshPlayer();
+                return true;
             }
+            if (res && res.message) {
+                setStatus('维修失败：' + res.message, 'warn');
+                return false;
+            }
+        } catch (err) {
+            console.warn('[LingVerse Spirit Cleaner] repair API failed', err);
         }
 
-        if (clicked > 0) {
-            setStatus('已点击 ' + clicked + ' 个维修按钮', 'run');
-            await sleep(600);
-            await refreshPlayer();
-            return true;
-        }
+        if (manual) setStatus('维修 API 调用失败，请检查网络', 'warn');
         return false;
     }
 
@@ -1739,10 +1713,15 @@
         return { playerId: playerId, name: name, realm: realm };
     }
 
-    function canRecruitFromRealm(realm) {
-        var playerRealm = realmRank(realm);
-        var maxRealm = realmRank(state.recruitMaxRealm);
-        return playerRealm > 0 && playerRealm <= maxRealm;
+    function canRecruitFromRealm(targetRealmText) {
+        var targetRank = realmRank(targetRealmText);
+        if (targetRank <= 0) return false;
+        var me = getPlayer() || {};
+        var myRealm = String(me.realm || me.playerRealm || '').trim();
+        var myRank = realmRank(myRealm);
+        if (myRank <= 0) return false;
+        var majorRealmDiff = Math.floor(myRank / 4) - Math.floor(targetRank / 4);
+        return majorRealmDiff >= 2;
     }
 
     async function handleNewChatMessage(msgEl) {
@@ -1764,34 +1743,10 @@
         if (info.playerId === myId) return;
 
         recruitLastActionAt = now;
-        setStatus('尝试收徒：' + info.name + ' [' + info.realm + ']', 'run');
+        var myRealm = String(me.realm || me.playerRealm || '').trim();
+        setStatus('收徒 ' + info.name + ' [' + info.realm + '] (我' + myRealm + ')', 'run');
 
         try {
-            if (typeof window.showPlayerProfile === 'function') {
-                window.showPlayerProfile(info.playerId);
-                await sleep(1200);
-                var recruitBtn = visibleButtonByText(document, '收徒');
-                if (!recruitBtn) recruitBtn = visibleButtonByText(document, '收为弟子');
-                if (!recruitBtn) recruitBtn = visibleButtonByText(document, '拜师');
-                if (recruitBtn) {
-                    await humanClick(recruitBtn);
-                    await sleep(500);
-                    var confirmBtn = visibleButtonByText(document, '确认') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '是');
-                    if (confirmBtn) {
-                        await humanClick(confirmBtn);
-                        await sleep(300);
-                    }
-                    setStatus('已发送收徒邀请：' + info.name, 'run');
-                    if (typeof window.closePanel === 'function') {
-                        try { window.closePanel(); } catch (_) {}
-                    }
-                    return true;
-                }
-                if (typeof window.closePanel === 'function') {
-                    try { window.closePanel(); } catch (_) {}
-                }
-            }
-
             var apiRes = await gameApi().post('/api/master/recruit-disciple', { playerId: info.playerId });
             if (apiRes && apiRes.code === 200) {
                 setStatus('已收徒：' + info.name, 'run');
@@ -1799,7 +1754,7 @@
                 return true;
             }
             if (apiRes && apiRes.message) {
-                setStatus('收徒失败：' + apiRes.message, 'warn');
+                setStatus('收徒 ' + info.name + ' 失败：' + apiRes.message, 'warn');
             }
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] recruit failed', err);
@@ -3493,16 +3448,15 @@
             '<label>耐久低于%<input id="lvscRepairThreshold" type="number" min="0" max="100" step="1" title="耐久百分比低于此值时触发维修"></label>' +
             '<button id="lvscRepairBtn">手动维修</button>' +
             '</div>' +
-            '<div class="lvsc-help">自动检测装备耐久，低于阈值时搜索并点击页面上的"修理"/"一键修理"按钮。使用前请先打开装备或背包界面。</div>' +
+            '<div class="lvsc-help">通过 API 检测装备耐久（/api/equipment），低于阈值时调用 /api/equipment/repair-all 维修。不依赖页面按钮。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title-row"><span>自动收徒</span><label class="lvsc-check"><input id="lvscAutoRecruit" type="checkbox">监控世界聊天</label></div>' +
             '<div class="lvsc-grid2">' +
-            '<label>最高境界<select id="lvscRecruitMaxRealm"><option value="练气期">练气期</option><option value="筑基期" selected>筑基期</option><option value="金丹期">金丹期</option><option value="元婴期">元婴期</option><option value="化神期">化神期</option></select></label>' +
             '<label>冷却间隔(ms)<input id="lvscRecruitIntervalMs" type="number" min="1000" step="500" title="两次收徒之间的最小间隔"></label>' +
             '<button id="lvscRecruitBtn">手动收徒</button>' +
             '</div>' +
-            '<div class="lvsc-help">监控世界聊天中每个新发言，境界 ≤ 设定上限且非本人时自动尝试收徒。收徒方式：打开玩家资料→点击收徒→确认。</div>' +
+            '<div class="lvsc-help">监控世界聊天新发言，自动筛选低于自己 2 个大境界的玩家（如元婴期→练气期），通过 API 直接收徒。</div>' +
             '</div>' +
             '</div>' +
             '</div>' +
@@ -3609,7 +3563,6 @@
         document.getElementById('lvscAutoRepair').checked = state.autoRepair;
         document.getElementById('lvscRepairThreshold').value = String(state.repairThreshold);
         document.getElementById('lvscAutoRecruit').checked = state.autoRecruit;
-        document.getElementById('lvscRecruitMaxRealm').value = String(state.recruitMaxRealm);
         document.getElementById('lvscRecruitIntervalMs').value = String(state.recruitIntervalMs);
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
         document.getElementById('lvscAutoMpPriority').value = String(state.autoMpPriority);
@@ -3721,7 +3674,6 @@
                 stopRecruitObserver();
             }
         };
-        document.getElementById('lvscRecruitMaxRealm').onchange = syncSettingsFromUi;
         document.getElementById('lvscRecruitIntervalMs').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMpPriority').onchange = syncSettingsFromUi;
