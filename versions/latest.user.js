@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.4
+// @version      1.0.5
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -57,10 +57,13 @@
     var checkingCloudUpdate = false;
     var inscriptionStats = { total: 0, kept: 0, discarded: 0, best: '' };
     var hiddenCharmLastUseAt = 0;
+    var recruitLastActionAt = 0;
+    var recruitObserver = null;
+    var recruitProcessedIds = {};
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.4';
+    var SCRIPT_VERSION = '1.0.5';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var ONLINE_HEARTBEAT_MS = 30000;
@@ -145,7 +148,12 @@
         autoHiddenCharm: localStorage.getItem('lvSpiritCleaner.autoHiddenCharm') === '1',
         hiddenCharmRarity: readNumber('lvSpiritCleaner.hiddenCharmRarity', 0),
         hiddenCharmBuyQty: readNumber('lvSpiritCleaner.hiddenCharmBuyQty', 1),
-        hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000)
+        hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000),
+        autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
+        repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
+        autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
+        recruitMaxRealm: localStorage.getItem('lvSpiritCleaner.recruitMaxRealm') || '筑基期',
+        recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000)
     };
 
     function readNumber(key, fallback) {
@@ -411,6 +419,11 @@
         var hiddenCharmRarityInput = document.getElementById('lvscHiddenCharmRarity');
         var hiddenCharmQtyInput = document.getElementById('lvscHiddenCharmBuyQty');
         var hiddenCharmRetryInput = document.getElementById('lvscHiddenCharmRetryMs');
+        var autoRepairInput = document.getElementById('lvscAutoRepair');
+        var repairThresholdInput = document.getElementById('lvscRepairThreshold');
+        var autoRecruitInput = document.getElementById('lvscAutoRecruit');
+        var recruitMaxRealmInput = document.getElementById('lvscRecruitMaxRealm');
+        var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
         state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
@@ -469,6 +482,11 @@
         state.hiddenCharmRarity = Math.max(0, Math.min(5, Number(hiddenCharmRarityInput && hiddenCharmRarityInput.value || 0)));
         state.hiddenCharmBuyQty = Math.max(1, Math.min(999, Number(hiddenCharmQtyInput && hiddenCharmQtyInput.value || 1)));
         state.hiddenCharmRetryMs = Math.max(3000, Number(hiddenCharmRetryInput && hiddenCharmRetryInput.value || 60000));
+        state.autoRepair = !!(autoRepairInput && autoRepairInput.checked);
+        state.repairThreshold = Math.max(0, Math.min(100, Number(repairThresholdInput && repairThresholdInput.value || 70)));
+        state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
+        state.recruitMaxRealm = (recruitMaxRealmInput && recruitMaxRealmInput.value) || '筑基期';
+        state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
         localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
@@ -519,6 +537,11 @@
         localStorage.setItem('lvSpiritCleaner.hiddenCharmRarity', String(state.hiddenCharmRarity));
         localStorage.setItem('lvSpiritCleaner.hiddenCharmBuyQty', String(state.hiddenCharmBuyQty));
         localStorage.setItem('lvSpiritCleaner.hiddenCharmRetryMs', String(state.hiddenCharmRetryMs));
+        localStorage.setItem('lvSpiritCleaner.autoRepair', state.autoRepair ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.repairThreshold', String(state.repairThreshold));
+        localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.recruitMaxRealm', state.recruitMaxRealm);
+        localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
     }
 
     async function refreshPlayer() {
@@ -1615,6 +1638,217 @@
         return false;
     }
 
+    function realmRank(realm) {
+        var text = String(realm || '').replace(/\s/g, '');
+        var ranks = ['练气期', '筑基期', '金丹期', '元婴期', '化神期', '合道期', '大乘期', '真仙期'];
+        var substages = { '前期': 0, '中期': 1, '后期': 2, '大圆满': 3, '巅峰': 3, '一层': 0, '二层': 0, '三层': 0, '四层': 0, '五层': 0, '六层': 0, '七层': 0, '八层': 0, '九层': 0, '层': 0 };
+        for (var i = ranks.length - 1; i >= 0; i--) {
+            var idx = text.indexOf(ranks[i]);
+            if (idx >= 0) {
+                var sub = text.substring(idx + ranks[i].length);
+                var stage = 0;
+                for (var k in substages) {
+                    if (sub.indexOf(k) >= 0) { stage = substages[k]; break; }
+                }
+                return i * 4 + stage;
+            }
+        }
+        return 0;
+    }
+
+    function findRepairButtons() {
+        var buttons = [];
+        var allButtons = document.querySelectorAll('button, .btn, [role=button]');
+        var repairKeywords = ['全部修理', '一键修理', '修理全部', '修理', '维修', '修复装备', '修复', '装备维修', '耐久修复'];
+        for (var i = 0; i < allButtons.length; i++) {
+            var btn = allButtons[i];
+            if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
+            var text = String(btn.textContent || '').replace(/\s/g, '');
+            for (var k = 0; k < repairKeywords.length; k++) {
+                if (text.indexOf(repairKeywords[k]) >= 0) {
+                    buttons.push({ btn: btn, keyword: repairKeywords[k] });
+                    break;
+                }
+            }
+        }
+        return buttons;
+    }
+
+    function hasLowDurability() {
+        var rows = document.querySelectorAll('[class*=durability],[class*=耐久],[class*=wear]');
+        for (var i = 0; i < rows.length; i++) {
+            var text = String(rows[i].textContent || '').replace(/\s/g, '');
+            var match = text.match(/(\d+)\/(\d+)/);
+            if (match) {
+                var current = Number(match[1]);
+                var max = Number(match[2]);
+                if (max > 0 && current / max * 100 <= state.repairThreshold) return true;
+            }
+            var pctMatch = text.match(/(\d+)%/);
+            if (pctMatch && Number(pctMatch[1]) <= state.repairThreshold) return true;
+        }
+        return false;
+    }
+
+    async function triggerAutoRepair(manual) {
+        if (!gameApi()) return false;
+        syncSettingsFromUi();
+        if (!state.autoRepair && !manual) return false;
+
+        if (!manual && !hasLowDurability()) return false;
+
+        setStatus('查找维修按钮', 'run');
+        var buttons = findRepairButtons();
+        if (!buttons.length) {
+            if (manual) setStatus('未找到维修按钮，请打开装备/背包界面', 'warn');
+            return false;
+        }
+
+        var clicked = 0;
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i].btn;
+            try {
+                await humanClick(btn);
+                clicked++;
+                await sleep(800);
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] repair click failed', err);
+            }
+        }
+
+        if (clicked > 0) {
+            setStatus('已点击 ' + clicked + ' 个维修按钮', 'run');
+            await sleep(600);
+            await refreshPlayer();
+            return true;
+        }
+        return false;
+    }
+
+    function extractChatPlayerInfo(msgEl) {
+        var avatarBtn = msgEl.querySelector('.chat-msg-avatar');
+        var onclick = String(avatarBtn && avatarBtn.getAttribute('onclick') || '');
+        var idMatch = onclick.match(/showPlayerProfile\((\d+)\)/);
+        var playerId = idMatch ? Number(idMatch[1]) : 0;
+        var nameEl = msgEl.querySelector('.chat-msg-name');
+        var name = String(nameEl && nameEl.textContent || '').trim();
+        var realmEl = msgEl.querySelector('.chat-msg-realm');
+        var realm = String(realmEl && realmEl.textContent || '').trim();
+        return { playerId: playerId, name: name, realm: realm };
+    }
+
+    function canRecruitFromRealm(realm) {
+        var playerRealm = realmRank(realm);
+        var maxRealm = realmRank(state.recruitMaxRealm);
+        return playerRealm > 0 && playerRealm <= maxRealm;
+    }
+
+    async function handleNewChatMessage(msgEl) {
+        if (!state.autoRecruit) return;
+        var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
+        if (!msgId || recruitProcessedIds[msgId]) return;
+        recruitProcessedIds[msgId] = true;
+        if (msgId > 999999000) recruitProcessedIds[msgId] = false;
+
+        var now = Date.now();
+        if (now - recruitLastActionAt < state.recruitIntervalMs) return;
+
+        var info = extractChatPlayerInfo(msgEl);
+        if (!info.playerId || !info.realm) return;
+        if (!canRecruitFromRealm(info.realm)) return;
+
+        var me = getPlayer() || {};
+        var myId = Number(me.playerId || me.id || 0);
+        if (info.playerId === myId) return;
+
+        recruitLastActionAt = now;
+        setStatus('尝试收徒：' + info.name + ' [' + info.realm + ']', 'run');
+
+        try {
+            if (typeof window.showPlayerProfile === 'function') {
+                window.showPlayerProfile(info.playerId);
+                await sleep(1200);
+                var recruitBtn = visibleButtonByText(document, '收徒');
+                if (!recruitBtn) recruitBtn = visibleButtonByText(document, '收为弟子');
+                if (!recruitBtn) recruitBtn = visibleButtonByText(document, '拜师');
+                if (recruitBtn) {
+                    await humanClick(recruitBtn);
+                    await sleep(500);
+                    var confirmBtn = visibleButtonByText(document, '确认') || visibleButtonByText(document, '确定') || visibleButtonByText(document, '是');
+                    if (confirmBtn) {
+                        await humanClick(confirmBtn);
+                        await sleep(300);
+                    }
+                    setStatus('已发送收徒邀请：' + info.name, 'run');
+                    if (typeof window.closePanel === 'function') {
+                        try { window.closePanel(); } catch (_) {}
+                    }
+                    return true;
+                }
+                if (typeof window.closePanel === 'function') {
+                    try { window.closePanel(); } catch (_) {}
+                }
+            }
+
+            var apiRes = await gameApi().post('/api/master/recruit-disciple', { playerId: info.playerId });
+            if (apiRes && apiRes.code === 200) {
+                setStatus('已收徒：' + info.name, 'run');
+                toast('收徒成功：' + info.name);
+                return true;
+            }
+            if (apiRes && apiRes.message) {
+                setStatus('收徒失败：' + apiRes.message, 'warn');
+            }
+        } catch (err) {
+            console.warn('[LingVerse Spirit Cleaner] recruit failed', err);
+        }
+        return false;
+    }
+
+    async function handleChatMessagesBatch() {
+        if (!state.autoRecruit) return;
+        var container = document.getElementById('inlineChatMessages');
+        if (!container) return;
+
+        var msgs = container.querySelectorAll('.chat-msg[data-chat-message-id]');
+        for (var i = 0; i < msgs.length; i++) {
+            var msgEl = msgs[i];
+            var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
+            if (!msgId || recruitProcessedIds[msgId]) continue;
+            await handleNewChatMessage(msgEl);
+        }
+    }
+
+    function pruneRecruitCache(maxKeep) {
+        var keys = Object.keys(recruitProcessedIds);
+        if (keys.length <= (maxKeep || 300)) return;
+        var sorted = keys.map(Number).sort(function (a, b) { return a - b; });
+        var remove = sorted.slice(0, sorted.length - (maxKeep || 300));
+        for (var i = 0; i < remove.length; i++) {
+            delete recruitProcessedIds[remove[i]];
+        }
+    }
+
+    function startRecruitObserver() {
+        if (recruitObserver) return;
+        var container = document.getElementById('inlineChatMessages');
+        if (!container) return;
+
+        recruitObserver = new MutationObserver(function () {
+            handleChatMessagesBatch();
+            pruneRecruitCache(300);
+        });
+        recruitObserver.observe(container, { childList: true, subtree: true });
+        handleChatMessagesBatch();
+    }
+
+    function stopRecruitObserver() {
+        if (recruitObserver) {
+            recruitObserver.disconnect();
+            recruitObserver = null;
+        }
+    }
+
     function protectorQuery() {
         if (typeof window.buildEncounterProtectorQuery === 'function') {
             return window.buildEncounterProtectorQuery();
@@ -2552,6 +2786,10 @@
                 await triggerSectRecovery(false);
             }
 
+            if (state.autoRepair) {
+                await triggerAutoRepair(false);
+            }
+
             var stopReason = shouldStopBeforeAction();
             if (stopReason) {
                 if (stopReason === 'need_meditate') {
@@ -3140,7 +3378,7 @@
             '#lvscRefreshBtn{width:72px;height:34px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.12)!important}',
             '#lvscMonitorBtn{height:34px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoTrialBtn,#lvscAutoTreasureBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
-            '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
+            '#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscSectRecoveryBtn,#lvscRepairBtn,#lvscRecruitBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important}',
             '#lvscAutoInscriptionBtn{height:34px;background:rgba(216,180,254,.14);color:#d8b4fe;border:1px solid rgba(216,180,254,.28)!important}',
             '#lvscInscriptionStats{font-size:12px;color:#9be7c3}',
             '#lvscInscriptionLog{min-height:130px;max-height:190px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px}',
@@ -3226,6 +3464,23 @@
             '<label class="lvsc-span2">回血顺序<select id="lvscAutoHpPriority"><option value="mp,pill,adpoint">灵力 → 丹药 → 仙缘</option><option value="pill,mp,adpoint">丹药 → 灵力 → 仙缘</option><option value="adpoint,mp,pill">仙缘 → 灵力 → 丹药</option></select></label>' +
             '<label class="lvsc-span2">回灵顺序<select id="lvscAutoMpPriority"><option value="stone,pill,adpoint">灵石 → 丹药 → 仙缘</option><option value="pill,stone,adpoint">丹药 → 灵石 → 仙缘</option><option value="adpoint,stone,pill">仙缘 → 灵石 → 丹药</option></select></label>' +
             '</div>' +
+            '</div>' +
+            '<div class="lvsc-section">' +
+            '<div class="lvsc-section-title-row"><span>装备维修</span><label class="lvsc-check"><input id="lvscAutoRepair" type="checkbox">自动维修</label></div>' +
+            '<div class="lvsc-grid2">' +
+            '<label>耐久低于%<input id="lvscRepairThreshold" type="number" min="0" max="100" step="1" title="耐久百分比低于此值时触发维修"></label>' +
+            '<button id="lvscRepairBtn">手动维修</button>' +
+            '</div>' +
+            '<div class="lvsc-help">自动检测装备耐久，低于阈值时搜索并点击页面上的"修理"/"一键修理"按钮。使用前请先打开装备或背包界面。</div>' +
+            '</div>' +
+            '<div class="lvsc-section">' +
+            '<div class="lvsc-section-title-row"><span>自动收徒</span><label class="lvsc-check"><input id="lvscAutoRecruit" type="checkbox">监控世界聊天</label></div>' +
+            '<div class="lvsc-grid2">' +
+            '<label>最高境界<select id="lvscRecruitMaxRealm"><option value="练气期">练气期</option><option value="筑基期" selected>筑基期</option><option value="金丹期">金丹期</option><option value="元婴期">元婴期</option><option value="化神期">化神期</option></select></label>' +
+            '<label>冷却间隔(ms)<input id="lvscRecruitIntervalMs" type="number" min="1000" step="500" title="两次收徒之间的最小间隔"></label>' +
+            '<button id="lvscRecruitBtn">手动收徒</button>' +
+            '</div>' +
+            '<div class="lvsc-help">监控世界聊天中每个新发言，境界 ≤ 设定上限且非本人时自动尝试收徒。收徒方式：打开玩家资料→点击收徒→确认。</div>' +
             '</div>' +
             '</div>' +
             '</div>' +
@@ -3329,6 +3584,11 @@
         document.getElementById('lvscAutoRecoveryThreshold').value = String(state.autoRecoveryThreshold);
         document.getElementById('lvscAutoRecoveryTarget').value = String(state.autoRecoveryTarget);
         document.getElementById('lvscSectQuickRecovery').checked = state.sectQuickRecovery;
+        document.getElementById('lvscAutoRepair').checked = state.autoRepair;
+        document.getElementById('lvscRepairThreshold').value = String(state.repairThreshold);
+        document.getElementById('lvscAutoRecruit').checked = state.autoRecruit;
+        document.getElementById('lvscRecruitMaxRealm').value = String(state.recruitMaxRealm);
+        document.getElementById('lvscRecruitIntervalMs').value = String(state.recruitIntervalMs);
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
         document.getElementById('lvscAutoMpPriority').value = String(state.autoMpPriority);
         document.getElementById('lvscUpdateManifestUrl').value = String(state.updateManifestUrl);
@@ -3381,6 +3641,12 @@
         document.getElementById('lvscSectRecoveryBtn').onclick = function () {
             triggerSectRecovery(true);
         };
+        document.getElementById('lvscRepairBtn').onclick = function () {
+            triggerAutoRepair(true);
+        };
+        document.getElementById('lvscRecruitBtn').onclick = function () {
+            handleChatMessagesBatch();
+        };
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
@@ -3423,6 +3689,18 @@
         document.getElementById('lvscAutoRecoveryThreshold').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryTarget').onchange = syncSettingsFromUi;
         document.getElementById('lvscSectQuickRecovery').onchange = syncSettingsFromUi;
+        document.getElementById('lvscAutoRepair').onchange = syncSettingsFromUi;
+        document.getElementById('lvscRepairThreshold').onchange = syncSettingsFromUi;
+        document.getElementById('lvscAutoRecruit').onchange = function () {
+            syncSettingsFromUi();
+            if (state.autoRecruit) {
+                startRecruitObserver();
+            } else {
+                stopRecruitObserver();
+            }
+        };
+        document.getElementById('lvscRecruitMaxRealm').onchange = syncSettingsFromUi;
+        document.getElementById('lvscRecruitIntervalMs').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscUpdateManifestUrl').onchange = syncSettingsFromUi;
@@ -3462,6 +3740,9 @@
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
         setInterval(updateMeter, 2000);
+        if (state.autoRecruit) {
+            setTimeout(function () { startRecruitObserver(); }, 2000);
+        }
     }
 
     function waitForGame() {
