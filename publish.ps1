@@ -121,6 +121,28 @@ function Invoke-GitPushWithRetry() {
     return $false
 }
 
+function Get-PublishPaths($Root, $Version) {
+    $paths = @(
+        ".gitignore",
+        "lingverse-spirit-cleaner.user.js",
+        "release.json",
+        "README.md",
+        "publish.ps1",
+        "一键发布.bat",
+        "versions/latest.user.js",
+        "versions/latest.release.json",
+        "versions/previous.user.js",
+        "versions/previous.release.json"
+    )
+
+    if ($Version) {
+        $paths += "versions/lingverse-spirit-cleaner-v$Version.user.js"
+        $paths += "versions/release-v$Version.json"
+    }
+
+    return @($paths | Where-Object { Test-Path (Join-Path $Root $_) })
+}
+
 function ConvertTo-JsSingleQuotedString($Text) {
     return "'" + ([string]$Text).Replace("\", "\\").Replace("'", "\'") + "'"
 }
@@ -313,8 +335,25 @@ if (-not $status) {
 Write-Host "Changes to publish:" -ForegroundColor Cyan
 $status | ForEach-Object { Write-Host "  $_" }
 
-git add -A
+$publishPaths = Get-PublishPaths $root $metaVersion
+git add -- $publishPaths
 if ($LASTEXITCODE -ne 0) { Fail "git add failed." }
+
+$blockedTracked = @(
+    "aliyun-online-upload.zip",
+    "caddy.exe",
+    "deploy-aliyun-online.ps1",
+    "online-server.js",
+    "start-online-public.ps1",
+    "cloudflared.exe"
+)
+foreach ($blocked in $blockedTracked) {
+    git ls-files --error-unmatch -- $blocked *> $null
+    if ($LASTEXITCODE -eq 0) {
+        git rm --cached -- $blocked
+        if ($LASTEXITCODE -ne 0) { Fail "git rm --cached failed for $blocked." }
+    }
+}
 
 if (-not $Message) {
     $Message = "Publish v$metaVersion"

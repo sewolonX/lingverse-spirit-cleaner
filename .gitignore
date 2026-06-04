@@ -1,3 +1,14 @@
 *.lnk
+*.exe
+*.zip
 cloudflared.exe
 *-online.*.log
+cloudflared-online.*.log
+caddy.exe
+aliyun-online-upload.zip
+deploy-aliyun-online.ps1
+online-server.js
+start-online-public.ps1
+Caddyfile
+*.err.log
+*.out.log

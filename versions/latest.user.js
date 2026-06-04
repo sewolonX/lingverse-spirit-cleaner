@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.3
+// @version      1.0.4
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -60,7 +60,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.3';
+    var SCRIPT_VERSION = '1.0.4';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var ONLINE_HEARTBEAT_MS = 30000;
@@ -134,6 +134,7 @@
         autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
         autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
+        sectQuickRecovery: localStorage.getItem('lvSpiritCleaner.sectQuickRecovery') === '1',
         autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || 'mp,pill,adpoint',
         autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || 'stone,pill,adpoint',
         updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
@@ -396,6 +397,7 @@
         var monitorStartInput = document.getElementById('lvscMonitorStartSpirit');
         var selfFightInput = document.getElementById('lvscAutoSelfFightWeak');
         var selfFightMarginInput = document.getElementById('lvscSelfFightMargin');
+        var sectRecoveryInput = document.getElementById('lvscSectQuickRecovery');
         var recoveryModeInput = document.getElementById('lvscAutoRecoveryMode');
         var recoveryThresholdInput = document.getElementById('lvscAutoRecoveryThreshold');
         var recoveryTargetInput = document.getElementById('lvscAutoRecoveryTarget');
@@ -452,6 +454,7 @@
         state.selfFightMargin = Math.max(1, Math.min(3, Number(selfFightMarginInput && selfFightMarginInput.value || 1.15)));
         state.autoRecoveryMode = (recoveryModeInput && recoveryModeInput.value) || 'both';
         if (['none', 'hp', 'mp', 'both'].indexOf(state.autoRecoveryMode) < 0) state.autoRecoveryMode = 'both';
+        state.sectQuickRecovery = !!(sectRecoveryInput && sectRecoveryInput.checked);
         state.autoRecoveryThreshold = Math.max(0, Math.min(100, Number(recoveryThresholdInput && recoveryThresholdInput.value || 80)));
         state.autoRecoveryTarget = Math.max(0, Math.min(100, Number(recoveryTargetInput && recoveryTargetInput.value || 100)));
         state.autoHpPriority = (hpPriorityInput && hpPriorityInput.value) || 'mp,pill,adpoint';
@@ -505,6 +508,7 @@
         localStorage.setItem('lvSpiritCleaner.autoRecoveryMode', state.autoRecoveryMode);
         localStorage.setItem('lvSpiritCleaner.autoRecoveryThreshold', String(state.autoRecoveryThreshold));
         localStorage.setItem('lvSpiritCleaner.autoRecoveryTarget', String(state.autoRecoveryTarget));
+        localStorage.setItem('lvSpiritCleaner.sectQuickRecovery', state.sectQuickRecovery ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoHpPriority', state.autoHpPriority);
         localStorage.setItem('lvSpiritCleaner.autoMpPriority', state.autoMpPriority);
         localStorage.setItem('lvSpiritCleaner.updateManifestUrl', state.updateManifestUrl);
@@ -1543,6 +1547,74 @@
         }
     }
 
+    function findSectRecoveryButtons() {
+        var buttons = [];
+        var allButtons = document.querySelectorAll('button, .btn, [role=button]');
+        var sectKeywords = ['宗门回血', '宗门回灵', '宗门恢复', '快速回血', '快速回灵', '快速恢复', '一键回血', '一键回灵', '一键恢复'];
+        for (var i = 0; i < allButtons.length; i++) {
+            var btn = allButtons[i];
+            if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
+            var text = String(btn.textContent || '').replace(/\s/g, '');
+            for (var k = 0; k < sectKeywords.length; k++) {
+                if (text.indexOf(sectKeywords[k]) >= 0) {
+                    buttons.push({ btn: btn, keyword: sectKeywords[k] });
+                    break;
+                }
+            }
+        }
+        return buttons;
+    }
+
+    async function triggerSectRecovery(manual) {
+        if (!gameApi()) return false;
+        syncSettingsFromUi();
+        if (!state.sectQuickRecovery && !manual) return false;
+
+        var player = getPlayer() || {};
+        var hp = Number(player.hp || player.currentHp || 0);
+        var maxHp = Number(player.maxHp || player.hpMax || 1);
+        var mp = Number(player.mp || player.currentMp || player.spiritPower || 0);
+        var maxMp = Number(player.maxMp || player.mpMax || 1);
+        var hpPct = maxHp > 0 ? hp / maxHp * 100 : 100;
+        var mpPct = maxMp > 0 ? mp / maxMp * 100 : 100;
+
+        if (!manual) {
+            var threshold = state.autoRecoveryThreshold;
+            var mode = state.autoRecoveryMode;
+            if (mode === 'none') return false;
+            var needHp = (mode === 'hp' || mode === 'both') && hpPct < threshold;
+            var needMp = (mode === 'mp' || mode === 'both') && mpPct < threshold;
+            if (!needHp && !needMp) return false;
+        }
+
+        setStatus('查找宗门快速回血/回灵按钮', 'run');
+        var buttons = findSectRecoveryButtons();
+        if (!buttons.length) {
+            if (manual) setStatus('未找到宗门快速回血按钮', 'warn');
+            return false;
+        }
+
+        var clicked = 0;
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i].btn;
+            try {
+                await humanClick(btn);
+                clicked++;
+                await sleep(600);
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] sect recovery click failed', err);
+            }
+        }
+
+        if (clicked > 0) {
+            setStatus('已点击 ' + clicked + ' 个宗门恢复按钮', 'run');
+            await sleep(800);
+            await refreshPlayer();
+            return true;
+        }
+        return false;
+    }
+
     function protectorQuery() {
         if (typeof window.buildEncounterProtectorQuery === 'function') {
             return window.buildEncounterProtectorQuery();
@@ -2476,6 +2548,10 @@
                 continue;
             }
 
+            if (state.sectQuickRecovery) {
+                await triggerSectRecovery(false);
+            }
+
             var stopReason = shouldStopBeforeAction();
             if (stopReason) {
                 if (stopReason === 'need_meditate') {
@@ -3081,6 +3157,7 @@
             '.lvsc-update-link,#lvscUpdateCopyBtn{display:flex;align-items:center;justify-content:center;min-height:34px;border-radius:7px;text-decoration:none;border:1px solid rgba(216,180,254,.28)!important;background:rgba(216,180,254,.12);color:#d8b4fe;font-weight:700}',
             '#lvscUpdateCloseBtn{width:100%;height:34px;background:#dbb970;color:#17141d}',
             '#lvscResizeHandle{position:absolute;right:3px;bottom:3px;z-index:5;width:18px;height:18px;cursor:nwse-resize;border-radius:3px;background:linear-gradient(135deg,transparent 0 45%,rgba(219,185,112,.75) 46% 52%,transparent 53% 62%,rgba(219,185,112,.65) 63% 69%,transparent 70%);opacity:.85}',
+            '#inlineChat{z-index:' + (PANEL_Z_INDEX - 100) + '!important}',
             '@container (max-width: 380px){.lvsc-grid2,.lvsc-field-grid,.lvsc-card-grid{grid-template-columns:1fr}#lvscTabs{grid-template-columns:repeat(3,minmax(0,1fr))}.lvsc-tab{font-size:11px}}',
             '@media (max-width: 520px){#lvscPanel{right:8px;bottom:8px;width:min(340px,calc(100vw - 16px));height:min(620px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:78vh;font-size:12px}#lvscBody{gap:8px;padding:10px}#lvscTabs{top:-10px}#lvscPanel input[type=number],#lvscPanel input[type=text],#lvscPanel select{height:34px}#lvscActions button,#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:38px}#lvscPanel.lvsc-collapsed{width:calc(100vw - 16px)!important;border-radius:12px}#lvscCompactStatus{max-width:none}}'
         ].join('');
@@ -3144,6 +3221,8 @@
             '<button id="lvscAutoRecoveryBtn">保存配置</button>' +
             '<label>低于百分比<input id="lvscAutoRecoveryThreshold" type="number" min="0" max="100" step="1"></label>' +
             '<label>恢复到百分比<input id="lvscAutoRecoveryTarget" type="number" min="0" max="100" step="1"></label>' +
+            '<label class="lvsc-check"><input id="lvscSectQuickRecovery" type="checkbox">宗门快速回血</label>' +
+            '<button id="lvscSectRecoveryBtn">宗门回血</button>' +
             '<label class="lvsc-span2">回血顺序<select id="lvscAutoHpPriority"><option value="mp,pill,adpoint">灵力 → 丹药 → 仙缘</option><option value="pill,mp,adpoint">丹药 → 灵力 → 仙缘</option><option value="adpoint,mp,pill">仙缘 → 灵力 → 丹药</option></select></label>' +
             '<label class="lvsc-span2">回灵顺序<select id="lvscAutoMpPriority"><option value="stone,pill,adpoint">灵石 → 丹药 → 仙缘</option><option value="pill,stone,adpoint">丹药 → 灵石 → 仙缘</option><option value="adpoint,stone,pill">仙缘 → 灵石 → 丹药</option></select></label>' +
             '</div>' +
@@ -3249,6 +3328,7 @@
         document.getElementById('lvscAutoRecoveryMode').value = String(state.autoRecoveryMode);
         document.getElementById('lvscAutoRecoveryThreshold').value = String(state.autoRecoveryThreshold);
         document.getElementById('lvscAutoRecoveryTarget').value = String(state.autoRecoveryTarget);
+        document.getElementById('lvscSectQuickRecovery').checked = state.sectQuickRecovery;
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
         document.getElementById('lvscAutoMpPriority').value = String(state.autoMpPriority);
         document.getElementById('lvscUpdateManifestUrl').value = String(state.updateManifestUrl);
@@ -3298,6 +3378,9 @@
             handleSelfFightEvent(true);
         };
         document.getElementById('lvscAutoRecoveryBtn').onclick = applyAutoRecoverySettings;
+        document.getElementById('lvscSectRecoveryBtn').onclick = function () {
+            triggerSectRecovery(true);
+        };
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
@@ -3339,6 +3422,7 @@
         document.getElementById('lvscAutoRecoveryMode').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryThreshold').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryTarget').onchange = syncSettingsFromUi;
+        document.getElementById('lvscSectQuickRecovery').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscUpdateManifestUrl').onchange = syncSettingsFromUi;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.1
+// @version      1.0.3
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -9,12 +9,36 @@
 // @supportURL   https://github.com/SuRanHF/lingverse-spirit-cleaner/issues
 // @updateURL    https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
 // @downloadURL  https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      lingshen.ccwu.cc
 // @run-at       document-idle
 // ==/UserScript==
 
 (function injectIntoPage() {
     'use strict';
+
+    var ONLINE_BRIDGE_EVENT = 'lvsc:online-heartbeat';
+    if (typeof GM_xmlhttpRequest === 'function' && !window.__lvscOnlineBridgeInstalled) {
+        window.__lvscOnlineBridgeInstalled = true;
+        window.addEventListener(ONLINE_BRIDGE_EVENT, function (event) {
+            var detail = {};
+            try {
+                detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : (event.detail || {});
+            } catch (_) {
+                detail = {};
+            }
+            if (!detail.endpoint || !detail.payload) return;
+            try {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: detail.endpoint,
+                    headers: { 'Content-Type': 'application/json' },
+                    data: JSON.stringify(detail.payload),
+                    timeout: 10000
+                });
+            } catch (_) {}
+        });
+    }
 
     var source = String.raw`
 (function () {
@@ -36,11 +60,12 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.1';
+    var SCRIPT_VERSION = '1.0.3';
     var CLOUD_UPDATE_POLL_MS = 60000;
+    var CLOUD_UPDATE_REMIND_MS = 300000;
     var ONLINE_HEARTBEAT_MS = 30000;
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json';
-    var DEFAULT_ONLINE_STATS_ENDPOINT = 'https://place-myth-tail-instrumentation.trycloudflare.com/api/heartbeat';
+    var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
     var BUILTIN_RELEASE = {
         version: SCRIPT_VERSION,
@@ -61,7 +86,12 @@
             '铭文洗练目标改为最低等级、属性、最小数值分开选择，不再需要手写关键词。',
             '藏宝图配置改成“最多用几张 / 一次用几张 / 每次间隔”，并补充说明示例。',
             '新增浏览器通知开关，新版本和铭文命中目标时可弹系统通知。',
-            '更新公告和 README 已整理为功能列表、安装、使用、配置、发布和回滚说明。'
+            '更新公告和 README 已整理为功能列表、安装、使用、配置、发布和回滚说明。',
+            '更新弹窗新增“打开安装页”和“复制更新地址”，安装页会自动携带版本参数，减少 GitHub raw 缓存影响。',
+            '云端发现新版本后，如果用户只是关闭提醒但没有更新，脚本会在运行期间定时再次提醒。',
+            '妖兽自战改为只按自身战力与妖兽战力数值比较，不再使用战力标签、境界或生命攻击防御兜底。',
+            '在线统计改为绑定域名的阿里云 ECS 服务，电脑关机后仍可由云服务器接收心跳。',
+            '在线心跳增加油猴跨域请求兜底，并提升版本号，确保同版本缓存不会导致旧脚本继续运行。'
         ]
     };
 
@@ -100,15 +130,15 @@
         desktopNotify: localStorage.getItem('lvSpiritCleaner.desktopNotify') !== '0',
         monitorStartSpirit: readNumber('lvSpiritCleaner.monitorStartSpirit', 0),
         autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
-        selfFightPowerLimit: localStorage.getItem('lvSpiritCleaner.selfFightPowerLimit') || 'stable',
         selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
         autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
         autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
+        sectQuickRecovery: localStorage.getItem('lvSpiritCleaner.sectQuickRecovery') === '1',
         autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || 'mp,pill,adpoint',
         autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || 'stone,pill,adpoint',
         updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
-        onlineStatsEndpoint: localStorage.getItem('lvSpiritCleaner.onlineStatsEndpoint') || DEFAULT_ONLINE_STATS_ENDPOINT,
+        onlineStatsEndpoint: DEFAULT_ONLINE_STATS_ENDPOINT,
         autoVoidBody: localStorage.getItem('lvSpiritCleaner.autoVoidBody') !== '0',
         voidBodyRarity: readNumber('lvSpiritCleaner.voidBodyRarity', 5),
         voidBodyBuyQty: readNumber('lvSpiritCleaner.voidBodyBuyQty', 1),
@@ -178,17 +208,35 @@
 
     async function sendOnlineHeartbeat() {
         var endpoint = state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT;
-        if (!endpoint || typeof fetch !== 'function') return;
+        if (!endpoint) return;
+        var payload = onlineStatsPayload();
+        var bridged = false;
         try {
-            await fetch(endpoint, {
+            window.dispatchEvent(new CustomEvent('lvsc:online-heartbeat', {
+                detail: JSON.stringify({ endpoint: endpoint, payload: payload })
+            }));
+            bridged = true;
+        } catch (_) {}
+        if (typeof fetch !== 'function') return;
+        try {
+            var res = await fetch(endpoint, {
                 method: 'POST',
                 mode: 'cors',
                 cache: 'no-store',
                 keepalive: true,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(onlineStatsPayload())
+                body: JSON.stringify(payload)
             });
-        } catch (_) {}
+            if (!res || !res.ok) throw new Error('heartbeat failed');
+        } catch (_) {
+            if (!bridged) {
+                try {
+                    window.dispatchEvent(new CustomEvent('lvsc:online-heartbeat', {
+                        detail: JSON.stringify({ endpoint: endpoint, payload: payload })
+                    }));
+                } catch (_) {}
+            }
+        }
     }
 
     function startOnlineHeartbeat() {
@@ -348,8 +396,8 @@
         var desktopNotifyInput = document.getElementById('lvscDesktopNotify');
         var monitorStartInput = document.getElementById('lvscMonitorStartSpirit');
         var selfFightInput = document.getElementById('lvscAutoSelfFightWeak');
-        var selfFightPowerLimitInput = document.getElementById('lvscSelfFightPowerLimit');
         var selfFightMarginInput = document.getElementById('lvscSelfFightMargin');
+        var sectRecoveryInput = document.getElementById('lvscSectQuickRecovery');
         var recoveryModeInput = document.getElementById('lvscAutoRecoveryMode');
         var recoveryThresholdInput = document.getElementById('lvscAutoRecoveryThreshold');
         var recoveryTargetInput = document.getElementById('lvscAutoRecoveryTarget');
@@ -403,11 +451,10 @@
         state.desktopNotify = !!(desktopNotifyInput && desktopNotifyInput.checked);
         state.monitorStartSpirit = Math.max(0, Number(monitorStartInput && monitorStartInput.value || 0));
         state.autoSelfFightWeak = !!(selfFightInput && selfFightInput.checked);
-        state.selfFightPowerLimit = (selfFightPowerLimitInput && selfFightPowerLimitInput.value) || 'stable';
-        if (['stable', 'balanced', 'slightlyStrong', 'weak', 'slightlyWeak', 'close'].indexOf(state.selfFightPowerLimit) < 0) state.selfFightPowerLimit = 'stable';
         state.selfFightMargin = Math.max(1, Math.min(3, Number(selfFightMarginInput && selfFightMarginInput.value || 1.15)));
         state.autoRecoveryMode = (recoveryModeInput && recoveryModeInput.value) || 'both';
         if (['none', 'hp', 'mp', 'both'].indexOf(state.autoRecoveryMode) < 0) state.autoRecoveryMode = 'both';
+        state.sectQuickRecovery = !!(sectRecoveryInput && sectRecoveryInput.checked);
         state.autoRecoveryThreshold = Math.max(0, Math.min(100, Number(recoveryThresholdInput && recoveryThresholdInput.value || 80)));
         state.autoRecoveryTarget = Math.max(0, Math.min(100, Number(recoveryTargetInput && recoveryTargetInput.value || 100)));
         state.autoHpPriority = (hpPriorityInput && hpPriorityInput.value) || 'mp,pill,adpoint';
@@ -457,11 +504,11 @@
         localStorage.setItem('lvSpiritCleaner.desktopNotify', state.desktopNotify ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.monitorStartSpirit', String(state.monitorStartSpirit));
         localStorage.setItem('lvSpiritCleaner.autoSelfFightWeak', state.autoSelfFightWeak ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.selfFightPowerLimit', state.selfFightPowerLimit);
         localStorage.setItem('lvSpiritCleaner.selfFightMargin', String(state.selfFightMargin));
         localStorage.setItem('lvSpiritCleaner.autoRecoveryMode', state.autoRecoveryMode);
         localStorage.setItem('lvSpiritCleaner.autoRecoveryThreshold', String(state.autoRecoveryThreshold));
         localStorage.setItem('lvSpiritCleaner.autoRecoveryTarget', String(state.autoRecoveryTarget));
+        localStorage.setItem('lvSpiritCleaner.sectQuickRecovery', state.sectQuickRecovery ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoHpPriority', state.autoHpPriority);
         localStorage.setItem('lvSpiritCleaner.autoMpPriority', state.autoMpPriority);
         localStorage.setItem('lvSpiritCleaner.updateManifestUrl', state.updateManifestUrl);
@@ -1330,78 +1377,6 @@
         return overlay && overlay.textContent || '';
     }
 
-    function relationRank(value) {
-        value = String(value || '').trim();
-        if (!value) return null;
-        if (/可稳战|碾压|极弱|很弱|明显弱|稍弱|略弱|偏弱|远弱|弱很多/.test(value)) return { key: 'stable', score: 1, label: '可稳战' };
-        if (/势均力敌|接近|相近|差不多|相当|持平|同等|相等|相同/.test(value)) return { key: 'balanced', score: 2, label: '势均力敌' };
-        if (/略强|稍强|偏强|小强/.test(value)) return { key: 'slightlyStrong', score: 3, label: '略强' };
-        if (/高层压制/.test(value)) return { key: 'levelSuppress', score: 4, label: '高层压制' };
-        if (/越阶强敌/.test(value)) return { key: 'realmDanger', score: 6, label: '越阶强敌' };
-        if (/强敌|更强|较强|很强|明显强|远强|强于|高于/.test(value)) return { key: 'danger', score: 5, label: '强敌' };
-        if (/仅供参考/.test(value)) return { key: 'unknown', score: 99, label: '仅供参考' };
-        return null;
-    }
-
-    function relationLimitScore() {
-        var key = state.selfFightPowerLimit || 'slightlyWeak';
-        var scores = {
-            weak: 1,
-            slightlyWeak: 1,
-            stable: 1,
-            close: 2,
-            balanced: 2,
-            slightlyStrong: 3
-        };
-        return scores[key] || 2;
-    }
-
-    function relationLabelByScore(score) {
-        if (score <= 1) return '可稳战';
-        if (score === 2) return '势均力敌';
-        if (score === 3) return '略强';
-        if (score === 4) return '高层压制';
-        if (score === 5) return '强敌';
-        return '越阶强敌';
-    }
-
-    function relationFromPower(playerPower, monsterPower) {
-        if (!(playerPower > 0) || !(monsterPower > 0)) return null;
-        var ratio = monsterPower / playerPower;
-        var score = 5;
-        if (ratio < 0.85) score = 1;
-        else if (ratio < 1.12) score = 2;
-        else if (ratio < 1.35) score = 3;
-        return {
-            key: score <= 1 ? 'stable' : score === 2 ? 'balanced' : score === 3 ? 'slightlyStrong' : 'danger',
-            score: score,
-            label: relationLabelByScore(score),
-            ratio: ratio
-        };
-    }
-
-    function readEncounterPowerRelation(encounterData, playerPower, monsterPower) {
-        encounterData = encounterData || {};
-        var candidates = [
-            encounterData.powerRelation,
-            encounterData.combatPowerRelation,
-            encounterData.powerComparison,
-            encounterData.combatPowerComparison,
-            encounterData.strengthRelation,
-            encounterData.relativePower,
-            encounterData.powerLevelText,
-            textFromFirstElement(['encounterPowerRelation', 'encounterCombatPowerRelation', 'encounterPowerCompare', 'encounterPowerComparison'])
-        ];
-        var text = overlayText();
-        var overlayMatch = text.match(/(?:战力|实力|威胁|强度)[^，。；\n]*(可稳战|势均力敌|略强|高层压制|强敌|越阶强敌|仅供参考|碾压|明显弱|稍弱|略弱|接近|相近|相当|同等|稍强|更强|明显强)/);
-        if (overlayMatch) candidates.push(overlayMatch[1]);
-        for (var i = 0; i < candidates.length; i++) {
-            var relation = relationRank(candidates[i]);
-            if (relation) return relation;
-        }
-        return relationFromPower(playerPower, monsterPower);
-    }
-
     async function loadCurrentEncounterData() {
         if (!gameApi()) return null;
         try {
@@ -1435,62 +1410,29 @@
         if (p.isDead || window.playerDead) return { safe: false, reason: '角色已陨落' };
 
         var margin = Math.max(1, Number(state.selfFightMargin || 1));
-        var mHp = combatNumber(encounterData.monsterHp);
-        var mAtk = combatNumber(encounterData.monsterAtk);
-        var mDef = combatNumber(encounterData.monsterDef);
-        var pHp = Number(p.hp || 0);
-        var pAtk = Number(p.attack || 0);
-        var pDef = Number(p.defense || 0);
         var playerPower = firstCombatValue(p, ['combatPower', 'battlePower', 'power', 'fightPower', 'strength', 'totalPower']);
         var monsterPower = firstCombatValue(encounterData, ['monsterPower', 'monsterCombatPower', 'combatPower', 'battlePower', 'power', 'fightPower', 'strength', 'totalPower']);
-        var powerRelation = readEncounterPowerRelation(encounterData, playerPower, monsterPower);
-        if (powerRelation) {
-            var limit = relationLimitScore();
-            if (powerRelation.score > limit) {
-                return {
-                    safe: false,
-                    reason: '战力' + powerRelation.label + '，超过自战上限：' + relationLabelByScore(limit) + '及以下',
-                    summary: '自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')
-                };
-            }
+
+        if (!(playerPower > 0) || !(monsterPower > 0)) {
             return {
-                safe: true,
-                reason: '战力' + powerRelation.label + '，未超过自战上限',
+                safe: false,
+                reason: '缺少战力数值，已跳过自战',
                 summary: '自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')
             };
         }
 
-        var mStage = Number(window._currentEncounterMonsterStage || 0);
-        if (!mStage && typeof window.parseRealmStageName === 'function') {
-            mStage = window.parseRealmStageName(encounterData.monsterRealmName || '');
-        }
-        var pStage = Number(p.realmStage || 0);
-        if (mStage > pStage) {
-            return { safe: false, reason: '妖兽境界更高' };
-        }
-
-        var tooHigh = [];
-        if (pHp > 0 && mHp > pHp * margin) tooHigh.push('生命');
-        if (pAtk > 0 && mAtk > pAtk * margin) tooHigh.push('攻击');
-        if (pDef > 0 && mDef > pDef * margin) tooHigh.push('防御');
-        if (tooHigh.length) {
-            return { safe: false, reason: '妖兽' + tooHigh.join('、') + '超出接近倍率' };
-        }
-
-        if (pAtk > 0 && pHp > 0) {
-            var playerDamage = Math.max(1, pAtk - mDef);
-            var monsterDamage = Math.max(1, mAtk - pDef);
-            var turnsToKillMonster = Math.ceil(Math.max(1, mHp) / playerDamage);
-            var turnsToKillPlayer = Math.ceil(pHp / monsterDamage);
-            if (turnsToKillPlayer < turnsToKillMonster) {
-                return { safe: false, reason: '粗略回合模拟不占优' };
-            }
+        if (monsterPower > playerPower * margin) {
+            return {
+                safe: false,
+                reason: '妖兽战力超过自战倍率',
+                summary: '自身战力 ' + playerPower + '；妖兽战力 ' + monsterPower + '；上限 ' + Math.floor(playerPower * margin)
+            };
         }
 
         return {
             safe: true,
-            reason: powerRelation ? ('战力' + powerRelation.label + '，未超过自战上限') : '妖兽数值未明显高于自身',
-            summary: powerRelation ? ('自身战力 ' + (playerPower || '?') + '；妖兽战力 ' + (monsterPower || '?')) : ('妖兽 HP/攻/防 ' + mHp + '/' + mAtk + '/' + mDef + '；自身 ' + pHp + '/' + pAtk + '/' + pDef)
+            reason: '妖兽战力未超过自战倍率',
+            summary: '自身战力 ' + playerPower + '；妖兽战力 ' + monsterPower + '；倍率 ' + margin
         };
     }
 
@@ -1603,6 +1545,74 @@
             console.warn('[LingVerse Spirit Cleaner] auto recovery settings failed', err);
             setStatus('自动恢复保存异常', 'warn');
         }
+    }
+
+    function findSectRecoveryButtons() {
+        var buttons = [];
+        var allButtons = document.querySelectorAll('button, .btn, [role=button]');
+        var sectKeywords = ['宗门回血', '宗门回灵', '宗门恢复', '快速回血', '快速回灵', '快速恢复', '一键回血', '一键回灵', '一键恢复'];
+        for (var i = 0; i < allButtons.length; i++) {
+            var btn = allButtons[i];
+            if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
+            var text = String(btn.textContent || '').replace(/\s/g, '');
+            for (var k = 0; k < sectKeywords.length; k++) {
+                if (text.indexOf(sectKeywords[k]) >= 0) {
+                    buttons.push({ btn: btn, keyword: sectKeywords[k] });
+                    break;
+                }
+            }
+        }
+        return buttons;
+    }
+
+    async function triggerSectRecovery(manual) {
+        if (!gameApi()) return false;
+        syncSettingsFromUi();
+        if (!state.sectQuickRecovery && !manual) return false;
+
+        var player = getPlayer() || {};
+        var hp = Number(player.hp || player.currentHp || 0);
+        var maxHp = Number(player.maxHp || player.hpMax || 1);
+        var mp = Number(player.mp || player.currentMp || player.spiritPower || 0);
+        var maxMp = Number(player.maxMp || player.mpMax || 1);
+        var hpPct = maxHp > 0 ? hp / maxHp * 100 : 100;
+        var mpPct = maxMp > 0 ? mp / maxMp * 100 : 100;
+
+        if (!manual) {
+            var threshold = state.autoRecoveryThreshold;
+            var mode = state.autoRecoveryMode;
+            if (mode === 'none') return false;
+            var needHp = (mode === 'hp' || mode === 'both') && hpPct < threshold;
+            var needMp = (mode === 'mp' || mode === 'both') && mpPct < threshold;
+            if (!needHp && !needMp) return false;
+        }
+
+        setStatus('查找宗门快速回血/回灵按钮', 'run');
+        var buttons = findSectRecoveryButtons();
+        if (!buttons.length) {
+            if (manual) setStatus('未找到宗门快速回血按钮', 'warn');
+            return false;
+        }
+
+        var clicked = 0;
+        for (var i = 0; i < buttons.length; i++) {
+            var btn = buttons[i].btn;
+            try {
+                await humanClick(btn);
+                clicked++;
+                await sleep(600);
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] sect recovery click failed', err);
+            }
+        }
+
+        if (clicked > 0) {
+            setStatus('已点击 ' + clicked + ' 个宗门恢复按钮', 'run');
+            await sleep(800);
+            await refreshPlayer();
+            return true;
+        }
+        return false;
     }
 
     function protectorQuery() {
@@ -2538,6 +2548,10 @@
                 continue;
             }
 
+            if (state.sectQuickRecovery) {
+                await triggerSectRecovery(false);
+            }
+
             var stopReason = shouldStopBeforeAction();
             if (stopReason) {
                 if (stopReason === 'need_meditate') {
@@ -2924,6 +2938,33 @@
         };
     }
 
+    function versionedInstallUrl(release) {
+        var url = String((release && release.downloadUrl) || (release && release.url) || (release && release.sourceUrl) || '').trim();
+        var version = String((release && release.version) || '').trim();
+        if (!url) return '';
+        if (url.indexOf('release.json') >= 0) {
+            url = DEFAULT_UPDATE_MANIFEST_URL.replace(/release\.json(?:[?#].*)?$/, 'lingverse-spirit-cleaner.user.js');
+        }
+        if (version && url.indexOf('v=') < 0) {
+            url += (url.indexOf('?') >= 0 ? '&' : '?') + 'v=' + encodeURIComponent(version);
+        }
+        return url;
+    }
+
+    function copyTextToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text);
+        }
+        var input = document.createElement('textarea');
+        input.value = text;
+        input.style.position = 'fixed';
+        input.style.left = '-9999px';
+        document.body.appendChild(input);
+        input.select();
+        try { document.execCommand('copy'); } finally { input.remove(); }
+        return Promise.resolve();
+    }
+
     function showUpdateNotice(release, options) {
         release = release || BUILTIN_RELEASE;
         options = options || {};
@@ -2932,6 +2973,7 @@
 
         var notes = normalizeNotes(release.notes);
         if (!notes.length) notes = ['云端版本已更新，暂无详细变更说明。'];
+        var installUrl = versionedInstallUrl(release);
         var modal = document.createElement('div');
         modal.id = 'lvscUpdateModal';
         modal.innerHTML =
@@ -2941,12 +2983,22 @@
             '<div class="lvsc-update-title">' + escapeLocalHtml(release.title || ('神识清理 v' + release.version)) + '</div>' +
             '<div class="lvsc-update-version">当前 ' + escapeLocalHtml(SCRIPT_VERSION) + ' · 公告 ' + escapeLocalHtml(release.version || '-') + '</div>' +
             '<ul>' + notes.map(function (note) { return '<li>' + escapeLocalHtml(note) + '</li>'; }).join('') + '</ul>' +
-            (release.downloadUrl ? '<a class="lvsc-update-link" href="' + escapeLocalHtml(release.downloadUrl) + '" target="_blank" rel="noopener">打开更新地址</a>' : '') +
+            (installUrl ? '<div class="lvsc-update-actions"><a class="lvsc-update-link" href="' + escapeLocalHtml(installUrl) + '" target="_blank" rel="noopener">打开安装页</a><button id="lvscUpdateCopyBtn">复制更新地址</button></div>' : '') +
             '<button id="lvscUpdateCloseBtn">知道了</button>' +
             '</div>';
         document.body.appendChild(modal);
         modal.style.zIndex = String(UPDATE_MODAL_Z_INDEX);
 
+        var copyBtn = document.getElementById('lvscUpdateCopyBtn');
+        if (copyBtn && installUrl) {
+            copyBtn.onclick = function () {
+                copyTextToClipboard(installUrl).then(function () {
+                    copyBtn.textContent = '已复制';
+                }).catch(function () {
+                    copyBtn.textContent = '复制失败';
+                });
+            };
+        }
         document.getElementById('lvscUpdateCloseBtn').onclick = function () {
             if (options.seenKey) localStorage.setItem(options.seenKey, String(release.version || SCRIPT_VERSION));
             modal.remove();
@@ -2984,10 +3036,14 @@
 
             var newer = compareVersion(release.version, SCRIPT_VERSION) > 0;
             var seenKey = 'lvSpiritCleaner.seenCloudVersion.' + simpleHash(url);
-            if (newer && localStorage.getItem(seenKey) !== release.version) {
+            var remindKey = 'lvSpiritCleaner.lastCloudReminder.' + simpleHash(url);
+            var lastReminderAt = Number(localStorage.getItem(remindKey) || 0);
+            var shouldRemind = manual || localStorage.getItem(seenKey) !== release.version || Date.now() - lastReminderAt > CLOUD_UPDATE_REMIND_MS;
+            if (newer && shouldRemind) {
                 if (!document.getElementById('lvscUpdateModal')) {
                     showUpdateNotice(release, { seenKey: seenKey, kicker: '发现云端新版' });
                 }
+                localStorage.setItem(remindKey, String(Date.now()));
                 setStatus('发现云端新版：' + release.version, 'warn');
                 notifyUser('发现神识清理新版', 'v' + release.version);
             } else if (manual) {
@@ -3097,9 +3153,11 @@
             '.lvsc-update-version{font-size:12px;color:#9be7c3;margin-bottom:12px}',
             '.lvsc-update-card ul{margin:0 0 14px 18px;padding:0;color:#e9dfcf}',
             '.lvsc-update-card li{margin:6px 0}',
-            '.lvsc-update-link{display:inline-block;color:#d8b4fe;margin-bottom:12px;text-decoration:none}',
+            '.lvsc-update-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}',
+            '.lvsc-update-link,#lvscUpdateCopyBtn{display:flex;align-items:center;justify-content:center;min-height:34px;border-radius:7px;text-decoration:none;border:1px solid rgba(216,180,254,.28)!important;background:rgba(216,180,254,.12);color:#d8b4fe;font-weight:700}',
             '#lvscUpdateCloseBtn{width:100%;height:34px;background:#dbb970;color:#17141d}',
             '#lvscResizeHandle{position:absolute;right:3px;bottom:3px;z-index:5;width:18px;height:18px;cursor:nwse-resize;border-radius:3px;background:linear-gradient(135deg,transparent 0 45%,rgba(219,185,112,.75) 46% 52%,transparent 53% 62%,rgba(219,185,112,.65) 63% 69%,transparent 70%);opacity:.85}',
+            '#inlineChat{z-index:' + (PANEL_Z_INDEX - 100) + '!important}',
             '@container (max-width: 380px){.lvsc-grid2,.lvsc-field-grid,.lvsc-card-grid{grid-template-columns:1fr}#lvscTabs{grid-template-columns:repeat(3,minmax(0,1fr))}.lvsc-tab{font-size:11px}}',
             '@media (max-width: 520px){#lvscPanel{right:8px;bottom:8px;width:min(340px,calc(100vw - 16px));height:min(620px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:78vh;font-size:12px}#lvscBody{gap:8px;padding:10px}#lvscTabs{top:-10px}#lvscPanel input[type=number],#lvscPanel input[type=text],#lvscPanel select{height:34px}#lvscActions button,#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:38px}#lvscPanel.lvsc-collapsed{width:calc(100vw - 16px)!important;border-radius:12px}#lvscCompactStatus{max-width:none}}'
         ].join('');
@@ -3150,12 +3208,11 @@
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title-row"><span>妖兽遭遇</span><label class="lvsc-check"><input id="lvscAutoSelfFightWeak" type="checkbox">弱怪自战</label></div>' +
             '<div class="lvsc-grid2">' +
-            '<label>自战上限<select id="lvscSelfFightPowerLimit"><option value="stable">可稳战及以下</option><option value="balanced">势均力敌及以下</option><option value="slightlyStrong">略强及以下</option></select></label>' +
-            '<label>接近倍率<input id="lvscSelfFightMargin" type="number" min="1" max="3" step="0.05" title="1.15 表示妖兽数值不超过自身 115% 时可自战"></label>' +
+            '<label>战力倍率<input id="lvscSelfFightMargin" type="number" min="1" max="3" step="0.05" title="1.00 表示妖兽战力小于等于自身时自战；1.15 表示妖兽战力不超过自身 115% 时自战"></label>' +
             '<button id="lvscSelfFightBtn">检查并自战</button>' +
             '</div>' +
             '<label class="lvsc-check"><input id="lvscAutoHire" type="checkbox">无法自战时自动雇最低价护道</label>' +
-            '<div class="lvsc-help">优先按战力评价判断；没有战力时回退到生命、攻击、防御和境界。可自战时优先于护道。</div>' +
+            '<div class="lvsc-help">只按战力数值判断：妖兽战力 ≤ 自身战力 × 战力倍率时自战；缺少战力数值时不会用境界或三围兜底。可自战时优先于护道。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title">自动恢复</div>' +
@@ -3164,6 +3221,8 @@
             '<button id="lvscAutoRecoveryBtn">保存配置</button>' +
             '<label>低于百分比<input id="lvscAutoRecoveryThreshold" type="number" min="0" max="100" step="1"></label>' +
             '<label>恢复到百分比<input id="lvscAutoRecoveryTarget" type="number" min="0" max="100" step="1"></label>' +
+            '<label class="lvsc-check"><input id="lvscSectQuickRecovery" type="checkbox">宗门快速回血</label>' +
+            '<button id="lvscSectRecoveryBtn">宗门回血</button>' +
             '<label class="lvsc-span2">回血顺序<select id="lvscAutoHpPriority"><option value="mp,pill,adpoint">灵力 → 丹药 → 仙缘</option><option value="pill,mp,adpoint">丹药 → 灵力 → 仙缘</option><option value="adpoint,mp,pill">仙缘 → 灵力 → 丹药</option></select></label>' +
             '<label class="lvsc-span2">回灵顺序<select id="lvscAutoMpPriority"><option value="stone,pill,adpoint">灵石 → 丹药 → 仙缘</option><option value="pill,stone,adpoint">丹药 → 灵石 → 仙缘</option><option value="adpoint,stone,pill">仙缘 → 灵石 → 丹药</option></select></label>' +
             '</div>' +
@@ -3264,12 +3323,12 @@
         document.getElementById('lvscMerchantMaxPrice').value = String(state.merchantMaxPrice);
         document.getElementById('lvscAutoMerchant').checked = state.autoMerchantLegend;
         document.getElementById('lvscAutoSelfFightWeak').checked = state.autoSelfFightWeak;
-        document.getElementById('lvscSelfFightPowerLimit').value = String(state.selfFightPowerLimit);
         document.getElementById('lvscSelfFightMargin').value = String(state.selfFightMargin);
         document.getElementById('lvscAutoHire').checked = state.autoHireCheapest;
         document.getElementById('lvscAutoRecoveryMode').value = String(state.autoRecoveryMode);
         document.getElementById('lvscAutoRecoveryThreshold').value = String(state.autoRecoveryThreshold);
         document.getElementById('lvscAutoRecoveryTarget').value = String(state.autoRecoveryTarget);
+        document.getElementById('lvscSectQuickRecovery').checked = state.sectQuickRecovery;
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
         document.getElementById('lvscAutoMpPriority').value = String(state.autoMpPriority);
         document.getElementById('lvscUpdateManifestUrl').value = String(state.updateManifestUrl);
@@ -3319,6 +3378,9 @@
             handleSelfFightEvent(true);
         };
         document.getElementById('lvscAutoRecoveryBtn').onclick = applyAutoRecoverySettings;
+        document.getElementById('lvscSectRecoveryBtn').onclick = function () {
+            triggerSectRecovery(true);
+        };
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
@@ -3355,12 +3417,12 @@
         document.getElementById('lvscMerchantMaxPrice').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMerchant').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoSelfFightWeak').onchange = syncSettingsFromUi;
-        document.getElementById('lvscSelfFightPowerLimit').onchange = syncSettingsFromUi;
         document.getElementById('lvscSelfFightMargin').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHire').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryMode').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryThreshold').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecoveryTarget').onchange = syncSettingsFromUi;
+        document.getElementById('lvscSectQuickRecovery').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoHpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMpPriority').onchange = syncSettingsFromUi;
         document.getElementById('lvscUpdateManifestUrl').onchange = syncSettingsFromUi;
