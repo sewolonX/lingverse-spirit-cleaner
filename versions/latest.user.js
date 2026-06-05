@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.0.8
+// @version      1.0.9
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,7 +63,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.0.8';
+    var SCRIPT_VERSION = '1.0.9';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -1557,7 +1557,7 @@
     function findSectRecoveryButtons() {
         var buttons = [];
         var allButtons = document.querySelectorAll('button, .btn, [role=button]');
-        var sectKeywords = ['宗门回血', '宗门回灵', '宗门恢复', '快速回血', '快速回灵', '快速恢复', '一键回血', '一键回灵', '一键恢复'];
+        var sectKeywords = ['接受治疗', '宗门回血', '宗门回灵', '宗门恢复', '快速回血', '快速回灵', '快速恢复', '一键回血', '一键回灵', '一键恢复', '治疗', '疗伤'];
         for (var i = 0; i < allButtons.length; i++) {
             var btn = allButtons[i];
             if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
@@ -1570,6 +1570,48 @@
             }
         }
         return buttons;
+    }
+
+    async function findSectHealingServiceItems() {
+        var healingItems = [];
+        var healKeywords = ['治疗', '疗伤', '回血', '回灵', '恢复', '回复', '治愈', 'heal', 'restore', 'recover', 'cure'];
+
+        try {
+            var psRes = await gameApi().get('/api/game/player-sect/builtin-shop');
+            if (psRes && psRes.code === 200 && Array.isArray(psRes.data)) {
+                for (var i = 0; i < psRes.data.length; i++) {
+                    var item = psRes.data[i];
+                    if (item.type !== 'service') continue;
+                    var name = String(item.name || '').toLowerCase();
+                    var desc = String(item.description || '').toLowerCase();
+                    for (var k = 0; k < healKeywords.length; k++) {
+                        if (name.indexOf(healKeywords[k]) >= 0 || desc.indexOf(healKeywords[k]) >= 0) {
+                            healingItems.push({ templateId: item.templateId, name: item.name, cost: item.costContrib || 0, source: 'psect' });
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+
+        try {
+            var sRes = await gameApi().get('/api/game/sect/shop');
+            if (sRes && sRes.code === 200 && Array.isArray(sRes.data)) {
+                for (var j = 0; j < sRes.data.length; j++) {
+                    var sItem = sRes.data[j];
+                    var sName = String(sItem.name || '').toLowerCase();
+                    var sDesc = String(sItem.description || '').toLowerCase();
+                    for (var m = 0; m < healKeywords.length; m++) {
+                        if (sName.indexOf(healKeywords[m]) >= 0 || sDesc.indexOf(healKeywords[m]) >= 0) {
+                            healingItems.push({ templateId: sItem.templateId, name: sItem.name, cost: sItem.costContrib || 0, source: 'sect' });
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return healingItems;
     }
 
     async function triggerSectRecovery(manual) {
@@ -1594,31 +1636,60 @@
             if (!needHp && !needMp) return false;
         }
 
-        setStatus('查找宗门快速回血/回灵按钮', 'run');
-        var buttons = findSectRecoveryButtons();
-        if (!buttons.length) {
-            if (manual) setStatus('未找到宗门快速回血按钮', 'warn');
-            return false;
-        }
+        setStatus('查找宗门快速回血/回灵', 'run');
 
-        var clicked = 0;
-        for (var i = 0; i < buttons.length; i++) {
-            var btn = buttons[i].btn;
-            try {
-                await humanClick(btn);
-                clicked++;
-                await sleep(600);
-            } catch (err) {
-                console.warn('[LingVerse Spirit Cleaner] sect recovery click failed', err);
+        var buttons = findSectRecoveryButtons();
+        if (buttons.length > 0) {
+            var clicked = 0;
+            for (var i = 0; i < buttons.length; i++) {
+                var btn = buttons[i].btn;
+                try {
+                    await humanClick(btn);
+                    clicked++;
+                    await sleep(600);
+                } catch (err) {
+                    console.warn('[LingVerse Spirit Cleaner] sect recovery click failed', err);
+                }
+            }
+            if (clicked > 0) {
+                setStatus('已点击 ' + clicked + ' 个宗门恢复按钮', 'run');
+                await sleep(800);
+                await refreshPlayer();
+                return true;
             }
         }
 
-        if (clicked > 0) {
-            setStatus('已点击 ' + clicked + ' 个宗门恢复按钮', 'run');
-            await sleep(800);
-            await refreshPlayer();
-            return true;
+        var serviceItems = await findSectHealingServiceItems();
+        if (serviceItems.length > 0) {
+            setStatus('通过 API 购买宗门治疗服务', 'run');
+            var bought = 0;
+            for (var s = 0; s < serviceItems.length; s++) {
+                var svc = serviceItems[s];
+                try {
+                    var url = svc.source === 'psect'
+                        ? '/api/game/player-sect/buy-builtin-item'
+                        : '/api/game/sect/shop/buy';
+                    var payload = svc.source === 'psect'
+                        ? { itemId: String(svc.templateId), quantity: 1 }
+                        : { itemId: svc.templateId, quantity: 1 };
+                    var res = await gameApi().post(url, payload);
+                    if (res && res.code === 200) {
+                        bought++;
+                        await sleep(500);
+                    }
+                } catch (err) {
+                    console.warn('[LingVerse Spirit Cleaner] sect shop buy failed for ' + svc.name, err);
+                }
+            }
+            if (bought > 0) {
+                setStatus('已购买 ' + bought + ' 项宗门治疗服务', 'run');
+                await sleep(800);
+                await refreshPlayer();
+                return true;
+            }
         }
+
+        if (manual) setStatus('未找到宗门恢复入口，请打开宗门商铺页面', 'warn');
         return false;
     }
 
