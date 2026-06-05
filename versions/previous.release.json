@@ -1,8 +1,8 @@
 {
-  "version": "1.1.1",
-  "title": "神识清理 v1.1.1",
+  "version": "1.1.2",
+  "title": "神识清理 v1.1.2",
   "notes": [
-    "传音筒始终上层改为可选项：在\"更新\"面板新增开关，关掉后不会注入 z-index。"
+    "收徒改为每条世界消息直接调 API，不再预过滤境界，服务器判断能否收。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.1"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.2"
 }

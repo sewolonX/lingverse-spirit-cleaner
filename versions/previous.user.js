@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.0
+// @version      1.1.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,7 +63,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.0';
+    var SCRIPT_VERSION = '1.1.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -76,7 +76,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '传音筒始终上层改为可选项：在"更新"面板新增开关，关掉后不会注入 z-index。'
+            '收徒改为每条世界消息直接调 API，不再预过滤境界，服务器判断能否收。'
         ]
     };
 
@@ -1638,24 +1638,6 @@
         return false;
     }
 
-    function realmRank(realm) {
-        var text = String(realm || '').replace(/\s/g, '');
-        var ranks = ['练气期', '筑基期', '金丹期', '元婴期', '化神期', '合道期', '大乘期', '真仙期'];
-        var substages = { '前期': 0, '中期': 1, '后期': 2, '大圆满': 3, '巅峰': 3, '一层': 0, '二层': 0, '三层': 0, '四层': 0, '五层': 0, '六层': 0, '七层': 0, '八层': 0, '九层': 0, '层': 0 };
-        for (var i = ranks.length - 1; i >= 0; i--) {
-            var idx = text.indexOf(ranks[i]);
-            if (idx >= 0) {
-                var sub = text.substring(idx + ranks[i].length);
-                var stage = 0;
-                for (var k in substages) {
-                    if (sub.indexOf(k) >= 0) { stage = substages[k]; break; }
-                }
-                return i * 4 + stage;
-            }
-        }
-        return 0;
-    }
-
     async function hasLowDurabilityFromApi() {
         if (!gameApi()) return false;
         try {
@@ -1720,17 +1702,6 @@
         return { playerId: playerId, name: name, realm: realm };
     }
 
-    function canRecruitFromRealm(targetRealmText) {
-        var targetRank = realmRank(targetRealmText);
-        if (targetRank <= 0) return false;
-        var me = getPlayer() || {};
-        var myRealm = String(me.realm || me.playerRealm || '').trim();
-        var myRank = realmRank(myRealm);
-        if (myRank <= 0) return false;
-        var majorRealmDiff = Math.floor(myRank / 4) - Math.floor(targetRank / 4);
-        return majorRealmDiff >= 2;
-    }
-
     async function handleNewChatMessage(msgEl) {
         if (!state.autoRecruit) return;
         var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
@@ -1742,37 +1713,31 @@
         if (now - recruitLastActionAt < state.recruitIntervalMs) return;
 
         var info = extractChatPlayerInfo(msgEl);
-        if (!info.playerId || !info.realm) return;
-        if (!canRecruitFromRealm(info.realm)) {
-            recruitLog('跳过 ' + info.name + ' [' + info.realm + '] — 未达招收条件');
-            return;
-        }
+        if (!info.playerId) return;
 
         var me = getPlayer() || {};
         var myId = Number(me.playerId || me.id || 0);
         if (info.playerId === myId) return;
 
         recruitLastActionAt = now;
-        var myRealm = String(me.realm || me.playerRealm || '').trim();
-        var diff = Math.floor(realmRank(myRealm) / 4) - Math.floor(realmRank(info.realm) / 4);
-        setStatus('收徒 ' + info.name + ' [' + info.realm + '] (我' + myRealm + ')', 'run');
-        recruitLog('检测 ' + info.name + ' [' + info.realm + '] 低于' + diff + '大境 → 发起收徒');
+        setStatus('收徒 ' + info.name + (info.realm ? ' [' + info.realm + ']' : ''), 'run');
+        recruitLog('检测 ' + info.name + (info.realm ? ' [' + info.realm + ']' : '') + ' → 发起收徒');
 
         try {
             var apiRes = await gameApi().post('/api/master/invite', { apprenticeId: info.playerId });
             if (apiRes && apiRes.code === 200) {
                 setStatus('已收徒：' + info.name, 'run');
                 toast('收徒成功：' + info.name);
-                recruitLog('✔ ' + info.name + ' [' + info.realm + '] 收徒成功');
+                recruitLog('✔ ' + info.name + ' 收徒成功');
                 return true;
             }
             if (apiRes && apiRes.message) {
                 setStatus('收徒 ' + info.name + ' 失败：' + apiRes.message, 'warn');
-                recruitLog('✘ ' + info.name + ' [' + info.realm + '] ' + apiRes.message);
+                recruitLog('✘ ' + info.name + ' ' + apiRes.message);
             }
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] recruit failed', err);
-            recruitLog('✘ ' + info.name + ' [' + info.realm + '] 网络异常: ' + (err.message || ''));
+            recruitLog('✘ ' + info.name + ' 网络异常');
         }
         return false;
     }
@@ -3495,7 +3460,7 @@
             '<label>冷却间隔(ms)<input id="lvscRecruitIntervalMs" type="number" min="1000" step="500" title="两次收徒之间的最小间隔"></label>' +
             '<button id="lvscRecruitBtn">手动收徒</button>' +
             '</div>' +
-            '<div class="lvsc-help">监控世界聊天新发言，自动筛选低于自己 2 个大境界的玩家（如元婴期→练气期），通过 API 直接收徒。</div>' +
+            '<div class="lvsc-help">监控世界聊天每条新发言，直接调收徒 API，由服务器判断是否满足收徒条件。</div>' +
             '<div id="lvscRecruitLog">待命</div>' +
             '</div>' +
             '</div>' +
