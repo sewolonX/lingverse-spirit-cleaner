@@ -76,10 +76,11 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
+            '宗门快速回血全面重写：纯 API 驱动，不再搜索 DOM 按钮。优先宗门商铺 service 类商品，回退灵气疗伤 API(/api/game/heal-with-mp)。',
             '新增传音筒 z-index 提升，聊天面板始终在游戏上层不被遮挡。',
-            '新增宗门快速回血：自动搜索并点击宗门回血/回灵按钮，支持配置触发百分比。',
             '新增装备自动维修：通过 /api/game/equipment/repair-all API 一键修复，自动检测 wearRate。',
             '新增自动收徒：监控世界聊天，自动筛选低于 2 大境界的玩家，通过 /api/master/invite 收徒。',
+            '新增收徒日志面板：实时显示每次检测、跳过、成功、失败记录。',
             '云端更新检测增加 10 秒超时 + jsDelivr CDN 镜像回退，解决 GitHub raw DNS 不可达问题。',
             '修复维修循环问题：改用 API 调用替代 DOM 按钮搜索，基于 wearRate 精确判断。',
             '收徒规则改为游戏标准：境界高出他人 2 大境即可收徒，不再需要手动选择境界。'
@@ -1554,64 +1555,25 @@
         }
     }
 
-    function findSectRecoveryButtons() {
-        var buttons = [];
-        var allButtons = document.querySelectorAll('button, .btn, [role=button]');
-        var sectKeywords = ['接受治疗', '宗门回血', '宗门回灵', '宗门恢复', '快速回血', '快速回灵', '快速恢复', '一键回血', '一键回灵', '一键恢复', '治疗', '疗伤'];
-        for (var i = 0; i < allButtons.length; i++) {
-            var btn = allButtons[i];
-            if (!isElementVisible(btn) || isElementDisabled(btn)) continue;
-            var text = String(btn.textContent || '').replace(/\s/g, '');
-            for (var k = 0; k < sectKeywords.length; k++) {
-                if (text.indexOf(sectKeywords[k]) >= 0) {
-                    buttons.push({ btn: btn, keyword: sectKeywords[k] });
-                    break;
-                }
-            }
-        }
-        return buttons;
-    }
-
-    async function findSectHealingServiceItems() {
-        var healingItems = [];
-        var healKeywords = ['治疗', '疗伤', '回血', '回灵', '恢复', '回复', '治愈', 'heal', 'restore', 'recover', 'cure'];
-
+    async function fetchSectShopServices() {
+        var services = [];
         try {
-            var psRes = await gameApi().get('/api/game/player-sect/builtin-shop');
-            if (psRes && psRes.code === 200 && Array.isArray(psRes.data)) {
-                for (var i = 0; i < psRes.data.length; i++) {
-                    var item = psRes.data[i];
-                    if (item.type !== 'service') continue;
-                    var name = String(item.name || '').toLowerCase();
-                    var desc = String(item.description || '').toLowerCase();
-                    for (var k = 0; k < healKeywords.length; k++) {
-                        if (name.indexOf(healKeywords[k]) >= 0 || desc.indexOf(healKeywords[k]) >= 0) {
-                            healingItems.push({ templateId: item.templateId, name: item.name, cost: item.costContrib || 0, source: 'psect' });
-                            break;
-                        }
+            var res = await gameApi().get('/api/game/player-sect/builtin-shop');
+            if (res && res.code === 200 && Array.isArray(res.data)) {
+                for (var i = 0; i < res.data.length; i++) {
+                    if (res.data[i].type === 'service') {
+                        services.push({
+                            templateId: res.data[i].templateId,
+                            name: res.data[i].name,
+                            cost: res.data[i].costContrib || 0,
+                            buyUrl: '/api/game/player-sect/buy-builtin-item',
+                            buyPayload: { itemId: String(res.data[i].templateId), quantity: 1 }
+                        });
                     }
                 }
             }
         } catch (_) {}
-
-        try {
-            var sRes = await gameApi().get('/api/game/sect/shop');
-            if (sRes && sRes.code === 200 && Array.isArray(sRes.data)) {
-                for (var j = 0; j < sRes.data.length; j++) {
-                    var sItem = sRes.data[j];
-                    var sName = String(sItem.name || '').toLowerCase();
-                    var sDesc = String(sItem.description || '').toLowerCase();
-                    for (var m = 0; m < healKeywords.length; m++) {
-                        if (sName.indexOf(healKeywords[m]) >= 0 || sDesc.indexOf(healKeywords[m]) >= 0) {
-                            healingItems.push({ templateId: sItem.templateId, name: sItem.name, cost: sItem.costContrib || 0, source: 'sect' });
-                            break;
-                        }
-                    }
-                }
-            }
-        } catch (_) {}
-
-        return healingItems;
+        return services;
     }
 
     async function triggerSectRecovery(manual) {
@@ -1636,60 +1598,46 @@
             if (!needHp && !needMp) return false;
         }
 
-        setStatus('查找宗门快速回血/回灵', 'run');
+        var didSomething = false;
 
-        var buttons = findSectRecoveryButtons();
-        if (buttons.length > 0) {
-            var clicked = 0;
-            for (var i = 0; i < buttons.length; i++) {
-                var btn = buttons[i].btn;
+        var services = await fetchSectShopServices();
+        if (services.length > 0) {
+            for (var i = 0; i < services.length; i++) {
+                var svc = services[i];
                 try {
-                    await humanClick(btn);
-                    clicked++;
-                    await sleep(600);
-                } catch (err) {
-                    console.warn('[LingVerse Spirit Cleaner] sect recovery click failed', err);
-                }
-            }
-            if (clicked > 0) {
-                setStatus('已点击 ' + clicked + ' 个宗门恢复按钮', 'run');
-                await sleep(800);
-                await refreshPlayer();
-                return true;
-            }
-        }
-
-        var serviceItems = await findSectHealingServiceItems();
-        if (serviceItems.length > 0) {
-            setStatus('通过 API 购买宗门治疗服务', 'run');
-            var bought = 0;
-            for (var s = 0; s < serviceItems.length; s++) {
-                var svc = serviceItems[s];
-                try {
-                    var url = svc.source === 'psect'
-                        ? '/api/game/player-sect/buy-builtin-item'
-                        : '/api/game/sect/shop/buy';
-                    var payload = svc.source === 'psect'
-                        ? { itemId: String(svc.templateId), quantity: 1 }
-                        : { itemId: svc.templateId, quantity: 1 };
-                    var res = await gameApi().post(url, payload);
+                    setStatus('宗门治疗: ' + svc.name, 'run');
+                    var res = await gameApi().post(svc.buyUrl, svc.buyPayload);
                     if (res && res.code === 200) {
-                        bought++;
-                        await sleep(500);
+                        setStatus('宗门治疗完成: ' + svc.name, 'run');
+                        didSomething = true;
+                        await sleep(400);
                     }
                 } catch (err) {
-                    console.warn('[LingVerse Spirit Cleaner] sect shop buy failed for ' + svc.name, err);
+                    console.warn('[LingVerse Spirit Cleaner] sect service buy failed', err);
                 }
-            }
-            if (bought > 0) {
-                setStatus('已购买 ' + bought + ' 项宗门治疗服务', 'run');
-                await sleep(800);
-                await refreshPlayer();
-                return true;
             }
         }
 
-        if (manual) setStatus('未找到宗门恢复入口，请打开宗门商铺页面', 'warn');
+        if (!didSomething && (manual || hpPct < 70) && hpPct < mpPct && mp > 0) {
+            try {
+                var healAmount = Math.min(Math.floor(maxHp * 0.3), mp);
+                setStatus('灵气疗伤 HP+' + healAmount, 'run');
+                var healRes = await gameApi().post('/api/game/heal-with-mp', { hpAmount: healAmount });
+                if (healRes && healRes.code === 200) {
+                    setStatus('灵气疗伤完成', 'run');
+                    didSomething = true;
+                }
+            } catch (err) {
+                console.warn('[LingVerse Spirit Cleaner] heal-with-mp failed', err);
+            }
+        }
+
+        if (didSomething) {
+            await sleep(500);
+            await refreshPlayer();
+            return true;
+        }
+        if (manual) setStatus('未找到宗门治疗服务，请确认已加入宗门', 'warn');
         return false;
     }
 
