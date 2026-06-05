@@ -76,8 +76,8 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
+            '宗门快速回血全面重写：纯 API 驱动，不再搜索 DOM 按钮。优先宗门商铺 service 类商品，回退灵气疗伤 API(/api/game/heal-with-mp)。',
             '新增传音筒 z-index 提升，聊天面板始终在游戏上层不被遮挡。',
-            '宗门快速回血全面重写：纯 API 驱动，不再搜索 DOM 按钮。优先宗门商铺 service 类商品，回退灵气疗伤 API。',
             '新增装备自动维修：通过 /api/game/equipment/repair-all API 一键修复，自动检测 wearRate。',
             '新增自动收徒：监控世界聊天，自动筛选低于 2 大境界的玩家，通过 /api/master/invite 收徒。',
             '新增收徒日志面板：实时显示每次检测、跳过、成功、失败记录。',
