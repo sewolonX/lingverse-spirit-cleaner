@@ -1,15 +1,8 @@
 {
-  "version": "1.1.0",
-  "title": "神识清理 v1.1.0",
+  "version": "1.1.1",
+  "title": "神识清理 v1.1.1",
   "notes": [
-    "宗门快速回血全面重写：纯 API 驱动，不再搜索 DOM 按钮。优先宗门商铺 service 类商品，回退灵气疗伤 API(/api/game/heal-with-mp)。",
-    "新增传音筒 z-index 提升，聊天面板始终在游戏上层不被遮挡。",
-    "新增装备自动维修：通过 /api/game/equipment/repair-all API 一键修复，自动检测 wearRate。",
-    "新增自动收徒：监控世界聊天，自动筛选低于 2 大境界的玩家，通过 /api/master/invite 收徒。",
-    "新增收徒日志面板：实时显示每次检测、跳过、成功、失败记录。",
-    "云端更新检测增加 10 秒超时 + jsDelivr CDN 镜像回退，解决 GitHub raw DNS 不可达问题。",
-    "修复维修循环问题：改用 API 调用替代 DOM 按钮搜索，基于 wearRate 精确判断。",
-    "收徒规则改为游戏标准：境界高出他人 2 大境即可收徒，不再需要手动选择境界。"
+    "传音筒始终上层改为可选项：在\"更新\"面板新增开关，关掉后不会注入 z-index。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.0"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.1"
 }

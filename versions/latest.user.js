@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.0
+// @version      1.1.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,7 +63,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.0';
+    var SCRIPT_VERSION = '1.1.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -76,14 +76,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '宗门快速回血全面重写：纯 API 驱动，不再搜索 DOM 按钮。优先宗门商铺 service 类商品，回退灵气疗伤 API(/api/game/heal-with-mp)。',
-            '新增传音筒 z-index 提升，聊天面板始终在游戏上层不被遮挡。',
-            '新增装备自动维修：通过 /api/game/equipment/repair-all API 一键修复，自动检测 wearRate。',
-            '新增自动收徒：监控世界聊天，自动筛选低于 2 大境界的玩家，通过 /api/master/invite 收徒。',
-            '新增收徒日志面板：实时显示每次检测、跳过、成功、失败记录。',
-            '云端更新检测增加 10 秒超时 + jsDelivr CDN 镜像回退，解决 GitHub raw DNS 不可达问题。',
-            '修复维修循环问题：改用 API 调用替代 DOM 按钮搜索，基于 wearRate 精确判断。',
-            '收徒规则改为游戏标准：境界高出他人 2 大境即可收徒，不再需要手动选择境界。'
+            '传音筒始终上层改为可选项：在"更新"面板新增开关，关掉后不会注入 z-index。'
         ]
     };
 
@@ -141,7 +134,8 @@
         autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
         repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
-        recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000)
+        recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
+        chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0'
     };
 
     function readNumber(key, fallback) {
@@ -411,6 +405,7 @@
         var repairThresholdInput = document.getElementById('lvscRepairThreshold');
         var autoRecruitInput = document.getElementById('lvscAutoRecruit');
         var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
+        var chatOnTopInput = document.getElementById('lvscChatOnTop');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
         state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
@@ -473,6 +468,7 @@
         state.repairThreshold = Math.max(0, Math.min(100, Number(repairThresholdInput && repairThresholdInput.value || 70)));
         state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
         state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
+        state.chatOnTop = !!(chatOnTopInput && chatOnTopInput.checked);
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
         localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
@@ -527,6 +523,7 @@
         localStorage.setItem('lvSpiritCleaner.repairThreshold', String(state.repairThreshold));
         localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
+        localStorage.setItem('lvSpiritCleaner.chatOnTop', state.chatOnTop ? '1' : '0');
     }
 
     async function refreshPlayer() {
@@ -3315,6 +3312,21 @@
         localStorage.setItem('lvSpiritCleaner.activeTab', tabName);
     }
 
+    function applyChatZIndex(enabled) {
+        var styleId = 'lvscChatZIndex';
+        var existing = document.getElementById(styleId);
+        if (enabled) {
+            if (!existing) {
+                var style = document.createElement('style');
+                style.id = styleId;
+                style.textContent = '#inlineChat{z-index:' + (PANEL_Z_INDEX - 100) + '!important}';
+                (document.head || document.documentElement).appendChild(style);
+            }
+        } else {
+            if (existing) existing.remove();
+        }
+    }
+
     function buildPanel() {
         var oldPanel = document.getElementById('lvscPanel');
         if (oldPanel) oldPanel.remove();
@@ -3400,7 +3412,6 @@
             '.lvsc-update-link,#lvscUpdateCopyBtn{display:flex;align-items:center;justify-content:center;min-height:34px;border-radius:7px;text-decoration:none;border:1px solid rgba(216,180,254,.28)!important;background:rgba(216,180,254,.12);color:#d8b4fe;font-weight:700}',
             '#lvscUpdateCloseBtn{width:100%;height:34px;background:#dbb970;color:#17141d}',
             '#lvscResizeHandle{position:absolute;right:3px;bottom:3px;z-index:5;width:18px;height:18px;cursor:nwse-resize;border-radius:3px;background:linear-gradient(135deg,transparent 0 45%,rgba(219,185,112,.75) 46% 52%,transparent 53% 62%,rgba(219,185,112,.65) 63% 69%,transparent 70%);opacity:.85}',
-            '#inlineChat{z-index:' + (PANEL_Z_INDEX - 100) + '!important}',
             '@container (max-width: 380px){.lvsc-grid2,.lvsc-field-grid,.lvsc-card-grid{grid-template-columns:1fr}#lvscTabs{grid-template-columns:repeat(3,minmax(0,1fr))}.lvsc-tab{font-size:11px}}',
             '@media (max-width: 520px){#lvscPanel{right:8px;bottom:8px;width:min(340px,calc(100vw - 16px));height:min(620px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:78vh;font-size:12px}#lvscBody{gap:8px;padding:10px}#lvscTabs{top:-10px}#lvscPanel input[type=number],#lvscPanel input[type=text],#lvscPanel select{height:34px}#lvscActions button,#lvscSelfFightBtn,#lvscAutoRecoveryBtn,#lvscVoidBodyBtn,#lvscHiddenCharmBtn,#lvscCheckUpdateBtn{height:38px}#lvscPanel.lvsc-collapsed{width:calc(100vw - 16px)!important;border-radius:12px}#lvscCompactStatus{max-width:none}}'
         ].join('');
@@ -3557,6 +3568,7 @@
             '<div class="lvsc-field-grid">' +
             '<label>云端公告 JSON<input id="lvscUpdateManifestUrl" type="text" placeholder="' + DEFAULT_UPDATE_MANIFEST_URL + '"></label>' +
             '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
+            '<label class="lvsc-check"><input id="lvscChatOnTop" type="checkbox">传音筒始终上层</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
             '</div>' +
             '<div class="lvsc-help">默认读取 GitHub 公告。脚本管理器会根据 updateURL/downloadURL 检测并提示下载安装。</div>' +
@@ -3616,6 +3628,7 @@
         document.getElementById('lvscTreasureUseQuantity').value = String(state.treasureUseQuantity);
         document.getElementById('lvscTreasureIntervalMs').value = String(state.treasureIntervalMs);
         document.getElementById('lvscDesktopNotify').checked = state.desktopNotify;
+        document.getElementById('lvscChatOnTop').checked = state.chatOnTop;
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
         document.getElementById('lvscVoidBuyQty').value = String(state.voidBodyBuyQty);
@@ -3727,6 +3740,10 @@
         document.getElementById('lvscTreasureUseQuantity').onchange = syncSettingsFromUi;
         document.getElementById('lvscTreasureIntervalMs').onchange = syncSettingsFromUi;
         document.getElementById('lvscDesktopNotify').onchange = syncSettingsFromUi;
+        document.getElementById('lvscChatOnTop').onchange = function () {
+            syncSettingsFromUi();
+            applyChatZIndex(state.chatOnTop);
+        };
         document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidBuyQty').onchange = syncSettingsFromUi;
@@ -3743,6 +3760,7 @@
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
         setInterval(updateMeter, 2000);
+        applyChatZIndex(state.chatOnTop);
         if (state.autoRecruit) {
             setTimeout(function () { startRecruitObserver(); }, 2000);
         }
