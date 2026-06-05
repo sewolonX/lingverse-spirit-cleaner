@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.4
+// @version      1.1.5
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -63,7 +63,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.4';
+    var SCRIPT_VERSION = '1.1.5';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -72,6 +72,41 @@
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
+    var BUILTIN_CHANGELOG = [
+        {
+            version: '1.1.4',
+            title: '历史公告',
+            notes: ['更新弹窗新增历史公告面板，从 v1.1.0 起记录每次版本变更。']
+        },
+        {
+            version: '1.1.3',
+            title: '修复云端公告缓存',
+            notes: ['GitHub raw 和 jsDelivr CDN URL 均加版本参数，每次发布自动破缓存。']
+        },
+        {
+            version: '1.1.2',
+            title: '收徒简化',
+            notes: ['每条世界消息直接调 /api/master/invite API，服务器判断能否收，不再预过滤境界。']
+        },
+        {
+            version: '1.1.1',
+            title: '传音筒开关',
+            notes: ['传音筒始终上层改为可选项，在"更新"面板新增开关。']
+        },
+        {
+            version: '1.1.0',
+            title: '大版本发布',
+            notes: [
+                '宗门快速回血全面重写：纯 API 驱动，优先宗门商铺 service 类商品，回退灵气疗伤 API。',
+                '新增装备自动维修：通过 /api/game/equipment/repair-all API 一键修复，自动检测 wearRate。',
+                '新增自动收徒：监控世界聊天，每条消息直接调收徒 API。',
+                '新增收徒日志面板：实时显示检测、跳过、成功、失败记录。',
+                '新增传音筒 z-index 提升，聊天面板始终在游戏上层。',
+                '云端更新检测增加 10 秒超时 + jsDelivr CDN 镜像回退。'
+            ]
+        }
+    ];
+
     var BUILTIN_RELEASE = {
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
@@ -3170,7 +3205,7 @@
         var rawNotes = normalizeNotes(release.notes);
         if (!rawNotes.length) rawNotes = ['暂无详细变更说明。'];
 
-        var changelog = Array.isArray(release.changelog) ? release.changelog : (Array.isArray(release.history) ? release.history : []);
+        var changelog = Array.isArray(release.changelog) ? release.changelog : (Array.isArray(release.history) ? release.history : (typeof BUILTIN_CHANGELOG !== 'undefined' ? BUILTIN_CHANGELOG : []));
         var changelogHtml = '';
         if (changelog.length > 0) {
             changelogHtml = '<div class="lvsc-changelog">';
