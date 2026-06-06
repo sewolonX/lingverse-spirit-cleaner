@@ -1,8 +1,8 @@
 {
-  "version": "1.1.3",
-  "title": "神识清理 v1.1.3",
+  "version": "1.1.6",
+  "title": "神识清理 v1.1.6",
   "notes": [
-    "修复云端公告缓存问题：GitHub raw 和 jsDelivr CDN 的 release.json URL 均加 v 参数，每次发布自动破缓存，不再显示旧公告。"
+    "修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.3"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.1.6"
 }

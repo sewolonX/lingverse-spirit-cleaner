@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.5
+// @version      1.1.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -11,22 +11,63 @@
 // @downloadURL  https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
 // @grant        GM_xmlhttpRequest
 // @connect      lingshen.ccwu.cc
+// @connect      qyapi.weixin.qq.com
 // @run-at       document-idle
 // ==/UserScript==
 
 (function injectIntoPage() {
     'use strict';
 
+    var GM_FETCH_EVENT = 'lvsc:gm-fetch';
     var ONLINE_BRIDGE_EVENT = 'lvsc:online-heartbeat';
-    if (typeof GM_xmlhttpRequest === 'function' && !window.__lvscOnlineBridgeInstalled) {
-        window.__lvscOnlineBridgeInstalled = true;
+    var gmFetchSeq = 0;
+    var gmFetchPending = {};
+
+    // 事件桥接 HTTP：注入代码发 CustomEvent，沙箱监听后用 GM_xmlhttpRequest 请求
+    if (typeof GM_xmlhttpRequest === 'function' && !window.__lvscBridgeReady) {
+        window.__lvscBridgeReady = true;
+
+        // 通用 HTTP bridge
+        window.addEventListener(GM_FETCH_EVENT, function (event) {
+            var detail = {};
+            try { detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : (event.detail || {}); } catch (_) {}
+            if (!detail.seq || !detail.url) return;
+            var method = detail.method || 'GET';
+            var headers = detail.headers || {};
+            var body = detail.body || undefined;
+            GM_xmlhttpRequest({
+                method: method,
+                url: detail.url,
+                headers: headers,
+                data: body,
+                timeout: 30000,
+                onload: function (resp) {
+                    window.dispatchEvent(new CustomEvent(GM_FETCH_EVENT + ':done', {
+                        detail: JSON.stringify({
+                            seq: detail.seq,
+                            ok: resp.status >= 200 && resp.status < 300,
+                            status: resp.status,
+                            body: resp.responseText
+                        })
+                    }));
+                },
+                onerror: function () {
+                    window.dispatchEvent(new CustomEvent(GM_FETCH_EVENT + ':done', {
+                        detail: JSON.stringify({ seq: detail.seq, ok: false, status: 0, body: '{}', err: 'GM_xmlhttpRequest failed' })
+                    }));
+                },
+                ontimeout: function () {
+                    window.dispatchEvent(new CustomEvent(GM_FETCH_EVENT + ':done', {
+                        detail: JSON.stringify({ seq: detail.seq, ok: false, status: 0, body: '{}', err: 'timeout' })
+                    }));
+                }
+            });
+        });
+
+        // 在线心跳 bridge
         window.addEventListener(ONLINE_BRIDGE_EVENT, function (event) {
             var detail = {};
-            try {
-                detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : (event.detail || {});
-            } catch (_) {
-                detail = {};
-            }
+            try { detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : (event.detail || {}); } catch (_) {}
             if (!detail.endpoint || !detail.payload) return;
             try {
                 GM_xmlhttpRequest({
@@ -63,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.5';
+    var SCRIPT_VERSION = '1.1.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -72,6 +113,8 @@
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
+    var wecomBusy = false;
+    var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
             version: '1.1.4',
@@ -111,7 +154,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '新增历史公告：更新弹窗显示完整版本历史，从 v1.1.0 起记录每次变更。'
+            '修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。'
         ]
     };
 
@@ -170,7 +213,9 @@
         repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
         recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
-        chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0'
+        chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0',
+        wecomNotify: localStorage.getItem('lvSpiritCleaner.wecomNotify') === '1',
+        wecomWebhookUrl: localStorage.getItem('lvSpiritCleaner.wecomWebhookUrl') || ''
     };
 
     function readNumber(key, fallback) {
@@ -441,6 +486,8 @@
         var autoRecruitInput = document.getElementById('lvscAutoRecruit');
         var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
         var chatOnTopInput = document.getElementById('lvscChatOnTop');
+        var wecomNotifyInput = document.getElementById('lvscWecomNotify');
+        var wecomWebhookUrlInput = document.getElementById('lvscWecomWebhookUrl');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
         state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
@@ -504,6 +551,8 @@
         state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
         state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
         state.chatOnTop = !!(chatOnTopInput && chatOnTopInput.checked);
+        state.wecomNotify = !!(wecomNotifyInput && wecomNotifyInput.checked);
+        state.wecomWebhookUrl = String(wecomWebhookUrlInput && wecomWebhookUrlInput.value || '').trim();
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
         localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
@@ -559,6 +608,8 @@
         localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
         localStorage.setItem('lvSpiritCleaner.chatOnTop', state.chatOnTop ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.wecomNotify', state.wecomNotify ? '1' : '0');
+        localStorage.setItem('lvSpiritCleaner.wecomWebhookUrl', state.wecomWebhookUrl);
     }
 
     async function refreshPlayer() {
@@ -678,6 +729,7 @@
         busyEvent = true;
         try {
             setStatus('检测到陨落，尝试引渡归来', 'warn');
+            wecomEnqueue('角色陨落', '游戏中角色已死亡，脚本尝试自动引渡复活');
             var revived = false;
             if (typeof window.revivePlayer === 'function') {
                 try {
@@ -1725,6 +1777,54 @@
         return false;
     }
 
+    // 企业微信应用消息
+    function gmFetch(url, options) {
+        return new Promise(function (resolve) {
+            var seq = 'wcf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            function onDone(e) {
+                var d = {};
+                try { d = typeof e.detail === 'string' ? JSON.parse(e.detail) : e.detail; } catch (_) {}
+                if (d.seq !== seq) return;
+                window.removeEventListener('lvsc:gm-fetch:done', onDone);
+                resolve({ ok: !!d.ok, status: d.status || 0, json: function () { return Promise.resolve(JSON.parse(d.body || '{}')); }, text: function () { return Promise.resolve(d.body || ''); } });
+            }
+            window.addEventListener('lvsc:gm-fetch:done', onDone);
+            window.dispatchEvent(new CustomEvent('lvsc:gm-fetch', { detail: JSON.stringify({ seq: seq, url: url, method: (options && options.method) || 'GET', headers: (options && options.headers) || {}, body: (options && options.body) || undefined }) }));
+        });
+    }
+
+    async function sendWeComMessage(title, content) {
+        if (!state.wecomNotify || !state.wecomWebhookUrl) return;
+        var text = title + '\n' + content + '\n' + new Date().toLocaleString();
+        try {
+            var resp = await gmFetch(state.wecomWebhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msgtype: 'text', text: { content: text } }) });
+            var data = await resp.json();
+            if (data && data.errcode === 0) { setStatus('企业微信: 已发送', 'run'); return; }
+            setStatus('企业微信失败: ' + ((data && data.errmsg) || '未知').substring(0, 40), 'warn');
+        } catch (err) { setStatus('企业微信异常: ' + (err.message || '').substring(0, 40), 'warn'); }
+    }
+
+    function wecomEnqueue(title, content) {
+        if (!state.wecomNotify) return;
+        wecomQueue.push({ title: title, content: content });
+        if (wecomQueue.length > 20) wecomQueue.shift();
+        wecomDrainQueue();
+    }
+
+    async function wecomDrainQueue() {
+        if (wecomBusy || !wecomQueue.length) return;
+        wecomBusy = true;
+        try {
+            while (wecomQueue.length > 0) {
+                var msg = wecomQueue.shift();
+                await sendWeComMessage(msg.title, msg.content);
+                if (wecomQueue.length > 0) await sleep(2000);
+            }
+        } finally {
+            wecomBusy = false;
+        }
+    }
+
     function extractChatPlayerInfo(msgEl) {
         var avatarBtn = msgEl.querySelector('.chat-msg-avatar');
         var onclick = String(avatarBtn && avatarBtn.getAttribute('onclick') || '');
@@ -1764,6 +1864,7 @@
                 setStatus('已收徒：' + info.name, 'run');
                 toast('收徒成功：' + info.name);
                 recruitLog('✔ ' + info.name + ' 收徒成功');
+                wecomEnqueue('收徒成功', info.name + ' [' + (info.realm || '?') + '] 已被收为弟子');
                 return true;
             }
             if (apiRes && apiRes.message) {
@@ -3318,6 +3419,7 @@
                 localStorage.setItem(remindKey, String(Date.now()));
                 setStatus('发现云端新版：' + release.version, 'warn');
                 notifyUser('发现神识清理新版', 'v' + release.version);
+                wecomEnqueue('脚本新版', '神识清理 v' + release.version + ' 已发布，当前 v' + SCRIPT_VERSION);
             } else if (manual) {
                 showUpdateNotice(release, { kicker: newer ? '云端新版' : '云端公告' });
                 setStatus(newer ? '云端有新版本 ' + release.version : '当前已是最新：' + SCRIPT_VERSION, newer ? 'warn' : 'run');
@@ -3610,7 +3712,14 @@
             '<label>云端公告 JSON<input id="lvscUpdateManifestUrl" type="text" placeholder="' + DEFAULT_UPDATE_MANIFEST_URL + '"></label>' +
             '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
             '<label class="lvsc-check"><input id="lvscChatOnTop" type="checkbox">传音筒始终上层</label>' +
+            '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
+            '</div>' +
+            '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
+            '<div class="lvsc-section-title">群机器人 Webhook</div>' +
+            '<label>Webhook 地址<input id="lvscWecomWebhookUrl" type="text" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."></label>' +
+            '<button id="lvscWecomTestBtn">测试发送</button>' +
+            '<div class="lvsc-help">在企业微信内部群添加群机器人获取 webhook URL。消息通过事件桥接发到群里，手机上企业微信 App 会弹推送。</div>' +
             '</div>' +
             '<div class="lvsc-help">默认读取 GitHub 公告。脚本管理器会根据 updateURL/downloadURL 检测并提示下载安装。</div>' +
             '</div>' +
@@ -3670,6 +3779,9 @@
         document.getElementById('lvscTreasureIntervalMs').value = String(state.treasureIntervalMs);
         document.getElementById('lvscDesktopNotify').checked = state.desktopNotify;
         document.getElementById('lvscChatOnTop').checked = state.chatOnTop;
+        document.getElementById('lvscWecomNotify').checked = state.wecomNotify;
+        document.getElementById('lvscWecomWebhookUrl').value = String(state.wecomWebhookUrl);
+        document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
         document.getElementById('lvscVoidBuyQty').value = String(state.voidBodyBuyQty);
@@ -3784,6 +3896,15 @@
         document.getElementById('lvscChatOnTop').onchange = function () {
             syncSettingsFromUi();
             applyChatZIndex(state.chatOnTop);
+        };
+        document.getElementById('lvscWecomNotify').onchange = function () {
+            syncSettingsFromUi();
+            document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
+        };
+        document.getElementById('lvscWecomWebhookUrl').onchange = syncSettingsFromUi;
+        document.getElementById('lvscWecomTestBtn').onclick = function () {
+            syncSettingsFromUi();
+            wecomEnqueue('灵界通知测试', '神识清理 v' + SCRIPT_VERSION + ' — 配置成功！');
         };
         document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
