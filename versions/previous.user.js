@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.0
+// @version      1.2.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.0';
+    var SCRIPT_VERSION = '1.2.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -169,6 +169,7 @@
         merchantKeyword: localStorage.getItem('lvSpiritCleaner.merchantKeyword') || '',
         merchantQualityFirst: localStorage.getItem('lvSpiritCleaner.merchantQualityFirst') !== '0',
         merchantMaxPrice: readNumber('lvSpiritCleaner.merchantMaxPrice', 0),
+        merchantStrictMatch: localStorage.getItem('lvSpiritCleaner.merchantStrictMatch') === '1',
         autoMerchantLegend: localStorage.getItem('lvSpiritCleaner.autoMerchantLegend') !== '0',
         autoHireCheapest: localStorage.getItem('lvSpiritCleaner.autoHireCheapest') !== '0',
         autoMeditate: localStorage.getItem('lvSpiritCleaner.autoMeditate') !== '0',
@@ -448,6 +449,7 @@
         var merchantKeywordInput = document.getElementById('lvscMerchantKeyword');
         var merchantQualityInput = document.getElementById('lvscMerchantQualityFirst');
         var merchantMaxPriceInput = document.getElementById('lvscMerchantMaxPrice');
+        var merchantStrictMatchInput = document.getElementById('lvscMerchantStrictMatch');
         var hireInput = document.getElementById('lvscAutoHire');
         var meditateInput = document.getElementById('lvscAutoMeditate');
         var exploreAfterMeditateInput = document.getElementById('lvscAutoExploreAfterMeditate');
@@ -509,6 +511,7 @@
         state.merchantKeyword = String(merchantKeywordInput && merchantKeywordInput.value || '').trim();
         state.merchantQualityFirst = !!(merchantQualityInput && merchantQualityInput.checked);
         state.merchantMaxPrice = Math.max(0, Number(merchantMaxPriceInput && merchantMaxPriceInput.value || 0));
+        state.merchantStrictMatch = !!(merchantStrictMatchInput && merchantStrictMatchInput.checked);
         state.autoMerchantLegend = !!(merchantInput && merchantInput.checked);
         state.autoHireCheapest = !!(hireInput && hireInput.checked);
         state.autoMeditate = !!(meditateInput && meditateInput.checked);
@@ -574,6 +577,7 @@
         localStorage.setItem('lvSpiritCleaner.merchantKeyword', state.merchantKeyword);
         localStorage.setItem('lvSpiritCleaner.merchantQualityFirst', state.merchantQualityFirst ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.merchantMaxPrice', String(state.merchantMaxPrice));
+        localStorage.setItem('lvSpiritCleaner.merchantStrictMatch', state.merchantStrictMatch ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoMerchantLegend', state.autoMerchantLegend ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoHireCheapest', state.autoHireCheapest ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.autoMeditate', state.autoMeditate ? '1' : '0');
@@ -1350,12 +1354,16 @@
             if (!Number.isFinite(item.index)) return false;
             if (state.merchantMode === 'legend' && !isLegendary(item)) return false;
             if (state.merchantMaxPrice > 0 && Number(item.price || 0) > state.merchantMaxPrice) return false;
-            if (rarityFilters.length && rarityFilters.indexOf(Number(item.rarity || 0)) < 0) return false;
-            if (!nameFilters.length && !rarityFilters.length) return true;
-            if (!nameFilters.length && rarityFilters.length) return true;
-            return nameFilters.some(function (keyword) {
+            var matchRarity = !rarityFilters.length || rarityFilters.indexOf(Number(item.rarity || 0)) >= 0;
+            var matchName = !nameFilters.length || nameFilters.some(function (keyword) {
                 return String(item.name || '').indexOf(keyword) >= 0;
             });
+            if (!nameFilters.length && !rarityFilters.length) return true;
+            if (!nameFilters.length) return matchRarity;
+            if (!rarityFilters.length) return matchName;
+            // 严格匹配 AND 或宽松匹配 OR
+            if (state.merchantStrictMatch) return matchRarity && matchName;
+            return matchRarity || matchName;
         });
         candidates.sort(function (a, b) {
             if (state.merchantQualityFirst) {
@@ -3846,6 +3854,7 @@
             '<label>商品关键词<input id="lvscMerchantKeyword" type="text" placeholder="多个用空格或逗号隔开"></label>' +
             '<label>高价阈值(灵石)<input id="lvscMerchantMaxPrice" type="number" min="0" step="1" title="填 0 表示不限"></label>' +
             '<label class="lvsc-check"><input id="lvscMerchantQualityFirst" type="checkbox">品质优先</label>' +
+            '<label class="lvsc-check"><input id="lvscMerchantStrictMatch" type="checkbox">严格匹配（品质 AND 名字）</label>' +
             '<label class="lvsc-check"><input id="lvscAutoMerchant" type="checkbox">自动处理商人</label>' +
             '</div>' +
             '<div class="lvsc-help">传说才买会固定要求传说品质；按条件购买会按关键词和价格筛选，品质优先开启后先买更高品质。</div>' +
@@ -4009,6 +4018,7 @@
         document.getElementById('lvscMerchantMode').value = String(state.merchantMode);
         document.getElementById('lvscMerchantKeyword').value = String(state.merchantKeyword);
         document.getElementById('lvscMerchantQualityFirst').checked = state.merchantQualityFirst;
+        document.getElementById('lvscMerchantStrictMatch').checked = state.merchantStrictMatch;
         document.getElementById('lvscMerchantMaxPrice').value = String(state.merchantMaxPrice);
         document.getElementById('lvscAutoMerchant').checked = state.autoMerchantLegend;
         document.getElementById('lvscAutoSelfFightWeak').checked = state.autoSelfFightWeak;
@@ -4122,6 +4132,7 @@
         document.getElementById('lvscMerchantMode').onchange = syncSettingsFromUi;
         document.getElementById('lvscMerchantKeyword').onchange = syncSettingsFromUi;
         document.getElementById('lvscMerchantQualityFirst').onchange = syncSettingsFromUi;
+        document.getElementById('lvscMerchantStrictMatch').onchange = syncSettingsFromUi;
         document.getElementById('lvscMerchantMaxPrice').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoMerchant').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoSelfFightWeak').onchange = syncSettingsFromUi;
