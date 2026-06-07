@@ -1,5 +1,6 @@
 # Run this script on the Alibaba Cloud Windows Server.
 # It installs the online stats backend and Caddy HTTPS proxy.
+# Save this file as UTF-8 with BOM to preserve Chinese characters.
 
 $ErrorActionPreference = "Stop"
 
@@ -17,6 +18,11 @@ $Domain = "lingshen.ccwu.cc"
 $WwwDomain = "www.lingshen.ccwu.cc"
 
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
+
+# Write helper using BOM encoding to preserve Chinese
+function Write-Utf8Bom($Path, $Text) {
+    [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($true))
+}
 
 $serverCode = @'
 $ErrorActionPreference = "Stop"
@@ -81,6 +87,7 @@ function Get-Stats {
     foreach ($client in ($Clients.Values | Sort-Object -Property lastSeenMs -Descending)) {
         $clientList += [ordered]@{
             id = $client.id
+            playerName = $client.playerName
             version = $client.version
             page = $client.page
             flags = $client.flags
@@ -101,56 +108,60 @@ function Get-Stats {
 function Get-FlagText($Flags) {
     if ($null -eq $Flags) { return "-" }
     $items = @()
-    if ($Flags.running) { $items += "" }
-    if ($Flags.monitoringSpirit) { $items += "" }
-    if ($Flags.autoTrialRunning) { $items += "" }
-    if ($Flags.autoTreasureRunning) { $items += "" }
-    if ($Flags.autoInscriptionRunning) { $items += "" }
-    if ($items.Count -eq 0) { return "" }
+    if ($Flags.running) { $items += "qingli" }
+    if ($Flags.monitoringSpirit) { $items += "jiance" }
+    if ($Flags.autoTrialRunning) { $items += "shilian" }
+    if ($Flags.autoTreasureRunning) { $items += "cangbaotu" }
+    if ($Flags.autoInscriptionRunning) { $items += "mingwen" }
+    if ($items.Count -eq 0) { return "daiming" }
     return ($items -join " / ")
 }
 
 function Write-HtmlResponse($Stream, $Stats) {
     $rows = ""
     foreach ($client in $Stats.clients) {
-        $rows += "<tr><td><b>$(Escape-Html $(if($client.playerName){$client.playerName}else{$client.id}))</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)</td></tr>"
+        $displayName = if ($client.playerName) { $client.playerName } else { $client.id }
+        $rows += "<tr><td><b>$(Escape-Html $displayName)</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)s ago</td></tr>"
     }
     if ([string]::IsNullOrWhiteSpace($rows)) {
-        $rows = '<tr><td colspan="4" class="muted"></td></tr>'
+        $rows = '<tr><td colspan="4" class="muted">No online clients</td></tr>'
     }
 
     $html = @"
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="refresh" content="10">
-  <title>LingVerse Cleaner</title>
+  <title>LingVerse Cleaner Online</title>
   <style>
     body{margin:0;background:#11141d;color:#f5f1e8;font:14px/1.5 "Microsoft YaHei",Arial,sans-serif}
-    main{max-width:1080px;margin:0 auto;padding:24px}
-    h1{margin:0 0 6px;font-size:24px}
-    .summary{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
-    .stat{padding:14px 16px;border:1px solid rgba(219,185,112,.35);border-radius:8px;background:rgba(255,255,255,.05)}
+    main{max-width:960px;margin:0 auto;padding:24px}
+    h1{margin:0 0 6px;font-size:22px}
+    h1 small{font-size:13px;color:#9b927f;font-weight:400}
+    .summary{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
+    .stat{padding:14px 18px;border:1px solid rgba(219,185,112,.35);border-radius:8px;background:rgba(255,255,255,.05)}
     .num{font-size:32px;font-weight:800;color:#9be7c3}
+    .label{font-size:12px;color:#9b927f;margin-top:2px}
     table{width:100%;border-collapse:collapse;background:rgba(255,255,255,.04);border-radius:8px;overflow:hidden}
-    th,td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
-    th{color:#dbb970;background:rgba(219,185,112,.1)}
-    code{color:#d8b4fe}
-    .muted{color:#9b927f}
+    th,td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+    th{color:#dbb970;background:rgba(219,185,112,.1);font-size:12px}
+    td{font-size:13px}
+    b{color:#d8b4fe}
+    .muted{color:#9b927f;font-size:12px}
   </style>
 </head>
 <body>
   <main>
-    <h1>LingVerse Cleaner <small style="font-size:13px;color:#9b927f;font-weight:400;">Online Stats</small></h1>
-    <div class="muted"> $( $Stats.windowSeconds )  10 </div>
+    <h1>LingVerse Cleaner <small>Online</small></h1>
+    <div class="muted">Heartbeat in last $($Stats.windowSeconds)s counts as online. Auto-refresh every 10s.</div>
     <section class="summary">
-      <div class="stat"><div class="num">$($Stats.online)</div><div class="muted"></div></div>
-      <div class="stat"><div class="muted"></div><div>$(Escape-Html $Stats.updatedAt)</div></div>
+      <div class="stat"><div class="num">$($Stats.online)</div><div class="label">Online</div></div>
+      <div class="stat"><div class="label">Updated</div><div style="font-size:13px;color:#cfc6b2;">$(Escape-Html $Stats.updatedAt)</div></div>
     </section>
     <table>
-      <thead><tr><th></th><th></th><th></th><th></th></tr></thead>
+      <thead><tr><th>Player</th><th>Version</th><th>Status</th><th>Last Beat</th></tr></thead>
       <tbody>$rows</tbody>
     </table>
   </main>
@@ -277,7 +288,7 @@ while ($true) {
 }
 '@
 
-Set-Content -LiteralPath $ServerScript -Value $serverCode -Encoding UTF8
+Write-Utf8Bom $ServerScript $serverCode
 
 if (!(Test-Path -LiteralPath $Caddy)) {
     $bundledCaddy = Join-Path $PSScriptRoot "caddy.exe"
