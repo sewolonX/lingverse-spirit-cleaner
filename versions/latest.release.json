@@ -1,8 +1,9 @@
 {
-  "version": "1.2.4",
-  "title": "神识清理 v1.2.4",
+  "version": "1.2.5",
+  "title": "神识清理 v1.2.5",
   "notes": [
-    "商人购买新增\"严格匹配\"开关：关掉则品质或名字满足其一即购买（OR 模式）。"
+    "新增反馈按钮：面板底部可提交意见，在线服务器仪表盘展示。",
+    "@updateURL/@downloadURL 指向 Gitee，国内直连自动更新。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.4"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.5"
 }

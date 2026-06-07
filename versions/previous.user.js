@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.3
+// @version      1.2.4
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
 // @homepageURL  https://github.com/SuRanHF/lingverse-spirit-cleaner
 // @supportURL   https://github.com/SuRanHF/lingverse-spirit-cleaner/issues
-// @updateURL    https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
-// @downloadURL  https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js
+// @updateURL    https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/lingverse-spirit-cleaner.user.js
+// @downloadURL  https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/lingverse-spirit-cleaner.user.js
 // @grant        GM_xmlhttpRequest
 // @connect      lingshen.ccwu.cc
 // @connect      qyapi.weixin.qq.com
@@ -64,8 +64,8 @@
             });
         });
 
-        // 在线心跳 bridge
-        window.addEventListener(ONLINE_BRIDGE_EVENT, function (event) {
+        // 在线心跳 bridge（也复用做反馈发送）
+        function bridgePost(event) {
             var detail = {};
             try { detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : (event.detail || {}); } catch (_) {}
             if (!detail.endpoint || !detail.payload) return;
@@ -78,7 +78,9 @@
                     timeout: 10000
                 });
             } catch (_) {}
-        });
+        }
+        window.addEventListener(ONLINE_BRIDGE_EVENT, bridgePost);
+        window.addEventListener('lvsc:feedback', bridgePost);
     }
 
     var source = String.raw`
@@ -104,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.3';
+    var SCRIPT_VERSION = '1.2.5';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -117,9 +119,19 @@
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
+            version: '1.2.5',
+            title: '反馈按钮 + Gitee 自动更新',
+            notes: ['面板底部新增反馈按钮，用户填写意见后通过事件桥接发送到在线服务器。', '@updateURL/@downloadURL 改为 Gitee，Tampermonkey 国内直连自动更新。']
+        },
+        {
+            version: '1.2.4',
+            title: '修复云端更新检测',
+            notes: ['修复 checkCloudUpdate 中 url 未定义的 bug。']
+        },
+        {
             version: '1.2.3',
-            title: '版本检测走国内服务器',
-            notes: ['更新检测优先从 online-server/api/version 获取，国内直连无需 VPN。']
+            title: '更新检测走 Gitee',
+            notes: ['默认更新检测 URL 改为 Gitee 国内直连，无需 VPN。发布脚本自动双平台推送。']
         },
         {
             version: '1.2.2',
@@ -192,7 +204,8 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '商人购买新增"严格匹配"开关：关掉则品质或名字满足其一即购买（OR 模式）。'
+            '新增反馈按钮：面板底部可提交意见，在线服务器仪表盘可查看。',
+            '@updateURL/@downloadURL 指向 Gitee，Tampermonkey 国内直连自动更新。'
         ]
     };
 
@@ -3817,7 +3830,18 @@
             '#lvscSpiritTrack{height:8px;background:rgba(255,255,255,.12);border-radius:999px;overflow:hidden}',
             '#lvscSpiritFill{height:100%;width:0;background:linear-gradient(90deg,#8667ff,#d8b4fe)}',
             '#lvscSpiritValue{font-size:12px;color:#d8b4fe}',
-            '#lvscAuthor{font-size:11px;color:#8f846f;text-align:center;border-top:1px solid rgba(255,255,255,.08);padding-top:8px}',
+            '#lvscAuthor{font-size:11px;color:#8f846f;text-align:center;border-top:1px solid rgba(255,255,255,.08);padding-top:8px;display:flex;align-items:center;justify-content:center;gap:10px}',
+            '#lvscFeedbackBtn{background:rgba(216,180,254,.12);color:#d8b4fe;border:1px solid rgba(216,180,254,.2)!important;font-size:11px;padding:2px 10px;cursor:pointer;border-radius:4px!important;height:auto!important}',
+            '#lvscFeedbackBtn:hover{background:rgba(216,180,254,.22)}',
+            '.lvsc-fb-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.55)}',
+            '.lvsc-fb-card{position:relative;width:min(380px,calc(100vw - 28px));background:rgba(17,20,29,.98);border:1px solid rgba(219,185,112,.4);border-radius:10px;padding:18px;color:#f5f1e8;box-shadow:0 16px 48px rgba(0,0,0,.45)}',
+            '.lvsc-fb-title{font-size:15px;font-weight:700;color:#dbb970;margin-bottom:12px}',
+            '.lvsc-fb-textarea{width:100%;min-height:100px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:#f5f1e8;font:13px/1.5 "Microsoft YaHei",sans-serif;padding:10px;resize:vertical;box-sizing:border-box}',
+            '.lvsc-fb-textarea::placeholder{color:#8f846f}',
+            '.lvsc-fb-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}',
+            '.lvsc-fb-btn{height:32px;padding:0 16px;border-radius:6px;cursor:pointer;font-weight:700;font-size:13px;border:0}',
+            '.lvsc-fb-cancel{background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.12)!important}',
+            '.lvsc-fb-send{background:#dbb970;color:#17141d}',
             '#lvscActions{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px 12px;background:linear-gradient(180deg,rgba(17,20,29,.9),rgba(17,20,29,.98));border-top:1px solid rgba(255,255,255,.08)}',
             '#lvscRunBtn{flex:1;height:34px;background:#dbb970;color:#17141d}',
             '#lvscRefreshBtn{width:72px;height:34px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.12)!important}',
@@ -4034,7 +4058,7 @@
             '</div>' +
             '<div class="lvsc-help">默认读取 GitHub 公告。脚本管理器会根据 updateURL/downloadURL 检测并提示下载安装。</div>' +
             '</div>' +
-            '<div id="lvscAuthor">作者：SuH2RanZ1</div>' +
+            '<div id="lvscAuthor"><span>作者：SuH2RanZ1</span><button id="lvscFeedbackBtn">&#x1F4AC; 反馈</button></div>' +
             '</div>' +
             '<div id="lvscActions"><button id="lvscRunBtn">开始清理</button><button id="lvscMonitorBtn">监测神识</button><button id="lvscRefreshBtn">刷新</button></div>' +
             '<div id="lvscResizeHandle" title="拖拽调节面板大小"></div>';
@@ -4114,6 +4138,35 @@
             else runLoop();
         };
         document.getElementById('lvscMonitorBtn').onclick = toggleSpiritMonitor;
+        document.getElementById('lvscFeedbackBtn').onclick = function () {
+            var old = document.getElementById('lvscFeedbackModal');
+            if (old) { old.style.display = old.style.display === 'none' ? 'flex' : 'none'; return; }
+            var modal = document.createElement('div');
+            modal.id = 'lvscFeedbackModal';
+            modal.innerHTML =
+                '<div class="lvsc-fb-backdrop"></div>' +
+                '<div class="lvsc-fb-card">' +
+                '<div class="lvsc-fb-title">意见反馈</div>' +
+                '<textarea id="lvscFeedbackText" class="lvsc-fb-textarea" placeholder="欢迎提出意见、建议或 Bug 反馈...&#10;请留下角色名以便回复" rows="5"></textarea>' +
+                '<div class="lvsc-fb-actions">' +
+                '<button id="lvscFeedbackCancel" class="lvsc-fb-btn lvsc-fb-cancel">取消</button>' +
+                '<button id="lvscFeedbackSend" class="lvsc-fb-btn lvsc-fb-send">发送</button>' +
+                '</div></div>';
+            modal.style.cssText = 'position:fixed;inset:0;z-index:2147483002;display:flex;align-items:center;justify-content:center;';
+            document.body.appendChild(modal);
+            modal.querySelector('.lvsc-fb-backdrop').onclick = function () { modal.remove(); };
+            document.getElementById('lvscFeedbackCancel').onclick = function () { modal.remove(); };
+            document.getElementById('lvscFeedbackSend').onclick = function () {
+                var text = document.getElementById('lvscFeedbackText').value.trim();
+                if (!text) return;
+                var player = getPlayer() || {};
+                var payload = { text: text,  playerName: player.name || player.playerName || '', version: SCRIPT_VERSION, timestamp: Date.now() };
+                var url = (state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/feedback');
+                window.dispatchEvent(new CustomEvent('lvsc:feedback', { detail: JSON.stringify({ endpoint: url, payload: payload }) }));
+                modal.remove();
+                setStatus('感谢反馈！', 'run');
+            };
+        };
         document.getElementById('lvscCompactMonitorBtn').onclick = toggleSpiritMonitor;
         document.getElementById('lvscRefreshBtn').onclick = refreshPlayer;
         document.getElementById('lvscAutoTrialBtn').onclick = toggleAutoTrial;
