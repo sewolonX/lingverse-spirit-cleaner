@@ -121,6 +121,21 @@ function Invoke-GitPushWithRetry() {
     return $false
 }
 
+function Invoke-GiteePush() {
+    $remote = git remote -v 2>$null | Select-String "gitee"
+    if (-not $remote) {
+        Write-Host "未配置 Gitee remote，跳过 Gitee 推送。配置: git remote add gitee https://gitee.com/用户名/仓库名.git" -ForegroundColor Yellow
+        return
+    }
+    Write-Host "推送到 Gitee..." -ForegroundColor Cyan
+    git push gitee main 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Gitee 推送成功" -ForegroundColor Green
+    } else {
+        Write-Host "Gitee 推送失败，请检查 remote 配置。可手动: git push gitee main" -ForegroundColor Yellow
+    }
+}
+
 function Get-PublishPaths($Root, $Version) {
     $paths = @(
         ".gitignore",
@@ -329,6 +344,7 @@ if (-not $status) {
         Fail "git push failed. Local commits are kept; check GitHub network/login and rerun this script to retry pushing."
     }
     Write-Host "Pushed pending commit(s)." -ForegroundColor Green
+    Invoke-GiteePush
     exit 0
 }
 
@@ -370,6 +386,8 @@ if ($NoPush) {
 if (-not (Invoke-GitPushWithRetry)) {
     Fail "git push failed. Local commit was created; check GitHub network/login and rerun this script to retry pushing."
 }
+
+Invoke-GiteePush
 
 $rawScriptUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js"
 $rawReleaseUrl = "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json?cb=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
