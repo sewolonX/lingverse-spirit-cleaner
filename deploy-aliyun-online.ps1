@@ -101,23 +101,22 @@ function Get-Stats {
 function Get-FlagText($Flags) {
     if ($null -eq $Flags) { return "-" }
     $items = @()
-    if ($Flags.running) { $items += "清理" }
-    if ($Flags.monitoringSpirit) { $items += "监测" }
-    if ($Flags.autoTrialRunning) { $items += "试炼" }
-    if ($Flags.autoTreasureRunning) { $items += "藏宝图" }
-    if ($Flags.autoInscriptionRunning) { $items += "铭文" }
-    if ($items.Count -eq 0) { return "待命" }
+    if ($Flags.running) { $items += "" }
+    if ($Flags.monitoringSpirit) { $items += "" }
+    if ($Flags.autoTrialRunning) { $items += "" }
+    if ($Flags.autoTreasureRunning) { $items += "" }
+    if ($Flags.autoInscriptionRunning) { $items += "" }
+    if ($items.Count -eq 0) { return "" }
     return ($items -join " / ")
 }
 
 function Write-HtmlResponse($Stream, $Stats) {
     $rows = ""
     foreach ($client in $Stats.clients) {
-        $displayName = if ($client.playerName) { $client.playerName } else { $client.id }
-        $rows += "<tr><td><b>$(Escape-Html $displayName)</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)秒前</td></tr>"
+        $rows += "<tr><td><b>$(Escape-Html $(if($client.playerName){$client.playerName}else{$client.id}))</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)</td></tr>"
     }
     if ([string]::IsNullOrWhiteSpace($rows)) {
-        $rows = '<tr><td colspan="4" class="muted">暂无在线记录</td></tr>'
+        $rows = '<tr><td colspan="4" class="muted"></td></tr>'
     }
 
     $html = @"
@@ -127,7 +126,7 @@ function Write-HtmlResponse($Stream, $Stats) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="refresh" content="10">
-  <title>神识清理 · 在线统计</title>
+  <title>LingVerse Cleaner</title>
   <style>
     body{margin:0;background:#11141d;color:#f5f1e8;font:14px/1.5 "Microsoft YaHei",Arial,sans-serif}
     main{max-width:1080px;margin:0 auto;padding:24px}
@@ -144,14 +143,14 @@ function Write-HtmlResponse($Stream, $Stats) {
 </head>
 <body>
   <main>
-    <h1>神识清理 <small style="font-size:13px;color:#9b927f;font-weight:400;">在线统计</small></h1>
-    <div class="muted">最近 $( $Stats.windowSeconds ) 秒内有心跳计为在线，每 10 秒自动刷新</div>
+    <h1>LingVerse Cleaner <small style="font-size:13px;color:#9b927f;font-weight:400;">Online Stats</small></h1>
+    <div class="muted"> $( $Stats.windowSeconds )  10 </div>
     <section class="summary">
-      <div class="stat"><div class="num">$($Stats.online)</div><div class="muted">当前在线</div></div>
-      <div class="stat"><div class="muted">刷新时间</div><div>$(Escape-Html $Stats.updatedAt)</div></div>
+      <div class="stat"><div class="num">$($Stats.online)</div><div class="muted"></div></div>
+      <div class="stat"><div class="muted"></div><div>$(Escape-Html $Stats.updatedAt)</div></div>
     </section>
     <table>
-      <thead><tr><th>角色名</th><th>版本</th><th>运行状态</th><th>最后心跳</th></tr></thead>
+      <thead><tr><th></th><th></th><th></th><th></th></tr></thead>
       <tbody>$rows</tbody>
     </table>
   </main>
