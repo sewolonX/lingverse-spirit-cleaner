@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.6
+// @version      1.2.0
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.6';
+    var SCRIPT_VERSION = '1.2.0';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -154,12 +154,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '铭文天纹适配：铭文等级表加入凡纹~天纹(R1~R7)支持。',
-            '商人按条件购买：关键词填"传说/史诗"等品质名自动按稀有度过滤。',
-            '引渡复活后自动前往指定区域（"自动流程"面板配置区域名称）。',
-            '回血回蓝滑块式排序：勾选+上下调节，中文关键词（灵力/丹药/宗门/仙缘/灵石）。',
-            '企业微信三通道 webhook + 世界聊天转发 + 私信/师门消息检测。',
-            '三个通知事件：清理开始、脚本停止、神识不足。'
+            '修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。'
         ]
     };
 
@@ -955,6 +950,8 @@
         wecomEnqueue('神识不足', '当前神识 ' + info.spirit + '/' + info.maxSpirit + '，开始冥想恢复');
         if (await tryAdvancedMeditateOnce()) {
             info = getSpiritInfo();
+            // 高级冥想够探索就继续，不用回满
+            if (info.spirit >= info.cost && info.spirit > state.reserve) return true;
             if (info.spirit >= targetSpirit) return true;
         }
         var startRes = await gameApi().post('/api/game/meditate/start', {});

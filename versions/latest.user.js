@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.0
+// @version      1.2.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.0';
+    var SCRIPT_VERSION = '1.2.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -950,6 +950,8 @@
         wecomEnqueue('神识不足', '当前神识 ' + info.spirit + '/' + info.maxSpirit + '，开始冥想恢复');
         if (await tryAdvancedMeditateOnce()) {
             info = getSpiritInfo();
+            // 高级冥想够探索就继续，不用回满
+            if (info.spirit >= info.cost && info.spirit > state.reserve) return true;
             if (info.spirit >= targetSpirit) return true;
         }
         var startRes = await gameApi().post('/api/game/meditate/start', {});
