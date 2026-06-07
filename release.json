@@ -4,5 +4,87 @@
   "notes": [
     "商人购买新增\"严格匹配\"开关：关掉则品质或名字满足其一即购买（OR 模式）。"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.2"
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.2",
+  "changelog": [
+    {
+      "version": "1.2.2",
+      "title": "商人严格匹配开关",
+      "notes": [
+        "新增严格匹配（品质 AND 名字）复选框。"
+      ]
+    },
+    {
+      "version": "1.2.1",
+      "title": "高级冥想后继续探索",
+      "notes": [
+        "高级冥想后只要神识够探索就继续，不再强制回满。"
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "title": "大更新",
+      "notes": [
+        "铭文天纹适配",
+        "商人品质关键词",
+        "复活后前往指定区域",
+        "回血回蓝排序",
+        "企业微信三通道+聊天转发",
+        "通知事件+徒弟请求"
+      ]
+    },
+    {
+      "version": "1.1.6",
+      "title": "修复脚本加载",
+      "notes": [
+        "删除重复花括号"
+      ]
+    },
+    {
+      "version": "1.1.5",
+      "title": "历史公告变量",
+      "notes": [
+        "BUILTIN_CHANGELOG独立于BUILTIN_RELEASE"
+      ]
+    },
+    {
+      "version": "1.1.4",
+      "title": "历史公告面板",
+      "notes": [
+        "更新弹窗新增历史公告面板"
+      ]
+    },
+    {
+      "version": "1.1.3",
+      "title": "修复云端公告缓存",
+      "notes": [
+        "URL加版本参数破缓存"
+      ]
+    },
+    {
+      "version": "1.1.2",
+      "title": "收徒简化",
+      "notes": [
+        "直接调API，服务器判断能否收"
+      ]
+    },
+    {
+      "version": "1.1.1",
+      "title": "传音筒开关",
+      "notes": [
+        "传音筒上层改为可选项"
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "title": "大版本发布",
+      "notes": [
+        "宗门回血API驱动",
+        "装备维修",
+        "自动收徒",
+        "收徒日志",
+        "传音筒z-index",
+        "CDN镜像回退"
+      ]
+    }
+  ]
 }
