@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.1.5
+// @version      1.1.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.1.5';
+    var SCRIPT_VERSION = '1.1.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -154,7 +154,12 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。'
+            '铭文天纹适配：铭文等级表加入凡纹~天纹(R1~R7)支持。',
+            '商人按条件购买：关键词填"传说/史诗"等品质名自动按稀有度过滤。',
+            '引渡复活后自动前往指定区域（"自动流程"面板配置区域名称）。',
+            '回血回蓝滑块式排序：勾选+上下调节，中文关键词（灵力/丹药/宗门/仙缘/灵石）。',
+            '企业微信三通道 webhook + 世界聊天转发 + 私信/师门消息检测。',
+            '三个通知事件：清理开始、脚本停止、神识不足。'
         ]
     };
 
@@ -198,8 +203,8 @@
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
         autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
         sectQuickRecovery: localStorage.getItem('lvSpiritCleaner.sectQuickRecovery') === '1',
-        autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || 'mp,pill,adpoint',
-        autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || 'stone,pill,adpoint',
+        autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || '灵力,丹药,宗门',
+        autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || '灵石,丹药,宗门',
         updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
         onlineStatsEndpoint: DEFAULT_ONLINE_STATS_ENDPOINT,
         autoVoidBody: localStorage.getItem('lvSpiritCleaner.autoVoidBody') !== '0',
@@ -211,11 +216,15 @@
         hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000),
         autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
         repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
+        reviveExploreArea: localStorage.getItem('lvSpiritCleaner.reviveExploreArea') || '',
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
         recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
         chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0',
         wecomNotify: localStorage.getItem('lvSpiritCleaner.wecomNotify') === '1',
-        wecomWebhookUrl: localStorage.getItem('lvSpiritCleaner.wecomWebhookUrl') || ''
+        wecomNotifyWebhook: localStorage.getItem('lvSpiritCleaner.wecomNotifyWebhook') || '',
+        wecomWorldWebhook: localStorage.getItem('lvSpiritCleaner.wecomWorldWebhook') || '',
+        wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || '',
+        autoMasterRequests: localStorage.getItem('lvSpiritCleaner.autoMasterRequests') !== '0'
     };
 
     function readNumber(key, fallback) {
@@ -483,11 +492,15 @@
         var hiddenCharmRetryInput = document.getElementById('lvscHiddenCharmRetryMs');
         var autoRepairInput = document.getElementById('lvscAutoRepair');
         var repairThresholdInput = document.getElementById('lvscRepairThreshold');
+        var reviveExploreAreaInput = document.getElementById('lvscReviveExploreArea');
         var autoRecruitInput = document.getElementById('lvscAutoRecruit');
         var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
         var chatOnTopInput = document.getElementById('lvscChatOnTop');
         var wecomNotifyInput = document.getElementById('lvscWecomNotify');
-        var wecomWebhookUrlInput = document.getElementById('lvscWecomWebhookUrl');
+        var wecomNotifyWebhookInput = document.getElementById('lvscWecomNotifyWebhook');
+        var wecomWorldWebhookInput = document.getElementById('lvscWecomWorldWebhook');
+        var wecomPrivateWebhookInput = document.getElementById('lvscWecomPrivateWebhook');
+        var autoMasterRequestsInput = document.getElementById('lvscAutoMasterRequests');
 
         state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
         state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
@@ -534,10 +547,8 @@
         state.sectQuickRecovery = !!(sectRecoveryInput && sectRecoveryInput.checked);
         state.autoRecoveryThreshold = Math.max(0, Math.min(100, Number(recoveryThresholdInput && recoveryThresholdInput.value || 80)));
         state.autoRecoveryTarget = Math.max(0, Math.min(100, Number(recoveryTargetInput && recoveryTargetInput.value || 100)));
-        state.autoHpPriority = (hpPriorityInput && hpPriorityInput.value) || 'mp,pill,adpoint';
-        if (['mp,pill,adpoint', 'pill,mp,adpoint', 'adpoint,mp,pill'].indexOf(state.autoHpPriority) < 0) state.autoHpPriority = 'mp,pill,adpoint';
-        state.autoMpPriority = (mpPriorityInput && mpPriorityInput.value) || 'stone,pill,adpoint';
-        if (['stone,pill,adpoint', 'pill,stone,adpoint', 'adpoint,stone,pill'].indexOf(state.autoMpPriority) < 0) state.autoMpPriority = 'stone,pill,adpoint';
+        state.autoHpPriority = String(hpPriorityInput && hpPriorityInput.value || '灵力,丹药,宗门').trim();
+        state.autoMpPriority = String(mpPriorityInput && mpPriorityInput.value || '灵石,丹药,宗门').trim();
         state.updateManifestUrl = String(updateManifestInput && updateManifestInput.value || '').trim();
         state.autoVoidBody = !!(voidInput && voidInput.checked);
         state.voidBodyRarity = Math.max(1, Math.min(5, Number(voidRarityInput && voidRarityInput.value || 5)));
@@ -548,11 +559,15 @@
         state.hiddenCharmRetryMs = Math.max(3000, Number(hiddenCharmRetryInput && hiddenCharmRetryInput.value || 60000));
         state.autoRepair = !!(autoRepairInput && autoRepairInput.checked);
         state.repairThreshold = Math.max(0, Math.min(100, Number(repairThresholdInput && repairThresholdInput.value || 70)));
+        state.reviveExploreArea = String(reviveExploreAreaInput && reviveExploreAreaInput.value || '').trim();
         state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
         state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
         state.chatOnTop = !!(chatOnTopInput && chatOnTopInput.checked);
         state.wecomNotify = !!(wecomNotifyInput && wecomNotifyInput.checked);
-        state.wecomWebhookUrl = String(wecomWebhookUrlInput && wecomWebhookUrlInput.value || '').trim();
+        state.wecomNotifyWebhook = String(wecomNotifyWebhookInput && wecomNotifyWebhookInput.value || '').trim();
+        state.wecomWorldWebhook = String(wecomWorldWebhookInput && wecomWorldWebhookInput.value || '').trim();
+        state.wecomPrivateWebhook = String(wecomPrivateWebhookInput && wecomPrivateWebhookInput.value || '').trim();
+        state.autoMasterRequests = !!(autoMasterRequestsInput && autoMasterRequestsInput.checked);
 
         localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
         localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
@@ -605,11 +620,15 @@
         localStorage.setItem('lvSpiritCleaner.hiddenCharmRetryMs', String(state.hiddenCharmRetryMs));
         localStorage.setItem('lvSpiritCleaner.autoRepair', state.autoRepair ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.repairThreshold', String(state.repairThreshold));
+        localStorage.setItem('lvSpiritCleaner.reviveExploreArea', state.reviveExploreArea);
         localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
         localStorage.setItem('lvSpiritCleaner.chatOnTop', state.chatOnTop ? '1' : '0');
         localStorage.setItem('lvSpiritCleaner.wecomNotify', state.wecomNotify ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.wecomWebhookUrl', state.wecomWebhookUrl);
+        localStorage.setItem('lvSpiritCleaner.wecomNotifyWebhook', state.wecomNotifyWebhook);
+        localStorage.setItem('lvSpiritCleaner.wecomWorldWebhook', state.wecomWorldWebhook);
+        localStorage.setItem('lvSpiritCleaner.wecomPrivateWebhook', state.wecomPrivateWebhook);
+        localStorage.setItem('lvSpiritCleaner.autoMasterRequests', state.autoMasterRequests ? '1' : '0');
     }
 
     async function refreshPlayer() {
@@ -760,6 +779,21 @@
             if (deathOverlay) deathOverlay.classList.add('hidden');
             if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
             await refreshPlayer();
+
+            // 如果配置了复活后自动前往的区域
+            if (state.reviveExploreArea) {
+                var areaSelect = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+                if (areaSelect) {
+                    for (var oi = 0; oi < areaSelect.options.length; oi++) {
+                        if (areaSelect.options[oi].text.indexOf(state.reviveExploreArea) >= 0 || areaSelect.options[oi].value.indexOf(state.reviveExploreArea) >= 0) {
+                            areaSelect.value = areaSelect.options[oi].value;
+                            if (typeof window.onExploreAreaChange === 'function') window.onExploreAreaChange();
+                            setStatus('已引渡归来，前往 ' + state.reviveExploreArea, 'run');
+                            break;
+                        }
+                    }
+                }
+            }
             setStatus('已引渡归来，继续流程', 'run');
             return true;
         } catch (err2) {
@@ -918,6 +952,7 @@
         if (info.maxSpirit <= 0 || info.spirit >= targetSpirit) return true;
 
         setStatus('神识不足，开始冥想到 ' + targetSpirit, 'run');
+        wecomEnqueue('神识不足', '当前神识 ' + info.spirit + '/' + info.maxSpirit + '，开始冥想恢复');
         if (await tryAdvancedMeditateOnce()) {
             info = getSpiritInfo();
             if (info.spirit >= targetSpirit) return true;
@@ -1301,14 +1336,27 @@
         }).filter(Boolean);
     }
 
+    var MERCHANT_RARITY_NAMES = { '普通': 1, '优良': 2, '稀有': 3, '史诗': 4, '传说': 5 };
+
     function chooseMerchantItem(items) {
         var keywords = merchantKeywordList();
+        var rarityFilters = [];
+        var nameFilters = [];
+        for (var k = 0; k < keywords.length; k++) {
+            if (MERCHANT_RARITY_NAMES[keywords[k]] !== undefined) {
+                rarityFilters.push(MERCHANT_RARITY_NAMES[keywords[k]]);
+            } else {
+                nameFilters.push(keywords[k]);
+            }
+        }
         var candidates = items.map(normalizeMerchantItem).filter(function (item) {
             if (!Number.isFinite(item.index)) return false;
             if (state.merchantMode === 'legend' && !isLegendary(item)) return false;
             if (state.merchantMaxPrice > 0 && Number(item.price || 0) > state.merchantMaxPrice) return false;
-            if (!keywords.length) return true;
-            return keywords.some(function (keyword) {
+            if (rarityFilters.length && rarityFilters.indexOf(Number(item.rarity || 0)) < 0) return false;
+            if (!nameFilters.length && !rarityFilters.length) return true;
+            if (!nameFilters.length && rarityFilters.length) return true;
+            return nameFilters.some(function (keyword) {
                 return String(item.name || '').indexOf(keyword) >= 0;
             });
         });
@@ -1603,40 +1651,9 @@
     }
 
     async function applyAutoRecoverySettings() {
-        if (!gameApi()) return;
+        // 所有恢复由脚本 activeRecover() 主动完成，不依赖游戏内置自动恢复设置。
         syncSettingsFromUi();
-        var mode = state.autoRecoveryMode;
-        var threshold = mode === 'none' ? 0 : state.autoRecoveryThreshold;
-        var target = Math.max(threshold, state.autoRecoveryTarget);
-        var hpEnabled = mode === 'hp' || mode === 'both';
-        var mpEnabled = mode === 'mp' || mode === 'both';
-        var tasks = [];
-
-        tasks.push(gameApi().post('/api/player/settings/auto-hp', {
-            ratio: hpEnabled ? threshold : 0,
-            target: hpEnabled ? target : 0,
-            priority: state.autoHpPriority.split(',')
-        }));
-        tasks.push(gameApi().post('/api/player/settings/auto-mp', {
-            ratio: mpEnabled ? threshold : 0,
-            target: mpEnabled ? target : 0,
-            priority: state.autoMpPriority.split(',')
-        }));
-
-        setStatus('同步自动恢复配置中', 'run');
-        try {
-            var results = await Promise.all(tasks);
-            var failed = results.filter(function (res) { return !res || res.code !== 200; })[0];
-            if (failed) {
-                setStatus('自动恢复保存失败：' + (failed.message || '未知错误'), 'warn');
-                return;
-            }
-            setStatus(mode === 'none' ? '已关闭自动回血/回灵' : '已保存自动回血/回灵', 'run');
-            await refreshPlayer();
-        } catch (err) {
-            console.warn('[LingVerse Spirit Cleaner] auto recovery settings failed', err);
-            setStatus('自动恢复保存异常', 'warn');
-        }
+        setStatus('已保存恢复配置（脚本主动恢复）', 'run');
     }
 
     async function fetchSectShopServices() {
@@ -1793,21 +1810,23 @@
         });
     }
 
-    async function sendWeComMessage(title, content) {
-        if (!state.wecomNotify || !state.wecomWebhookUrl) return;
+    async function sendWeComMessage(webhookUrl, title, content) {
+        if (!state.wecomNotify || !webhookUrl) return;
         var text = title + '\n' + content + '\n' + new Date().toLocaleString();
         try {
-            var resp = await gmFetch(state.wecomWebhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msgtype: 'text', text: { content: text } }) });
+            var resp = await gmFetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msgtype: 'text', text: { content: text } }) });
             var data = await resp.json();
             if (data && data.errcode === 0) { setStatus('企业微信: 已发送', 'run'); return; }
             setStatus('企业微信失败: ' + ((data && data.errmsg) || '未知').substring(0, 40), 'warn');
         } catch (err) { setStatus('企业微信异常: ' + (err.message || '').substring(0, 40), 'warn'); }
     }
 
-    function wecomEnqueue(title, content) {
+    function wecomEnqueue(title, content, webhookUrl) {
         if (!state.wecomNotify) return;
-        wecomQueue.push({ title: title, content: content });
-        if (wecomQueue.length > 20) wecomQueue.shift();
+        var url = webhookUrl || state.wecomNotifyWebhook;
+        if (!url) return;
+        wecomQueue.push({ title: title, content: content, url: url });
+        if (wecomQueue.length > 50) wecomQueue.shift();
         wecomDrainQueue();
     }
 
@@ -1817,12 +1836,141 @@
         try {
             while (wecomQueue.length > 0) {
                 var msg = wecomQueue.shift();
-                await sendWeComMessage(msg.title, msg.content);
+                await sendWeComMessage(msg.url, msg.title, msg.content);
                 if (wecomQueue.length > 0) await sleep(2000);
             }
         } finally {
             wecomBusy = false;
         }
+    }
+
+    // 聊天消息转发
+    var chatForwardMaxId = 0;
+
+    function isPrivateMessage(msgEl) {
+        if (msgEl.classList.contains('chat-msg-system') || msgEl.classList.contains('chat-msg-recalled') || msgEl.classList.contains('chat-msg-recruit')) return false;
+        // 检查消息自身的频道属性
+        var epChannel = msgEl.getAttribute('data-ephemeral-channel') || '';
+        if (epChannel === 'MASTER' || epChannel === 'SECT') return true;
+        if (msgEl.classList.contains('chat-msg-direct') || msgEl.classList.contains('chat-msg-friend')) return true;
+        var channel = window.currentChatChannel || 'WORLD';
+        if (channel === 'SECT' || channel === 'MASTER') return true;
+        return false;
+    }
+
+    function forwardChatMessage(msgEl) {
+        if (!state.wecomNotify) return;
+        var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
+        if (msgId <= chatForwardMaxId) return;
+        if (msgId > chatForwardMaxId) chatForwardMaxId = msgId;
+        var info = extractChatPlayerInfo(msgEl);
+        var text = extractChatMessageText(msgEl);
+        if (!info.name && !text) return;
+        var epChannel = msgEl.getAttribute('data-ephemeral-channel') || '';
+        var isPrivate = isPrivateMessage(msgEl);
+        var label = epChannel === 'MASTER' ? '师门' : epChannel === 'SECT' ? '宗门' : isPrivate ? '私信' : '世界';
+        var prefix = '[' + label + '] ';
+        var webhook = isPrivate ? (state.wecomPrivateWebhook || state.wecomNotifyWebhook) : (state.wecomWorldWebhook || state.wecomNotifyWebhook);
+        wecomEnqueue(prefix + info.name + (info.realm ? ' [' + info.realm + ']' : ''), text || '(空消息)', webhook);
+    }
+
+    function extractChatMessageText(msgEl) {
+        var textEl = msgEl.querySelector('.chat-msg-text');
+        return String(textEl && textEl.textContent || '').trim();
+    }
+
+    // 自动处理徒弟请求
+    async function handleMasterRequests() {
+        if (!state.autoMasterRequests || !gameApi()) return;
+        try {
+            var res = await gameApi().get('/api/master/overview');
+            if (!res || res.code !== 200 || !res.data) return;
+            var requests = (res.data.incomingRequests || []).filter(function (r) { return r.status === 'OPEN'; });
+            if (!requests.length) return;
+            for (var i = 0; i < requests.length; i++) {
+                var req = requests[i];
+                var kind = req.kind || '';
+                var name = req.fromName || req.toName || '徒弟';
+                recruitLog('处理请求: ' + kind + ' from ' + name);
+                if (kind === 'WENDAO') {
+                    try { await gameApi().post('/api/master/wendao/fulfill', { requestId: req.id }); } catch (_) {}
+                    wecomEnqueue('问道处理', '已帮徒弟 ' + name + ' 解惑');
+                } else if (kind === 'HUDAO') {
+                    try { await gameApi().post('/api/master/hudao/accept', { requestId: req.id }); } catch (_) {}
+                    wecomEnqueue('互道突破', '已应允徒弟 ' + name + ' 的护道');
+                } else if (kind === 'LILIAN') {
+                    try { await gameApi().post('/api/master/lilian/accept', { requestId: req.id }); } catch (_) {}
+                    wecomEnqueue('历练应允', '已接取徒弟 ' + name + ' 的历练');
+                }
+                await sleep(800);
+            }
+        } catch (err) {
+            console.warn('[LingVerse Spirit Cleaner] master requests failed', err);
+        }
+    }
+
+    // 主动恢复（回血回蓝）
+    var HP_PILL_PREFIXES = ['pill_recovery_', 'pill_blood_', 'pill_life_', 'pill_nirvana_', 'pill_heavenly_', 'pill_chaos_life_', 'sect_pill_blood_'];
+    var MP_PILL_PREFIXES = ['pill_spirit_', 'pill_spring_', 'pill_mana_', 'pill_xuan_spirit_', 'pill_clarity_', 'sect_pill_spirit_'];
+    var MP_PILL_EXCLUDES = ['pill_spirit_voyage_'];
+
+    function isHpPill(item) { var tid = String(item.templateId || '').toLowerCase(); for (var i = 0; i < HP_PILL_PREFIXES.length; i++) { if (tid.indexOf(HP_PILL_PREFIXES[i]) >= 0) return true; } return false; }
+    function isMpPill(item) { var tid = String(item.templateId || '').toLowerCase(); for (var i = 0; i < MP_PILL_EXCLUDES.length; i++) { if (tid.indexOf(MP_PILL_EXCLUDES[i]) >= 0) return false; } for (var i = 0; i < MP_PILL_PREFIXES.length; i++) { if (tid.indexOf(MP_PILL_PREFIXES[i]) >= 0) return true; } return false; }
+
+    async function fetchInventory() { try { var res = await gameApi().get('/api/game/inventory'); if (res && res.code === 200 && Array.isArray(res.data)) return res.data; } catch (_) {} return []; }
+    function getPlayerHpMp() { var p = getPlayer() || {}; return { hp: Number(p.hp || p.currentHp || 0), maxHp: Number(p.maxHp || p.hpMax || 1), mp: Number(p.mp || p.currentMp || 0), maxMp: Number(p.maxMp || p.mpMax || 1) }; }
+    function pct(cur, max) { return max > 0 ? Math.round(cur / max * 100) : 100; }
+
+    async function fetchSectShopServicesNew() {
+        var services = [];
+        try { var res = await gameApi().get('/api/game/player-sect/builtin-shop'); if (res && res.code === 200 && Array.isArray(res.data)) { for (var i = 0; i < res.data.length; i++) { if (res.data[i].type === 'service') { services.push({ templateId: res.data[i].templateId, name: res.data[i].name, cost: res.data[i].costContrib || 0, buyUrl: '/api/game/player-sect/buy-builtin-item', buyPayload: { itemId: String(res.data[i].templateId), quantity: 1 } }); } } } } catch (_) {}
+        return services;
+    }
+
+    function translatePriority(chineseStr) {
+        var map = { '灵力': 'mp', '丹药': 'pill', '宗门': 'sect', '仙缘': 'adpoint', '灵石': 'stone' };
+        return chineseStr.split(',').map(function(s) { var k = s.trim(); return map[k] || k; });
+    }
+
+    async function activeRecover() {
+        if (!gameApi()) return;
+        syncSettingsFromUi();
+        var mode = state.autoRecoveryMode;
+        if (mode === 'none') return;
+        var needHp = mode === 'hp' || mode === 'both';
+        var needMp = mode === 'mp' || mode === 'both';
+        var threshold = state.autoRecoveryThreshold;
+        var didSomething = false;
+        var maxSteps = 10, step = 0;
+        while (step < maxSteps) {
+            var s = getPlayerHpMp();
+            var hpPct = pct(s.hp, s.maxHp), mpPct = pct(s.mp, s.maxMp);
+            var hpNeed = needHp && hpPct < threshold, mpNeed = needMp && mpPct < threshold;
+            if (!hpNeed && !mpNeed) break;
+            step++; var acted = false;
+            if (hpNeed) {
+                var hpPriority = translatePriority(state.autoHpPriority);
+                for (var pi = 0; pi < hpPriority.length; pi++) {
+                    var m = hpPriority[pi];
+                    if (m === 'mp' && s.mp > s.maxMp * 0.2) { try { var missing = s.maxHp - s.hp; var healAmount = Math.min(missing, Math.floor(s.maxHp * 0.3)); if (healAmount > 0) { await gameApi().post('/api/game/heal-with-mp', { hpAmount: healAmount }); acted = true; } } catch (_) {} }
+                    else if (m === 'pill') { var inv = await fetchInventory(); for (var j = 0; j < inv.length; j++) { if (!isHpPill(inv[j])) continue; var qty = Number(inv[j].quantity || inv[j].count || 0); if (qty <= 0) continue; var itemId = inv[j].id || inv[j].itemId; if (!itemId) continue; try { await gameApi().post('/api/game/use-item', { itemId: itemId }); acted = true; } catch (_) {} break; } }
+                    else if (m === 'sect') { var svcs = await fetchSectShopServicesNew(); for (var k = 0; k < svcs.length; k++) { var name = String(svcs[k].name || '').toLowerCase(); if (name.indexOf('回血') < 0 && name.indexOf('气血') < 0 && name.indexOf('治疗') < 0 && name.indexOf('疗伤') < 0) continue; try { await gameApi().post(svcs[k].buyUrl, svcs[k].buyPayload); acted = true; } catch (_) {} break; } }
+                    if (acted) break;
+                }
+            }
+            if (!acted && mpNeed) {
+                var mpPriority = translatePriority(state.autoMpPriority);
+                for (var pj = 0; pj < mpPriority.length; pj++) {
+                    var mm = mpPriority[pj];
+                    if (mm === 'stone') { try { await gameApi().post('/api/game/absorb-stone', { stoneType: 'spirit', amount: 1 }); acted = true; } catch (_) {} }
+                    else if (mm === 'pill') { var inv2 = await fetchInventory(); for (var j2 = 0; j2 < inv2.length; j2++) { if (!isMpPill(inv2[j2])) continue; var qty2 = Number(inv2[j2].quantity || inv2[j2].count || 0); if (qty2 <= 0) continue; var itemId2 = inv2[j2].id || inv2[j2].itemId; if (!itemId2) continue; try { await gameApi().post('/api/game/use-item', { itemId: itemId2 }); acted = true; } catch (_) {} break; } }
+                    else if (mm === 'sect') { var svcs2 = await fetchSectShopServicesNew(); for (var k2 = 0; k2 < svcs2.length; k2++) { var name2 = String(svcs2[k2].name || '').toLowerCase(); if (name2.indexOf('回灵') < 0 && name2.indexOf('灵力') < 0) continue; try { await gameApi().post(svcs2[k2].buyUrl, svcs2[k2].buyPayload); acted = true; } catch (_) {} break; } }
+                    if (acted) break;
+                }
+            }
+            if (acted) { didSomething = true; await sleep(400); await refreshPlayer(); } else break;
+        }
+        if (didSomething) setStatus('恢复完成', 'run');
     }
 
     function extractChatPlayerInfo(msgEl) {
@@ -1879,16 +2027,16 @@
     }
 
     async function handleChatMessagesBatch() {
-        if (!state.autoRecruit) return;
         var container = document.getElementById('inlineChatMessages');
         if (!container) return;
 
         var msgs = container.querySelectorAll('.chat-msg[data-chat-message-id]');
         for (var i = 0; i < msgs.length; i++) {
             var msgEl = msgs[i];
+            if (state.wecomNotify) forwardChatMessage(msgEl);
             var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
             if (!msgId || recruitProcessedIds[msgId]) continue;
-            await handleNewChatMessage(msgEl);
+            if (state.autoRecruit) await handleNewChatMessage(msgEl);
         }
     }
 
@@ -1906,6 +2054,15 @@
         if (recruitObserver) return;
         var container = document.getElementById('inlineChatMessages');
         if (!container) return;
+
+        // 记下当前最大消息 ID，只转发之后的新消息
+        var existing = container.querySelectorAll('.chat-msg[data-chat-message-id]');
+        var maxId = 0;
+        for (var ex = 0; ex < existing.length; ex++) {
+            var eid = Number(existing[ex].getAttribute('data-chat-message-id') || 0);
+            if (eid > maxId) maxId = eid;
+        }
+        chatForwardMaxId = maxId;
 
         recruitObserver = new MutationObserver(function () {
             handleChatMessagesBatch();
@@ -2316,6 +2473,7 @@
         '极品': 5,
         '绝品': 6,
         '仙品': 7,
+        '凡纹': 1, '灵纹': 2, '宝纹': 3, '仙纹': 4, '神纹': 5, '圣纹': 6, '天纹': 7,
         '神品': 8
     };
 
@@ -2803,6 +2961,7 @@
         normalizeMultiplier();
         updateMeter();
         setStatus('启动中', 'run');
+        wecomEnqueue('清理开始', '神识清理 v' + SCRIPT_VERSION + ' 已启动循环清理');
         if (!await checkDaoyunBeforeStart('自动清理')) {
             running = false;
             updateMeter();
@@ -2866,11 +3025,15 @@
             }
 
             if (state.sectQuickRecovery) {
-                await triggerSectRecovery(false);
+                await activeRecover();
             }
 
             if (state.autoRepair) {
                 await triggerAutoRepair(false);
+            }
+
+            if (state.autoMasterRequests) {
+                await handleMasterRequests();
             }
 
             var stopReason = shouldStopBeforeAction();
@@ -2947,6 +3110,7 @@
     }
     function stop(reason) {
         running = false;
+        wecomEnqueue('脚本停止', reason || '手动停止');
         if (loopTimer) {
             clearTimeout(loopTimer);
             loopTimer = null;
@@ -3461,6 +3625,91 @@
         }
     }
 
+    // 排序列表构建 (回血/回灵顺序)
+    var SORT_CN_MAP = { 'mp': '灵力', 'pill': '丹药', 'sect': '宗门', 'adpoint': '仙缘', 'stone': '灵石' };
+    var SORT_EN_MAP = { '灵力': 'mp', '丹药': 'pill', '宗门': 'sect', '仙缘': 'adpoint', '灵石': 'stone' };
+
+    function buildSortList(id, items) {
+        var current = (id === 'hp' ? state.autoHpPriority : state.autoMpPriority) || '';
+        var enabled = current.split(',').map(function(s){return SORT_EN_MAP[s.trim()] || s.trim();}).filter(Boolean);
+        var order = {};
+        for (var i = 0; i < enabled.length; i++) order[enabled[i]] = i;
+        var nextOrder = enabled.length;
+        var html = '<div class="sort-list" id="sortList_' + id + '">';
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            var checked = order[it.key] !== undefined;
+            var pos = checked ? order[it.key] : nextOrder++;
+            html += '<div class="sort-row" data-key="' + it.key + '" data-order="' + pos + '">';
+            html += '<label class="lvsc-check sort-check"><input type="checkbox" class="sort-cb" id="lvscSort_' + id + '_' + it.key + '" ' + (checked ? 'checked' : '') + ' onchange="window._sortRebuild(\x27' + id + '\x27)">' + it.label + '</label>';
+            html += '<span class="sort-desc">' + (it.desc || '') + '</span>';
+            html += '<button class="sort-btn sort-up" onclick="window._sortMove(\x27' + id + '\x27,\x27' + it.key + '\x27,-1)">▲</button>';
+            html += '<button class="sort-btn sort-dn" onclick="window._sortMove(\x27' + id + '\x27,\x27' + it.key + '\x27,1)">▼</button>';
+            html += '</div>';
+        }
+        html += '</div>';
+        var val = enabled.join(',');
+        html += '<input type="hidden" id="lvscAuto' + (id === 'hp' ? 'H' : 'M') + 'pPriority" value="' + val + '">';
+        return html;
+    }
+
+    function sortRebuild(id) {
+        var list = document.getElementById('sortList_' + id);
+        if (!list) return;
+        var rows = list.querySelectorAll('.sort-row');
+        var parts = [];
+        // Sort rows by data-order
+        var sorted = [];
+        for (var i = 0; i < rows.length; i++) sorted.push(rows[i]);
+        sorted.sort(function(a,b){return (a.getAttribute('data-order')|0)-(b.getAttribute('data-order')|0);});
+        for (var i = 0; i < sorted.length; i++) {
+            var cb = sorted[i].querySelector('.sort-cb');
+            if (cb && cb.checked) parts.push(sorted[i].getAttribute('data-key'));
+        }
+        // Convert English keys to Chinese for storage
+        var cnParts = [];
+        for (var p = 0; p < parts.length; p++) cnParts.push(SORT_CN_MAP[parts[p]] || parts[p]);
+        var val = cnParts.join(',');
+        var hid = document.getElementById('lvscAuto' + (id === 'hp' ? 'H' : 'M') + 'pPriority');
+        if (hid) hid.value = val;
+        // Also update state immediately
+        if (id === 'hp') state.autoHpPriority = val;
+        else state.autoMpPriority = val;
+        syncSettingsFromUi();
+    }
+
+    function sortMove(id, key, delta) {
+        var list = document.getElementById('sortList_' + id);
+        if (!list) return;
+        var rows = list.querySelectorAll('.sort-row');
+        // Collect rows with their data-order
+        var arr = [];
+        for (var i = 0; i < rows.length; i++) arr.push({ el: rows[i], order: rows[i].getAttribute('data-order')|0, key: rows[i].getAttribute('data-key') });
+        // Find the target
+        for (var i = 0; i < arr.length; i++) {
+            if (arr[i].key === key) {
+                var newOrder = arr[i].order + delta;
+                // Find existing item at newOrder and swap
+                for (var j = 0; j < arr.length; j++) {
+                    if (j !== i && arr[j].order === newOrder) { arr[j].order = arr[i].order; break; }
+                }
+                arr[i].order = Math.max(0, newOrder);
+                break;
+            }
+        }
+        // Apply new orders to DOM
+        arr.sort(function(a,b){return a.order-b.order;});
+        for (var i = 0; i < arr.length; i++) {
+            arr[i].el.setAttribute('data-order', i);
+            // Move element in DOM to match
+            list.appendChild(arr[i].el);
+        }
+        sortRebuild(id);
+    }
+
+    window._sortRebuild = sortRebuild;
+    window._sortMove = sortMove;
+
     function buildPanel() {
         var oldPanel = document.getElementById('lvscPanel');
         if (oldPanel) oldPanel.remove();
@@ -3519,6 +3768,11 @@
             '.lvsc-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:8px}',
             '.lvsc-span2{grid-column:1 / -1}',
             '.lvsc-help{font-size:11px;color:#cfc6b2;opacity:.82;line-height:1.45}',
+            '.sort-list{display:grid;gap:3px;margin:4px 0}',
+            '.sort-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;background:rgba(255,255,255,.03)}',
+            '.sort-check{flex:1;min-width:0;display:flex!important;align-items:center!important;gap:4px!important}',
+            '.sort-desc{font-size:10px;color:#8f846f;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+            '.sort-btn{width:22px;height:18px;padding:0;background:rgba(255,255,255,.06);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:3px!important;font-size:9px;cursor:pointer;line-height:1;text-align:center;flex-shrink:0}',
             '.lvsc-check{display:flex!important;align-items:center;gap:0;line-height:1.35;font-size:12px}',
             '#lvscSpiritTrack{height:8px;background:rgba(255,255,255,.12);border-radius:999px;overflow:hidden}',
             '#lvscSpiritFill{height:100%;width:0;background:linear-gradient(90deg,#8667ff,#d8b4fe)}',
@@ -3618,10 +3872,22 @@
             '<button id="lvscAutoRecoveryBtn">保存配置</button>' +
             '<label>低于百分比<input id="lvscAutoRecoveryThreshold" type="number" min="0" max="100" step="1"></label>' +
             '<label>恢复到百分比<input id="lvscAutoRecoveryTarget" type="number" min="0" max="100" step="1"></label>' +
-            '<label class="lvsc-check"><input id="lvscSectQuickRecovery" type="checkbox">宗门快速回血</label>' +
-            '<button id="lvscSectRecoveryBtn">宗门回血</button>' +
-            '<label class="lvsc-span2">回血顺序<select id="lvscAutoHpPriority"><option value="mp,pill,adpoint">灵力 → 丹药 → 仙缘</option><option value="pill,mp,adpoint">丹药 → 灵力 → 仙缘</option><option value="adpoint,mp,pill">仙缘 → 灵力 → 丹药</option></select></label>' +
-            '<label class="lvsc-span2">回灵顺序<select id="lvscAutoMpPriority"><option value="stone,pill,adpoint">灵石 → 丹药 → 仙缘</option><option value="pill,stone,adpoint">丹药 → 灵石 → 仙缘</option><option value="adpoint,stone,pill">仙缘 → 灵石 → 丹药</option></select></label>' +
+            '<label class="lvsc-check"><input id="lvscSectQuickRecovery" type="checkbox">主动恢复（回血/回蓝）</label>' +
+            '<button id="lvscSectRecoveryBtn">立即恢复</button>' +
+            '<div class="lvsc-section-title">回血顺序</div>' +
+            buildSortList('hp', [
+                { key: 'mp',      label: '灵力疗伤', desc: '消耗灵力恢复血量' },
+                { key: 'pill',    label: '回血丹药', desc: '自动使用背包丹药' },
+                { key: 'sect',    label: '宗门治疗', desc: '宗门商铺治疗服务' },
+                { key: 'adpoint', label: '仙缘恢复', desc: '需手动操作' }
+            ]) +
+            '<div class="lvsc-section-title">回灵顺序</div>' +
+            buildSortList('mp', [
+                { key: 'stone',   label: '灵石凝炼', desc: '吸收灵石化灵力' },
+                { key: 'pill',    label: '回灵丹药', desc: '自动使用背包丹药' },
+                { key: 'sect',    label: '宗门恢复', desc: '宗门商铺灵力服务' },
+                { key: 'adpoint', label: '仙缘恢复', desc: '需手动操作' }
+            ]) +
             '</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
@@ -3639,6 +3905,7 @@
             '<button id="lvscRecruitBtn">手动收徒</button>' +
             '</div>' +
             '<div class="lvsc-help">监控世界聊天每条新发言，直接调收徒 API，由服务器判断是否满足收徒条件。</div>' +
+            '<label class="lvsc-check"><input id="lvscAutoMasterRequests" type="checkbox">自动处理徒弟请求（问道/护道/历练）</label>' +
             '<div id="lvscRecruitLog">待命</div>' +
             '</div>' +
             '</div>' +
@@ -3653,6 +3920,7 @@
             '<label class="lvsc-check"><input id="lvscAutoExploreAfterMeditate" type="checkbox">收功后自动继续探索</label>' +
             '<label class="lvsc-check"><input id="lvscNightOnlyExplore" type="checkbox">只在游戏夜晚探索</label>' +
             '<label class="lvsc-check"><input id="lvscAutoReviveDeath" type="checkbox">陨落后自动引渡归来</label>' +
+            '<label>复活后前往<input id="lvscReviveExploreArea" type="text" placeholder="区域名称，如：仙城外域"></label>' +
             '<label class="lvsc-check"><input id="lvscCheckDaoyunBoost" type="checkbox">启动前检查道韵加成</label>' +
             '<label class="lvsc-check"><input id="lvscUseAdvancedMeditate" type="checkbox">优先仙缘高级冥想</label>' +
             '</div>' +
@@ -3717,9 +3985,11 @@
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
             '<div class="lvsc-section-title">群机器人 Webhook</div>' +
-            '<label>Webhook 地址<input id="lvscWecomWebhookUrl" type="text" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."></label>' +
+            '<label>脚本通知<input id="lvscWecomNotifyWebhook" type="text" placeholder="清理/收徒/陨落/新版"></label>' +
+            '<label>世界消息<input id="lvscWecomWorldWebhook" type="text" placeholder="世界频道聊天"></label>' +
+            '<label>私信<input id="lvscWecomPrivateWebhook" type="text" placeholder="师门/道友私聊"></label>' +
             '<button id="lvscWecomTestBtn">测试发送</button>' +
-            '<div class="lvsc-help">在企业微信内部群添加群机器人获取 webhook URL。消息通过事件桥接发到群里，手机上企业微信 App 会弹推送。</div>' +
+            '<div class="lvsc-help">在企业微信内部群添加群机器人获取 webhook URL。三个 URL 分别对应三类消息。留空则不发送该类消息。</div>' +
             '</div>' +
             '<div class="lvsc-help">默认读取 GitHub 公告。脚本管理器会根据 updateURL/downloadURL 检测并提示下载安装。</div>' +
             '</div>' +
@@ -3753,6 +4023,7 @@
         document.getElementById('lvscSectQuickRecovery').checked = state.sectQuickRecovery;
         document.getElementById('lvscAutoRepair').checked = state.autoRepair;
         document.getElementById('lvscRepairThreshold').value = String(state.repairThreshold);
+        document.getElementById('lvscReviveExploreArea').value = String(state.reviveExploreArea);
         document.getElementById('lvscAutoRecruit').checked = state.autoRecruit;
         document.getElementById('lvscRecruitIntervalMs').value = String(state.recruitIntervalMs);
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
@@ -3780,7 +4051,10 @@
         document.getElementById('lvscDesktopNotify').checked = state.desktopNotify;
         document.getElementById('lvscChatOnTop').checked = state.chatOnTop;
         document.getElementById('lvscWecomNotify').checked = state.wecomNotify;
-        document.getElementById('lvscWecomWebhookUrl').value = String(state.wecomWebhookUrl);
+        document.getElementById('lvscWecomNotifyWebhook').value = String(state.wecomNotifyWebhook);
+        document.getElementById('lvscWecomWorldWebhook').value = String(state.wecomWorldWebhook);
+        document.getElementById('lvscWecomPrivateWebhook').value = String(state.wecomPrivateWebhook);
+        document.getElementById('lvscAutoMasterRequests').checked = state.autoMasterRequests;
         document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
@@ -3809,7 +4083,8 @@
         };
         document.getElementById('lvscAutoRecoveryBtn').onclick = applyAutoRecoverySettings;
         document.getElementById('lvscSectRecoveryBtn').onclick = function () {
-            triggerSectRecovery(true);
+            syncSettingsFromUi();
+            activeRecover();
         };
         document.getElementById('lvscRepairBtn').onclick = function () {
             triggerAutoRepair(true);
@@ -3861,6 +4136,7 @@
         document.getElementById('lvscSectQuickRecovery').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRepair').onchange = syncSettingsFromUi;
         document.getElementById('lvscRepairThreshold').onchange = syncSettingsFromUi;
+        document.getElementById('lvscReviveExploreArea').onchange = syncSettingsFromUi;
         document.getElementById('lvscAutoRecruit').onchange = function () {
             syncSettingsFromUi();
             if (state.autoRecruit) {
@@ -3900,11 +4176,17 @@
         document.getElementById('lvscWecomNotify').onchange = function () {
             syncSettingsFromUi();
             document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
+            if (state.wecomNotify) startRecruitObserver();
         };
-        document.getElementById('lvscWecomWebhookUrl').onchange = syncSettingsFromUi;
+        document.getElementById('lvscWecomNotifyWebhook').onchange = syncSettingsFromUi;
+        document.getElementById('lvscWecomWorldWebhook').onchange = syncSettingsFromUi;
+        document.getElementById('lvscWecomPrivateWebhook').onchange = syncSettingsFromUi;
+        document.getElementById('lvscAutoMasterRequests').onchange = syncSettingsFromUi;
         document.getElementById('lvscWecomTestBtn').onclick = function () {
             syncSettingsFromUi();
-            wecomEnqueue('灵界通知测试', '神识清理 v' + SCRIPT_VERSION + ' — 配置成功！');
+            if (state.wecomNotifyWebhook) wecomEnqueue('通知测试', '通知 OK！', state.wecomNotifyWebhook);
+            if (state.wecomWorldWebhook) wecomEnqueue('世界测试', '世界 OK！', state.wecomWorldWebhook);
+            if (state.wecomPrivateWebhook) wecomEnqueue('私信测试', '私信 OK！', state.wecomPrivateWebhook);
         };
         document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
         document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
@@ -3923,7 +4205,7 @@
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
         setInterval(updateMeter, 2000);
         applyChatZIndex(state.chatOnTop);
-        if (state.autoRecruit) {
+        if (state.autoRecruit || state.wecomNotify) {
             setTimeout(function () { startRecruitObserver(); }, 2000);
         }
     }
