@@ -110,7 +110,7 @@
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
     var ONLINE_HEARTBEAT_MS = 30000;
     var GITHUB_REPO_SLUG = 'SuRanHF/lingverse-spirit-cleaner';
-    var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/SuRanHF/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
+    var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
     var wecomBusy = false;

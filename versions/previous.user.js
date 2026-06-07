@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.2
+// @version      1.2.3
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,18 +104,23 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.2';
+    var SCRIPT_VERSION = '1.2.3';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
     var ONLINE_HEARTBEAT_MS = 30000;
     var GITHUB_REPO_SLUG = 'SuRanHF/lingverse-spirit-cleaner';
-    var DEFAULT_UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/release.json?v=' + SCRIPT_VERSION;
+    var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.2.3',
+            title: '版本检测走国内服务器',
+            notes: ['更新检测优先从 online-server/api/version 获取，国内直连无需 VPN。']
+        },
         {
             version: '1.2.2',
             title: '商人严格匹配开关',
@@ -301,10 +306,12 @@
     }
 
     function onlineStatsPayload() {
+        var player = getPlayer() || {};
         return {
             clientId: onlineClientId(),
             version: SCRIPT_VERSION,
             page: location.origin + location.pathname,
+            playerName: player.name || player.playerName || localStorage.getItem('playerName') || '',
             running: !!running,
             monitoringSpirit: !!monitoringSpirit,
             autoTrialRunning: !!autoTrialRunning,
@@ -3571,22 +3578,17 @@
     async function checkCloudUpdate(manual) {
         if (checkingCloudUpdate) return false;
         syncSettingsFromUi();
-        var url = state.updateManifestUrl;
-        if (!url) {
-            if (manual) setStatus('请先填写云端公告 JSON 地址', 'warn');
-            return;
-        }
         checkingCloudUpdate = true;
         try {
             if (manual) setStatus('检测云端更新中', 'run');
 
             var release = null;
+            // 优先从 Gitee 获取（国内直连，无需 VPN）
             var urls = [url];
-
-            // CDN fallback: if using the default GitHub raw URL, also try jsDelivr mirror
-            if (url.indexOf('raw.githubusercontent.com/' + GITHUB_REPO_SLUG) >= 0) {
-                urls.push('https://cdn.jsdelivr.net/gh/' + GITHUB_REPO_SLUG + '@main/release.json?v=' + SCRIPT_VERSION);
-            }
+            // 回退：online-server + GitHub + jsDelivr
+            urls.push((state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/version'));
+            urls.push('https://raw.githubusercontent.com/' + GITHUB_REPO_SLUG + '/main/release.json?v=' + SCRIPT_VERSION);
+            urls.push('https://cdn.jsdelivr.net/gh/' + GITHUB_REPO_SLUG + '@main/release.json?v=' + SCRIPT_VERSION);
 
             for (var u = 0; u < urls.length; u++) {
                 try {
@@ -3610,8 +3612,8 @@
             }
 
             var newer = compareVersion(release.version, SCRIPT_VERSION) > 0;
-            var seenKey = 'lvSpiritCleaner.seenCloudVersion.' + simpleHash(url);
-            var remindKey = 'lvSpiritCleaner.lastCloudReminder.' + simpleHash(url);
+            var seenKey = 'lvSpiritCleaner.seenCloudVersion';
+            var remindKey = 'lvSpiritCleaner.lastCloudReminder';
             var lastReminderAt = Number(localStorage.getItem(remindKey) || 0);
             var shouldRemind = manual || localStorage.getItem(seenKey) !== release.version || Date.now() - lastReminderAt > CLOUD_UPDATE_REMIND_MS;
             if (newer && shouldRemind) {
