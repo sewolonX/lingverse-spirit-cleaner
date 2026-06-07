@@ -2,7 +2,7 @@
   "version": "1.2.2",
   "title": "神识清理 v1.2.2",
   "notes": [
-    "修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。"
+    "商人购买新增\"严格匹配\"开关：关掉则品质或名字满足其一即购买（OR 模式）。"
   ],
   "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.2"
 }

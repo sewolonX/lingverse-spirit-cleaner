@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.1
+// @version      1.2.2
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.1';
+    var SCRIPT_VERSION = '1.2.2';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -117,8 +117,41 @@
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
+            version: '1.2.2',
+            title: '商人严格匹配开关',
+            notes: ['新增"严格匹配（品质 AND 名字）"复选框，关掉则品质或名字满足其一即购买。']
+        },
+        {
+            version: '1.2.1',
+            title: '高级冥想后继续探索',
+            notes: ['高级冥想后只要神识够探索就继续，不再强制回满才探索。']
+        },
+        {
+            version: '1.2.0',
+            title: '大更新',
+            notes: [
+                '铭文天纹适配：等级表加入凡纹~天纹(R1~R7)。',
+                '商人按条件购买：关键词支持品质名（传说/史诗等），自动按稀有度过滤。',
+                '引渡复活后自动前往指定区域探索。',
+                '回血回蓝滑块式排序：勾选+上下调节，中文关键词。',
+                '企业微信三通道 webhook + 世界聊天转发 + 私信/师门检测。',
+                '三个通知事件：清理开始、脚本停止、神识不足。',
+                '自动处理徒弟请求：问道/护道/历练。'
+            ]
+        },
+        {
+            version: '1.1.6',
+            title: '修复脚本加载失败',
+            notes: ['删除重复闭合花括号，恢复 buildPanel 函数完整性。']
+        },
+        {
+            version: '1.1.5',
+            title: '修复云端公告缓存 + 历史公告',
+            notes: ['历史公告独立变量 BUILTIN_CHANGELOG，不受发布脚本影响。']
+        },
+        {
             version: '1.1.4',
-            title: '历史公告',
+            title: '历史公告面板',
             notes: ['更新弹窗新增历史公告面板，从 v1.1.0 起记录每次版本变更。']
         },
         {
@@ -154,7 +187,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '修复脚本加载失败：删除重复闭合花括号，恢复 buildPanel 函数完整性。'
+            '商人购买新增"严格匹配"开关：关掉则品质或名字满足其一即购买（OR 模式）。'
         ]
     };
 
