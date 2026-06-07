@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.3
+// @version      1.2.4
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -104,7 +104,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.3';
+    var SCRIPT_VERSION = '1.2.4';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -3583,8 +3583,8 @@
             if (manual) setStatus('检测云端更新中', 'run');
 
             var release = null;
-            // 优先从 Gitee 获取（国内直连，无需 VPN）
-            var urls = [url];
+            var baseUrl = state.updateManifestUrl || DEFAULT_UPDATE_MANIFEST_URL;
+            var urls = [baseUrl];
             // 回退：online-server + GitHub + jsDelivr
             urls.push((state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/version'));
             urls.push('https://raw.githubusercontent.com/' + GITHUB_REPO_SLUG + '/main/release.json?v=' + SCRIPT_VERSION);

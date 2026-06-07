@@ -3583,8 +3583,8 @@
             if (manual) setStatus('检测云端更新中', 'run');
 
             var release = null;
-            // 优先从 Gitee 获取（国内直连，无需 VPN）
-            var urls = [url];
+            var baseUrl = state.updateManifestUrl || DEFAULT_UPDATE_MANIFEST_URL;
+            var urls = [baseUrl];
             // 回退：online-server + GitHub + jsDelivr
             urls.push((state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/version'));
             urls.push('https://raw.githubusercontent.com/' + GITHUB_REPO_SLUG + '/main/release.json?v=' + SCRIPT_VERSION);
