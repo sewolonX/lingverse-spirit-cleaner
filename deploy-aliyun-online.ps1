@@ -174,17 +174,31 @@ function Write-HtmlResponse($Stream, $Stats) {
     <div id="feedbackList" style="display:grid;gap:8px;"><div class="muted">Loading...</div></div>
     <script>
       fetch('/api/feedback').then(function(r){return r.json()}).then(function(d){
-        var el=document.getElementById('feedbackList');
-        if(!d.list||!d.list.length){el.innerHTML='<div class=muted>No feedback yet</div>';return;}
-        el.innerHTML=d.list.map(function(f){
-          var t=f.time||''; var d=t.split('T')[0]||''; var ti=t.split('T')[1]||''; ti=ti.split('.')[0]||ti;
-          return '<div style="background:rgba(255,255,255,.03);padding:10px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);">'+
-            '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'+
-            '<b style="color:#d8b4fe;">'+(f.playerName||'Anonymous')+'</b>'+
-            '<span style="font-size:11px;color:#9b927f;">v'+(f.version||'')+' '+d+' '+ti+'</span></div>'+
-            '<div style="color:#cfc6b2;font-size:13px;">'+f.text.replace(/</g,'&lt;')+'</div></div>';
-        }).join('');
+        renderFeedback(d.list||[]);
       });
+      function renderFeedback(list){
+        var el=document.getElementById('feedbackList');
+        if(!list||!list.length){el.innerHTML='<div class=muted>No feedback yet</div>';return;}
+        el.innerHTML=list.map(function(f){
+          var t=f.time||''; var dd=t.split('T')[0]||''; var ti=t.split('T')[1]||''; ti=ti.split('.')[0]||ti;
+          var done=f.status==='done';
+          var bg=done?'background:rgba(155,231,195,.06);opacity:.6':'background:rgba(255,255,255,.03)';
+          var label=done?'<span style="color:#9be7c3;font-size:11px;">done</span> ':'';
+          var btn=done?'':'<button onclick="markDone('+f.index+')" style="background:rgba(155,231,195,.14);color:#9be7c3;border:1px solid rgba(155,231,195,.2);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Mark Done</button>';
+          return '<div style="'+bg+';padding:10px 14px;border-radius:6px;border:1px solid rgba(255,255,255,.06);">'+
+            '<div style="display:flex;justify-content:space-between;margin-bottom:4px;">'+
+            '<b style="color:#d8b4fe;">'+label+(f.playerName||'Anonymous')+'</b>'+
+            '<span style="font-size:11px;color:#9b927f;">v'+(f.version||'')+' '+dd+' '+ti+'</span></div>'+
+            '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px;">'+
+            '<div style="color:#cfc6b2;font-size:13px;flex:1;">'+(f.text||'').replace(/</g,'&lt;')+'</div>'+btn+'</div></div>';
+        }).join('');
+      }
+      function markDone(idx){
+        fetch('/api/feedback/done',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx})})
+          .then(function(r){return r.json()}).then(function(d){
+            if(d.ok) fetch('/api/feedback').then(function(r){return r.json()}).then(function(d2){ renderFeedback(d2.list||[]); });
+          });
+      }
     </script>
   </main>
 </body>
@@ -302,6 +316,7 @@ while ($true) {
         if ($request.Method -eq "POST" -and $request.Path -eq "/api/feedback") {
             $data = $request.Body | ConvertFrom-Json
             $entry = [ordered]@{
+                status = "pending"
                 text = [string]$data.text
                 playerName = [string]$data.playerName
                 version = [string]$data.version
@@ -314,8 +329,34 @@ while ($true) {
             continue
         }
 
+        if ($request.Method -eq "POST" -and $request.Path -eq "/api/feedback/done") {
+            $data = $request.Body | ConvertFrom-Json
+            $idx = [int]$data.index
+            if ($idx -ge 0 -and $idx -lt $Feedbacks.Count) {
+                $Feedbacks[$idx].status = "done"
+                try { $Feedbacks | ConvertTo-Json -Depth 4 | Out-File -LiteralPath $FeedbackFile -Encoding UTF8 } catch {}
+                Write-JsonResponse $stream 200 ([ordered]@{ ok = $true })
+            } else {
+                Write-JsonResponse $stream 400 ([ordered]@{ ok = $false; error = "invalid index" })
+            }
+            continue
+        }
+
         if ($request.Method -eq "GET" -and $request.Path -eq "/api/feedback") {
-            Write-JsonResponse $stream 200 ([ordered]@{ ok = $true; list = @($Feedbacks | Select-Object -Last 50) })
+            $list = @()
+            for ($i = 0; $i -lt $Feedbacks.Count; $i++) {
+                $fb = $Feedbacks[$i]
+                $item = [ordered]@{
+                    index = $i
+                    status = [string]$fb.status
+                    text = [string]$fb.text
+                    playerName = [string]$fb.playerName
+                    version = [string]$fb.version
+                    time = [string]$fb.time
+                }
+                $list += $item
+            }
+            Write-JsonResponse $stream 200 ([ordered]@{ ok = $true; list = @($list | Select-Object -Last 50) })
             continue
         }
 
