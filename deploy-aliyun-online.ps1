@@ -113,7 +113,8 @@ function Get-FlagText($Flags) {
 function Write-HtmlResponse($Stream, $Stats) {
     $rows = ""
     foreach ($client in $Stats.clients) {
-        $rows += "<tr><td><b>$(Escape-Html $(if($client.playerName){$client.playerName}else{$client.id}))</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)秒前</td></tr>"
+        $displayName = if ($client.playerName) { $client.playerName } else { $client.id }
+        $rows += "<tr><td><b>$(Escape-Html $displayName)</b></td><td>$(Escape-Html $client.version)</td><td>$(Escape-Html (Get-FlagText $client.flags))</td><td>$($client.secondsAgo)秒前</td></tr>"
     }
     if ([string]::IsNullOrWhiteSpace($rows)) {
         $rows = '<tr><td colspan="4" class="muted">暂无在线记录</td></tr>'
