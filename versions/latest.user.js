@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.7
+// @version      1.2.8
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.7';
+    var SCRIPT_VERSION = '1.2.8';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -214,7 +214,7 @@
         version: SCRIPT_VERSION,
         title: '神识清理 v' + SCRIPT_VERSION,
         notes: [
-            '6个方案A通知：商人购买/装备维修/冥想完成/藏宝图批次/铭文命中/虚空淬体。私聊监听修复。'
+            '新增本命武器自动吞噬：优先吞噬同类型有属性装备，无装备时自动吞噬材料。'
         ]
     };
 
@@ -1834,59 +1834,64 @@
         if (!state.autoNatalDevour && !manual) return false;
 
         try {
-            // Get natal artifact info
             var infoRes = await gameApi().get('/api/game/natal/artifact');
             if (!infoRes || infoRes.code !== 200 || !infoRes.data || !infoRes.data.exists) {
                 if (manual) setStatus('未找到本命法宝，请先凝练', 'warn');
                 return false;
             }
             var info = infoRes.data;
-            var slot = info.slot || 'weapon';
-            setStatus('本命吞噬：查找可吞噬装备', 'run');
+            var slot = String(info.slot || info.equipSlot || 'weapon').toLowerCase();
+            setStatus('本命吞噬：查背包', 'run');
 
-            // Try equipment devour first
-            var eqRes = await gameApi().get('/api/game/equipment/current');
-            if (eqRes && eqRes.code === 200 && Array.isArray(eqRes.data)) {
-                for (var i = 0; i < eqRes.data.length; i++) {
-                    var item = eqRes.data[i];
-                    if (!item || item.isNatalArtifact || item.isNatal || item.isLocked || item.isEquipped) continue;
-                    if (item.type !== slot) continue;
-                    var hasBonus = (item.attackBonus || item.defenseBonus || item.hpBonus || item.spiritBonus);
-                    if (!hasBonus) continue;
-                    var itemId = item.id || item.itemId;
-                    if (!itemId) continue;
-                    setStatus('本命吞噬装备: ' + (item.name || ''), 'run');
-                    try {
-                        var devRes = await gameApi().post('/api/game/natal/artifact/devour-equipment', { itemId: itemId, investPercent: 100 });
-                        if (devRes && devRes.code === 200) {
-                            setStatus('本命吞噬装备完成: ' + (item.name || ''), 'run');
-                            wecomEnqueue('本命吞噬', '已吞噬装备: ' + (item.name || '') + ' (攻/防/血/神)');
-                            await sleep(500);
-                            await refreshPlayer();
-                            return true;
-                        }
-                    } catch (_) {}
-                    break; // Only try one equipment per call to avoid over-consuming
-                }
+            // 从背包找可吞噬装备
+            var inv = [];
+            try {
+                var invRes = await gameApi().get('/api/game/inventory');
+                if (invRes && invRes.code === 200 && Array.isArray(invRes.data)) inv = invRes.data;
+            } catch (_) {}
+
+            for (var i = 0; i < inv.length; i++) {
+                var item = inv[i];
+                if (!item) continue;
+                if (item.isNatalArtifact || item.isNatal || item.isLocked || item.isEquipped || item.isIncarnationEquipped) continue;
+                var itemType = String(item.type || item.equipSlot || '').toLowerCase();
+                if (itemType !== slot) continue;
+                var hasBonus = (item.attackBonus || item.defenseBonus || item.hpBonus || item.spiritBonus || item.atk || item.def || item.hp);
+                if (!hasBonus) continue;
+                var itemId = item.id || item.itemId || item.instanceId;
+                if (!itemId) continue;
+                setStatus('本命吞噬装备: ' + (item.name || item.itemName || ''), 'run');
+                try {
+                    var devRes = await gameApi().post('/api/game/natal/artifact/devour-equipment', { itemId: Number(itemId), investPercent: 100 });
+                    if (devRes && devRes.code === 200) {
+                        setStatus('本命吞噬装备完成', 'run');
+                        wecomEnqueue('本命吞噬', '已吞噬装备: ' + (item.name || item.itemName || ''));
+                        await sleep(500);
+                        await refreshPlayer();
+                        return true;
+                    }
+                    if (devRes && devRes.message) setStatus('吞噬失败: ' + devRes.message, 'warn');
+                } catch (_) {}
+                break;
             }
 
-            // Fallback: devour materials
+            // 无装备时吞噬材料
             setStatus('本命吞噬材料', 'run');
             try {
                 var matRes = await gameApi().post('/api/game/natal/artifact/devour', { investPercent: 100 });
                 if (matRes && matRes.code === 200) {
                     setStatus('本命吞噬材料完成', 'run');
-                    wecomEnqueue('本命吞噬', '已吞噬材料，第 ' + (info.devourCount + 1) + ' 次');
+                    wecomEnqueue('本命吞噬', '已吞噬材料，第 ' + ((info.devourCount || 0) + 1) + ' 次');
                     await sleep(500);
                     await refreshPlayer();
                     return true;
                 }
-                if (matRes && matRes.message) setStatus('本命吞噬失败: ' + matRes.message, 'warn');
+                if (matRes && matRes.message) setStatus('吞噬材料失败: ' + matRes.message, 'warn');
             } catch (_) {}
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] natal devour failed', err);
         }
-        if (manual) setStatus('本命吞噬失败', 'warn');
+        if (manual) setStatus('未找到可吞噬装备或材料不足', 'warn');
         return false;
     }
 
