@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.5
+// @version      1.2.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.5';
+    var SCRIPT_VERSION = '1.2.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -118,6 +118,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.2.6',
+            title: '细分通知 + 私聊监听',
+            notes: ['6个方案A新增通知：商人购买/装备维修/冥想完成/藏宝图批次/铭文命中/虚空淬体。', '私聊(道友消息)容器监听修复，道友消息也会转发到企业微信。']
+        },
         {
             version: '1.2.5',
             title: '反馈按钮 + Gitee 自动更新',
@@ -1043,6 +1048,7 @@
         if (!running) return false;
 
         setStatus('神识已到阈值，收功', 'run');
+        wecomEnqueue('冥想完成', '收功完成，神识已恢复到阈值 ' + targetSpirit + '/' + info.maxSpirit);
         await stopMeditationAndRefresh();
         return true;
     }
@@ -1203,7 +1209,7 @@
         }
 
         var ok = await useVoidBodyPill(item);
-        if (ok) setStatus('虚空淬体已补齐', 'run');
+        if (ok) { setStatus('虚空淬体已补齐', 'run'); wecomEnqueue('虚空淬体', '已补齐 ' + rarityName(rarity) + '虚空淬体加成'); }
         return ok;
     }
 
@@ -1512,6 +1518,7 @@
                 }
                 if (buyOk) {
                     toast('已购买商人商品：' + (target.name || ('index ' + target.index)));
+                    wecomEnqueue('商人购买', '已购买 ' + (target.name || '商品') + ' | 价格 ' + (target.price || 0) + ' 灵石');
                 } else {
                     await leaveMerchantSafely();
                 }
@@ -1835,7 +1842,9 @@
             }
             var res = await gameApi().post('/api/game/equipment/repair-all', {});
             if (res && res.code === 200) {
+                var fixedCnt = (res.data && res.data.count) || '?';
                 setStatus('装备修复完成', 'run');
+                wecomEnqueue('装备维修', '修复完成，共修 ' + fixedCnt + ' 件');
                 await sleep(500);
                 await refreshPlayer();
                 return true;
@@ -2085,16 +2094,29 @@
     }
 
     async function handleChatMessagesBatch() {
+        // 世界频道
         var container = document.getElementById('inlineChatMessages');
-        if (!container) return;
-
-        var msgs = container.querySelectorAll('.chat-msg[data-chat-message-id]');
-        for (var i = 0; i < msgs.length; i++) {
-            var msgEl = msgs[i];
-            if (state.wecomNotify) forwardChatMessage(msgEl);
-            var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
-            if (!msgId || recruitProcessedIds[msgId]) continue;
-            if (state.autoRecruit) await handleNewChatMessage(msgEl);
+        if (container) {
+            var msgs = container.querySelectorAll('.chat-msg[data-chat-message-id]');
+            for (var i = 0; i < msgs.length; i++) {
+                var msgEl = msgs[i];
+                if (state.wecomNotify) forwardChatMessage(msgEl);
+                var msgId = Number(msgEl.getAttribute('data-chat-message-id') || 0);
+                if (!msgId || recruitProcessedIds[msgId]) continue;
+                if (state.autoRecruit) await handleNewChatMessage(msgEl);
+            }
+        }
+        // 道友私聊
+        var friendContainer = document.getElementById('friendChatMessages');
+        if (friendContainer && state.wecomNotify) {
+            var fmsgs = friendContainer.querySelectorAll('.chat-msg[data-chat-message-id]');
+            for (var j = 0; j < fmsgs.length; j++) {
+                var fmsgEl = fmsgs[j];
+                var fmsgId = Number(fmsgEl.getAttribute('data-chat-message-id') || 0);
+                if (!fmsgId || chatForwardMaxId >= fmsgId) continue;
+                if (fmsgEl.classList.contains('chat-msg-system') || fmsgEl.classList.contains('chat-msg-recalled')) continue;
+                forwardChatMessage(fmsgEl);
+            }
         }
     }
 
@@ -2114,12 +2136,10 @@
         if (!container) return;
 
         // 记下当前最大消息 ID，只转发之后的新消息
-        var existing = container.querySelectorAll('.chat-msg[data-chat-message-id]');
         var maxId = 0;
-        for (var ex = 0; ex < existing.length; ex++) {
-            var eid = Number(existing[ex].getAttribute('data-chat-message-id') || 0);
-            if (eid > maxId) maxId = eid;
-        }
+        function scanMaxId(sel) { var els = document.querySelectorAll(sel); for (var k = 0; k < els.length; k++) { var eid = Number(els[k].getAttribute('data-chat-message-id') || 0); if (eid > maxId) maxId = eid; } }
+        scanMaxId('#inlineChatMessages .chat-msg[data-chat-message-id]');
+        scanMaxId('#friendChatMessages .chat-msg[data-chat-message-id]');
         chatForwardMaxId = maxId;
 
         recruitObserver = new MutationObserver(function () {
@@ -2127,6 +2147,9 @@
             pruneRecruitCache(300);
         });
         recruitObserver.observe(container, { childList: true, subtree: true });
+        // 同时监听道友私聊容器
+        var friendContainer = document.getElementById('friendChatMessages');
+        if (friendContainer) recruitObserver.observe(friendContainer, { childList: true, subtree: true });
         handleChatMessagesBatch();
     }
 
@@ -2476,6 +2499,7 @@
                 }
                 if (state.treasureBatchSize > 0 && usedCount >= state.treasureBatchSize) {
                     setStatus('本批藏宝图已使用 ' + usedCount + ' 次，等待手动停止或调整上限', 'run');
+                    wecomEnqueue('藏宝图批次完成', '本批已消耗 ' + usedCount + ' 张藏宝图（上限 ' + state.treasureBatchSize + '）');
                     await sleep(state.treasureIntervalMs || state.delayMs);
                     continue;
                 }
@@ -2870,6 +2894,7 @@
                     updateInscriptionPanel();
                     setStatus('铭文目标达成，已保留结果等待处理', 'run');
                     notifyUser('铭文目标达成', results.map(function (item) { return item.text; }).join('，'));
+                    wecomEnqueue('铭文命中', '第' + inscriptionStats.total + '次 | ' + results.map(function (item) { return item.text; }).join('，'));
                     if (state.inscriptionAutoEquip && await autoEquipInscriptionResults(decision.matches)) {
                         await clickInscriptionDiscardAll();
                         await sleep(state.inscriptionDiscardDelay);
