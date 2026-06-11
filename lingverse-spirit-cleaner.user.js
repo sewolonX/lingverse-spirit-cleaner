@@ -2771,9 +2771,14 @@
         var map = { 1: '凡纹', 2: '灵纹', 3: '宝纹', 4: '仙纹', 5: '神纹', 6: '圣纹', 7: '天纹' };
         return map[Number(q)] || '凡纹';
     }
+    var INSC_HEAVEN_TO_NORMAL = { '锋': '攻击', '御': '防御', '命': '气血', '灵': '神识' };
     function inscriptionStatName(statType, quality) {
         if (Number(quality) === 7) return INSC_HEAVEN_STAT_NAMES[statType] || '纹';
         return INSC_STAT_NAMES[statType] || '属性';
+    }
+    // 天纹属性名映射回普通属性名，用于匹配用户目标
+    function normalizeStatForMatch(statName) {
+        return INSC_HEAVEN_TO_NORMAL[statName] || statName;
     }
     function parseInscMinValue(raw) {
         raw = String(raw || '').trim();
@@ -3018,7 +3023,9 @@
         results.forEach(function (result) {
             targets.forEach(function (target) {
                 var qualityOk = inscriptionQualityOk(result.quality, target.quality);
-                if (qualityOk && String(result.stat || '').indexOf(target.stat) >= 0 && Number(result.value || 0) >= Number(target.minValue || 0)) {
+                var rStat = normalizeStatForMatch(result.stat || '');
+                var tStat = normalizeStatForMatch(target.stat || '');
+                if (qualityOk && rStat.indexOf(tStat) >= 0 && Number(result.value || 0) >= Number(target.minValue || 0)) {
                     matches.push({ result: result, target: target });
                 }
             });
