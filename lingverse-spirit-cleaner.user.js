@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.3.7
+// @version      1.3.8
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.3.7';
+    var SCRIPT_VERSION = '1.3.8';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -115,6 +115,39 @@
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
+
+    // 定时简报：每5分钟发一次运行摘要到微信
+    var _reportTimer = 0;
+    var _reportExploreCount = 0;
+    var _reportReviveCount = 0;
+    var _reportStartTime = 0;
+    var REPORT_INTERVAL_MS = 300000; // 5分钟
+
+    function resetReportStats() {
+        _reportExploreCount = 0;
+        _reportReviveCount = 0;
+        _reportStartTime = Date.now();
+    }
+
+    async function sendPeriodicReport(manual) {
+        if (!state.wecomNotify || !state.wecomNotifyWebhook) return;
+        if (!manual && Date.now() - _reportStartTime < REPORT_INTERVAL_MS) return;
+        var info = getSpiritInfo();
+        var playerName = (info.player && info.player.name) || '';
+        var flag = running ? '清理中' : monitoringSpirit ? '监测中' : autoTrialRunning ? '试炼中' : autoTreasureRunning ? '刷图中' : autoInscriptionRunning ? '洗练中' : '空闲';
+        var lines = [
+            '角色: ' + (playerName || '未知'),
+            '状态: ' + flag + ' | v' + SCRIPT_VERSION,
+            '神识: ' + info.spirit + '/' + info.maxSpirit + ' (每次-' + info.cost + ')',
+        ];
+        if (_reportExploreCount > 0) lines.push('本时段探索: ' + _reportExploreCount + ' 次');
+        if (_reportReviveCount > 0) lines.push('复活: ' + _reportReviveCount + ' 次');
+        wecomEnqueue('运行简报', lines.join('\n'));
+        resetReportStats();
+    }
+
+    function recordExploreDone() { if (running) _reportExploreCount++; }
+    function recordReviveDone() { _reportReviveCount++; }
     var autoBailRunning = false;
     // 自动出狱：检测并保释
     async function checkAndAutoBail(manual) {
@@ -207,6 +240,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.3.8',
+            title: '定时运行简报',
+            notes: ['每5分钟自动发送运行简报到微信（角色/状态/神识/探索次数/复活次数）。更新tab新增发送简报按钮。']
+        },
         {
             version: '1.3.7',
             title: '自动出狱 + 验证中文数字',
@@ -1007,6 +1045,7 @@
                 }
             }
             setStatus('已引渡归来，继续流程', 'run');
+            recordReviveDone();
             return true;
         } catch (err2) {
             console.warn('[LingVerse Spirit Cleaner] death revive failed', err2);
@@ -3622,6 +3661,7 @@
                 continue;
             }
 
+            recordExploreDone();
             var jitter = Math.floor(Math.random() * 350);
             await sleep(state.delayMs + jitter);
         }
@@ -4613,6 +4653,7 @@
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
+            '<button id="lvscReportBtn" style="height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;">发送简报</button>' +
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
             '<div class="lvsc-section-title">群机器人 Webhook</div>' +
@@ -4799,6 +4840,10 @@
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
+        document.getElementById('lvscReportBtn').onclick = function () {
+            sendPeriodicReport(true);
+            setStatus('简报已发送', 'run');
+        };
         // 每30秒自动检查是否入狱（需开启自动出狱）
         document.getElementById('lvscAutoBail').checked = state.autoBail;
         document.getElementById('lvscAutoBail').onchange = function () {
@@ -4983,6 +5028,8 @@
         refreshPlayer();
         showBuiltinReleaseOnce();
         hookAntiCheatAutoSolve();
+        resetReportStats();
+        setInterval(function () { sendPeriodicReport(false); }, 60000);
         startOnlineHeartbeat();
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
