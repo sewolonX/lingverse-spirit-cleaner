@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.2.9
+// @version      1.3.0
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.2.9';
+    var SCRIPT_VERSION = '1.3.0';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -118,6 +118,20 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.3.0',
+            title: '操作逻辑大优化 + UI改进',
+            notes: [
+                '清理↔监测自动衔接：神识耗尽自动转入监测，恢复后自动继续，无需手动切换。',
+                '道韵检查不再弹系统确认框，静默继续执行。',
+                '复活后自动恢复HP/MP/神识再继续，避免连死。',
+                '战斗后自动检查血量，残血自动触发恢复。',
+                '隐秘符/虚空淬体连续失败10次自动关闭开关。',
+                '藏宝图耗尽/试炼无法继续/铭文命中目标后自动切回探索。',
+                '复活后前往改为下拉框，从游戏地图动态读取选项，切换大地图自动刷新。',
+                'state按模块分组、onchange单字段写入、主循环去重。'
+            ]
+        },
         {
             version: '1.2.7',
             title: '本命武器自动吞噬',

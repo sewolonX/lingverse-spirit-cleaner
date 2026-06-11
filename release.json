@@ -1,11 +1,31 @@
 {
-  "version": "1.2.9",
-  "title": "神识清理 v1.2.9",
+  "version": "1.3.0",
+  "title": "神识清理 v1.3.0 — 操作逻辑大优化",
   "notes": [
-    "修复本命吞噬：去掉hasBonus检查，放宽type匹配，type为空也尝试吞噬。"
+    "清理↔监测自动衔接，神识耗尽自动等恢复、满了自动继续",
+    "道韵检查不再弹系统框",
+    "复活后自动恢复HP/MP，避免连死",
+    "战斗后自动检查血量并恢复",
+    "隐秘符/虚空淬体连续失败自动关闭",
+    "藏宝图/试炼/铭文完成后自动切探索",
+    "复活后前往改为下拉框，从游戏地图动态读取",
+    "state按模块分组，onchange单字段写入，主循环去重"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.2.9",
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.3.0",
   "changelog": [
+    {
+      "version": "1.3.0",
+      "title": "操作逻辑大优化 + UI改进",
+      "notes": [
+        "清理↔监测自动衔接",
+        "道韵不弹窗",
+        "复活后恢复",
+        "战斗后查血",
+        "buff失败自动关闭",
+        "各模式完成自动切探索",
+        "复活前往下拉框"
+      ]
+    },
     {
       "version": "1.2.9",
       "title": "本命吞噬修复2",
@@ -26,114 +46,6 @@
       "title": "本命武器自动吞噬",
       "notes": [
         "主循环自动吞噬"
-      ]
-    },
-    {
-      "version": "1.2.6",
-      "title": "细分通知+私聊",
-      "notes": [
-        "6个通知"
-      ]
-    },
-    {
-      "version": "1.2.5",
-      "title": "反馈+Gitee",
-      "notes": [
-        "反馈按钮"
-      ]
-    },
-    {
-      "version": "1.2.4",
-      "title": "修复云端更新",
-      "notes": [
-        "url未定义"
-      ]
-    },
-    {
-      "version": "1.2.3",
-      "title": "Gitee检测",
-      "notes": [
-        "默认URL改Gitee"
-      ]
-    },
-    {
-      "version": "1.2.2",
-      "title": "商人严格匹配",
-      "notes": [
-        "AND/OR"
-      ]
-    },
-    {
-      "version": "1.2.1",
-      "title": "高级冥想",
-      "notes": [
-        "够探索就继续"
-      ]
-    },
-    {
-      "version": "1.2.0",
-      "title": "大更新",
-      "notes": [
-        "铭文天纹",
-        "商人品质",
-        "复活区域",
-        "回血排序",
-        "企业微信",
-        "通知+徒弟"
-      ]
-    },
-    {
-      "version": "1.1.6",
-      "title": "修复加载",
-      "notes": [
-        "删除花括号"
-      ]
-    },
-    {
-      "version": "1.1.5",
-      "title": "历史公告",
-      "notes": [
-        "CHANGELOG独立"
-      ]
-    },
-    {
-      "version": "1.1.4",
-      "title": "历史面板",
-      "notes": [
-        "更新弹窗加历史"
-      ]
-    },
-    {
-      "version": "1.1.3",
-      "title": "公告缓存",
-      "notes": [
-        "URL加版本参数"
-      ]
-    },
-    {
-      "version": "1.1.2",
-      "title": "收徒简化",
-      "notes": [
-        "直接调API"
-      ]
-    },
-    {
-      "version": "1.1.1",
-      "title": "传音筒开关",
-      "notes": [
-        "可选项"
-      ]
-    },
-    {
-      "version": "1.1.0",
-      "title": "大版本",
-      "notes": [
-        "宗门回血",
-        "装备维修",
-        "自动收徒",
-        "日志",
-        "z-index",
-        "CDN"
       ]
     }
   ]
