@@ -2788,24 +2788,18 @@
         if (!_inscItemId || !gameApi()) return null;
         var ep = mode === 100 ? '/api/game/inscription/draw-hundred' : '/api/game/inscription/draw-ten';
         var res = await gameApi().post(ep, { itemId: _inscItemId });
-        // DEBUG: 打印 API 返回格式（看过后可删）
-        console.log('[铭文API] draw ' + mode, JSON.stringify(res).substring(0, 500));
-        if (!res || res.code !== 200) return null;
-        var d = res.data;
-        if (d && d.results) return d;
-        if (Array.isArray(d)) return { results: d };
-        return d || null;
+        if (!res || res.code !== 200 || !res.data) return null;
+        // 游戏返回格式: { inscriptions: [...], info: {...} }
+        return res.data;
     }
     async function inscriptionApiDiscardAll() {
         if (!_inscItemId || !gameApi()) return false;
         var res = await gameApi().post('/api/game/inscription/discard-all', { itemId: _inscItemId });
-        console.log('[铭文API] discard-all', JSON.stringify(res).substring(0, 300));
         return !!(res && res.code === 200);
     }
     async function inscriptionApiApply(pendingIndex, slotIndex) {
         if (!_inscItemId || !gameApi()) return false;
         var res = await gameApi().post('/api/game/inscription/apply', { itemId: _inscItemId, pendingIndex: pendingIndex, slotIndex: slotIndex });
-        console.log('[铭文API] apply', JSON.stringify(res).substring(0, 300));
         return !!(res && res.code === 200);
     }
     async function inscriptionApiDiscardAll() {
@@ -2820,36 +2814,20 @@
     }
     function parseDrawResults(data) {
         if (!data) return [];
-        // 兼容多种返回格式
-        var items = data.pendingInscriptions || data.results || data.items || data.pending || data.list || data;
-        if (!Array.isArray(items)) {
-            // 尝试 data.data 或直接遍历对象的数值属性
-            if (data.data && Array.isArray(data.data)) items = data.data;
-            else if (data.inscriptions && Array.isArray(data.inscriptions)) items = data.inscriptions;
-            else if (typeof data === 'object') {
-                // 如果 data 本身包含数字键，可能是数组伪装
-                items = [];
-                for (var k in data) { if (data.hasOwnProperty(k) && !isNaN(Number(k))) items.push(data[k]); }
-                if (!items.length) return [];
-            }
-        }
+        // 游戏返回格式: { inscriptions: [...], info: {...} }
+        var items = data.inscriptions || data.results || data.pendingInscriptions || [];
         if (!Array.isArray(items) || !items.length) return [];
         var results = [];
         for (var di = 0; di < items.length; di++) {
             var item = items[di];
             if (!item) continue;
-            // 兼容各种字段名
-            var q = item.quality || item.rarity || item.level || item.rank || 0;
-            var s = item.stat || item.statName || item.name || item.type || '';
-            var v = Number(item.value || item.statValue || item.bonus || 0);
-            var pi = item.pendingIndex != null ? Number(item.pendingIndex) : di;
             results.push({
-                quality: q,
-                qualityName: inscriptionQualityName(q),
-                stat: s,
-                value: v,
-                pendingIndex: pi,
-                text: inscriptionQualityName(q) + '·' + s + '+' + v
+                quality: item.quality || 0,
+                qualityName: inscriptionQualityName(item.quality || 0),
+                stat: item.stat || item.statName || '',
+                value: Number(item.value || 0),
+                pendingIndex: item.pendingIndex != null ? Number(item.pendingIndex) : di,
+                text: inscriptionQualityName(item.quality || 0) + '·' + (item.stat || item.statName || '') + '+' + (item.value || 0)
             });
         }
         return results;
@@ -3137,10 +3115,10 @@
         updateInscriptionPanel();
         while (autoInscriptionRunning) {
             try {
-                // 先用 API 拉取当前 pending 结果
+                // 先用 API 拉取当前待处理结果
                 var info = await fetchInscriptionInfo();
                 if (info && info.pendingInscriptions && info.pendingInscriptions.length) {
-                    var existingResults = parseDrawResults({ pendingInscriptions: info.pendingInscriptions });
+                    var existingResults = parseDrawResults({ inscriptions: info.pendingInscriptions });
                     var existingDecision = inscriptionTargetDecision(existingResults);
                     if (existingDecision.met) {
                         if (state.inscriptionAutoEquip) {
@@ -4562,13 +4540,13 @@
             sel.innerHTML = '<option value="">点击刷新选择装备</option>';
             if (!gameApi()) return;
             gameApi().get('/api/game/equipment/current').then(function (res) {
-                console.log('[铭文API] equipment/current', JSON.stringify(res).substring(0, 1000));
                 if (!res || res.code !== 200 || !Array.isArray(res.data)) return;
                 var items = res.data;
                 for (var ei = 0; ei < items.length; ei++) {
                     var item = items[ei];
                     var name = item.name || item.itemName || item.equipmentName || '';
-                    var id = String(item.id || item.itemId || item.playerItemId || item.equipmentId || item.instanceId || '');
+                    // equipment/current 返回 playerItemId（实例ID），铭文API需要这个
+                    var id = String(item.playerItemId || item.id || item.itemId || item.equipmentId || item.instanceId || '');
                     if (!name || !id) continue;
                     var slot = item.slot || item.equipSlot || item.slotName || item.equipmentSlot || '';
                     var opt = document.createElement('option');
