@@ -13,7 +13,10 @@
    - `BUILTIN_CHANGELOG` 新增条目（脚本内）
    - `release.json` 的 `notes` 和 `changelog`
 
-3. **推送两个仓库**：
+3. **更新 README**：
+   - 功能列表、配置说明如有变化，同步更新 `README.md`
+
+4. **推送两个仓库**：
    - `git push origin main` (GitHub)
    - `git push gitee main` (Gitee)
 
