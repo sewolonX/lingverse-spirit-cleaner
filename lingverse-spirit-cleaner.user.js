@@ -129,24 +129,24 @@
         if (triggerBtn) triggerBtn.textContent = '触发中...';
         setStatus('暴力触发验证中...', 'run');
         var count = 0;
+        var got429 = false;
+        var urls = ['/api/game/inventory', '/api/game/equipment/current', '/api/master/overview', '/api/game/player-sect/builtin-shop'];
         while (triggerVerifyActive) {
             count++;
-            // 狂发请求直到服务端受不了返回429
-            var res = await gameApi().get('/api/game/anti-cheat/verify-challenge');
+            var url = urls[count % urls.length] + '?_=' + count;
+            var res = await gameApi().get(url);
             if (res && res.code === 429) {
-                setStatus('429已触发！游戏将弹出验证窗', 'run');
-                // 再发一个任意API让游戏层弹出真实验证
-                await gameApi().get('/api/game/inventory');
+                got429 = true;
+                setStatus('429触发！第' + count + '次，游戏弹出验证窗', 'run');
                 break;
             }
-            if (!triggerVerifyActive) break;
-            setStatus('暴力触发中... 第' + count + '次，还没429', 'run');
-            await sleep(50); // 50ms一发
+            if (count % 20 === 0) setStatus('暴力触发中... 第' + count + '次', 'run');
+            await sleep(30);
         }
         triggerVerifyActive = false;
         if (stopBtn) stopBtn.style.display = 'none';
         if (triggerBtn) triggerBtn.textContent = '一键触发验证';
-        if (!triggerVerifyActive) setStatus('触发已终止', 'idle');
+        if (!got429) setStatus('触发已终止', 'idle');
     }
     function stopTriggerVerify() {
         triggerVerifyActive = false;
