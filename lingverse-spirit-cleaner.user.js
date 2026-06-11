@@ -4559,6 +4559,10 @@
             '<div class="lvsc-help">自动吞噬装备（优先同类型有属性的装备）或材料。装备吞噬：POST /api/game/natal/artifact/devour-equipment；材料吞噬：POST /api/game/natal/artifact/devour。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
+            '<div class="lvsc-section-title-row"><span>自动出狱</span><label class="lvsc-check"><input id="lvscAutoBail" type="checkbox">检测禁闭并消耗仙缘保释</label></div>' +
+            '<div class="lvsc-help">每30秒检测一次是否被天道禁闭，仙缘足够时自动保释出狱。</div>' +
+            '</div>' +
+            '<div class="lvsc-section">' +
             '<div class="lvsc-section-title-row"><span>自动收徒</span><label class="lvsc-check"><input id="lvscAutoRecruit" type="checkbox">监控世界聊天</label></div>' +
             '<div class="lvsc-grid2">' +
             '<label>冷却间隔(ms)<input id="lvscRecruitIntervalMs" type="number" min="1000" step="500" title="两次收徒之间的最小间隔"></label>' +
@@ -4566,7 +4570,6 @@
             '</div>' +
             '<div class="lvsc-help">监控世界聊天每条新发言，直接调收徒 API，由服务器判断是否满足收徒条件。</div>' +
             '<label class="lvsc-check"><input id="lvscAutoMasterRequests" type="checkbox">自动处理徒弟请求（问道/护道/历练）</label>' +
-            '<label class="lvsc-check"><input id="lvscAutoBail" type="checkbox">自动出狱（检测禁闭并消耗仙缘保释）</label>' +
             '<div id="lvscRecruitLog">待命</div>' +
             '</div>' +
             '</div>' +
