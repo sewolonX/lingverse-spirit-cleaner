@@ -443,6 +443,7 @@
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
         recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
         autoMasterRequests: localStorage.getItem('lvSpiritCleaner.autoMasterRequests') !== '0',
+        autoBail: localStorage.getItem('lvSpiritCleaner.autoBail') !== '0',
 
         // === 铭文 ===
         inscriptionTargets: localStorage.getItem('lvSpiritCleaner.inscriptionTargets') || '攻击:50,防御:50,气血:100,神识:20',
@@ -775,6 +776,7 @@
         state.wecomWorldWebhook = str('lvscWecomWorldWebhook', '');
         state.wecomPrivateWebhook = str('lvscWecomPrivateWebhook', '');
         state.autoMasterRequests = chk('lvscAutoMasterRequests');
+        state.autoBail = chk('lvscAutoBail');
     }
 
     // 保证别名：运行循环启动时需要从 UI 读取
@@ -4549,6 +4551,7 @@
             '</div>' +
             '<div class="lvsc-help">监控世界聊天每条新发言，直接调收徒 API，由服务器判断是否满足收徒条件。</div>' +
             '<label class="lvsc-check"><input id="lvscAutoMasterRequests" type="checkbox">自动处理徒弟请求（问道/护道/历练）</label>' +
+            '<label class="lvsc-check"><input id="lvscAutoBail" type="checkbox">自动出狱（检测禁闭并消耗仙缘保释）</label>' +
             '<div id="lvscRecruitLog">待命</div>' +
             '</div>' +
             '</div>' +
@@ -4628,7 +4631,7 @@
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
-            '<button id="lvscAutoBailBtn" style="height:32px;background:rgba(255,209,102,.14);color:#ffd166;border:1px solid rgba(255,209,102,.28)!important;">出狱/验证</button>' +
+            '<button id="lvscTriggerVerifyBtn" style="height:32px;background:rgba(255,209,102,.14);color:#ffd166;border:1px solid rgba(255,209,102,.28)!important;" title="连发请求触发429封锁，测试真实验证弹窗">触发验证</button>' +
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
             '<div class="lvsc-section-title">群机器人 Webhook</div>' +
@@ -4815,17 +4818,17 @@
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
-        // 出狱/验证按钮
-        document.getElementById('lvscAutoBailBtn').onclick = function () {
-            checkAndAutoBail(true);
-        };
-        // 右键或长按触发人机验证测试
-        document.getElementById('lvscAutoBailBtn').oncontextmenu = function (e) {
-            e.preventDefault();
+        // 触发验证按钮
+        document.getElementById('lvscTriggerVerifyBtn').onclick = function () {
             triggerTestVerification();
         };
-        // 每30秒自动检查是否入狱
-        setInterval(function () { checkAndAutoBail(false); }, 30000);
+        // 每30秒自动检查是否入狱（需开启自动出狱）
+        document.getElementById('lvscAutoBail').checked = state.autoBail;
+        document.getElementById('lvscAutoBail').onchange = function () {
+            state.autoBail = this.checked;
+            persistSetting('lvSpiritCleaner.autoBail', state.autoBail);
+        };
+        setInterval(function () { if (state.autoBail) checkAndAutoBail(false); }, 30000);
         // 屏蔽更新 checkbox
         document.getElementById('lvscUpdateMuted').checked = localStorage.getItem('lvSpiritCleaner.updateMuted') === '1';
         document.getElementById('lvscUpdateMuted').onchange = function () {
