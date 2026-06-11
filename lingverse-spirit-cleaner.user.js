@@ -3200,7 +3200,8 @@
                 // 日志只显示最优3条 + 汇总
                 var sorted = results.slice().sort(function (a, b) { return Number(b.qualityNum || 0) - Number(a.qualityNum || 0) || Number(b.value || 0) - Number(a.value || 0); });
                 var top3 = sorted.slice(0, 3).map(function (r) { return r.text; }).join('，');
-                var summary = (data.drawCount ? '百连(' + data.keptCount + '/' + data.drawCount + ')' : '十连') + ' 最优: ' + top3;
+                var isHundred = drawData && drawData.drawCount;
+                var summary = (isHundred ? '百连(' + drawData.keptCount + '/' + drawData.drawCount + ')' : '十连') + ' 最优: ' + top3;
                 inscriptionLog('第' + inscriptionStats.total + ' 次 ' + summary + ' → ' + decision.reason);
                 if (decision.met) {
                     inscriptionStats.kept += 1;
