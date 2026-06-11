@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.3.5
+// @version      1.3.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.3.5';
+    var SCRIPT_VERSION = '1.3.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -115,9 +115,59 @@
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
+
+    // 自动解决反脚本验证（算术题）
+    var ANTI_CHEAT_AUTO_SOLVE = true;
+    function hookAntiCheatAutoSolve() {
+        if (!ANTI_CHEAT_AUTO_SOLVE) return;
+        // 拦截 gamePrompt，当问题是算式时自动计算答案
+        var origGamePrompt = window.gamePrompt;
+        if (!origGamePrompt || origGamePrompt.__lvHooked) return;
+        window.gamePrompt = function (message, title, onOk, onCancel, isDestructive, inputOpts) {
+            // 检测是否是反脚本验证
+            if (message && message.indexOf('请输入下方算式结果') >= 0) {
+                // 提取算式：从 HTML 中找算式文本
+                var tmp = document.createElement('div');
+                tmp.innerHTML = message;
+                var text = (tmp.textContent || '').replace(/\s+/g, ' ');
+                // 尝试直接匹配算式模式：数字 运算符 数字
+                var exprMatch = text.match(/([\d.]+)\s*([+\-×÷*\/xX])\s*([\d.]+)/);
+                if (!exprMatch) {
+                    // 用原始 message 再试
+                    exprMatch = message.replace(/<[^>]+>/g, ' ').match(/([\d.]+)\s*([+\-×÷*\/xX])\s*([\d.]+)/);
+                }
+                if (exprMatch) {
+                    var a = parseFloat(exprMatch[1]);
+                    var op = exprMatch[2];
+                    var b = parseFloat(exprMatch[3]);
+                    var answer = NaN;
+                    if (op === '+' || op === '＋') answer = a + b;
+                    else if (op === '-' || op === '－' || op === '−') answer = a - b;
+                    else if (op === '×' || op === 'x' || op === 'X' || op === '*') answer = a * b;
+                    else if (op === '÷' || op === '/') answer = a / b;
+                    if (Number.isFinite(answer)) {
+                        // 保持整数时不要小数点
+                        if (answer === Math.floor(answer)) answer = Math.floor(answer);
+                        else answer = Math.round(answer * 100) / 100;
+                        setStatus('自动过验证: ' + a + ' ' + op + ' ' + b + ' = ' + answer, 'run');
+                        // 直接调 onOk 提交答案
+                        if (onOk) { onOk(String(answer)); return; }
+                    }
+                }
+            }
+            // 不是验证弹窗，走原始逻辑
+            return origGamePrompt.apply(this, arguments);
+        };
+        window.gamePrompt.__lvHooked = true;
+    }
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.3.6',
+            title: '自动过反脚本算术验证',
+            notes: ['拦截游戏算术验证弹窗，自动计算答案并提交，不再打断脚本运行。']
+        },
         {
             version: '1.3.5',
             title: '铭文系统修复',
@@ -4870,6 +4920,7 @@
         activatePanelTab(localStorage.getItem('lvSpiritCleaner.activeTab') || 'basic');
         refreshPlayer();
         showBuiltinReleaseOnce();
+        hookAntiCheatAutoSolve();
         startOnlineHeartbeat();
         setTimeout(function () { checkCloudUpdate(false); }, 1500);
         setInterval(function () { checkCloudUpdate(false); }, CLOUD_UPDATE_POLL_MS);
