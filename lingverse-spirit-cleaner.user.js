@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.3.6
+// @version      1.3.7
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.3.6';
+    var SCRIPT_VERSION = '1.3.7';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -115,6 +115,44 @@
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
+    var autoBailRunning = false;
+
+    // 自动出狱：检测并保释
+    async function checkAndAutoBail(manual) {
+        if (autoBailRunning || !gameApi()) return;
+        autoBailRunning = true;
+        try {
+            var infoRes = await gameApi().get('/api/game/anti-cheat/bail-info');
+            if (!infoRes || infoRes.code !== 200 || !infoRes.data) {
+                if (manual) setStatus('禁闭状态查询失败', 'warn');
+                return;
+            }
+            var info = infoRes.data;
+            if (!info.isJailed) {
+                if (manual) setStatus('当前未处于天道禁闭', 'run');
+                return;
+            }
+            var cost = Math.max(1, parseInt(info.bailCost || 1, 10));
+            var adPoints = Math.max(0, parseInt(info.adPoints || 0, 10));
+            if (adPoints < cost) {
+                setStatus('仙缘不足，需 ' + cost + ' 点，当前 ' + adPoints + ' 点', 'warn');
+                return;
+            }
+            setStatus('自动保释，消耗 ' + cost + ' 仙缘', 'run');
+            var bailRes = await gameApi().post('/api/game/anti-cheat/bail', {});
+            if (bailRes && bailRes.code === 200) {
+                setStatus('已自动保释出狱', 'run');
+                wecomEnqueue('自动出狱', '消耗 ' + cost + ' 仙缘保释');
+                await refreshPlayer();
+            } else {
+                setStatus('保释失败: ' + ((bailRes && bailRes.message) || '未知'), 'warn');
+            }
+        } catch (err) {
+            if (manual) setStatus('自动出狱异常: ' + (err.message || ''), 'warn');
+        } finally {
+            autoBailRunning = false;
+        }
+    }
 
     // 自动解决反脚本验证（算术题）- 支持中文数字
     var ANTI_CHEAT_AUTO_SOLVE = true;
@@ -169,6 +207,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.3.7',
+            title: '自动出狱 + 验证中文数字',
+            notes: ['自动检测天道禁闭并消耗仙缘保释出狱。', '反脚本验证支持中文数字（一二三/壹贰叁）。', '更新tab新增出狱/验证按钮，每30秒自动检查。']
+        },
         {
             version: '1.3.6',
             title: '自动过反脚本算术验证',
@@ -4564,6 +4607,7 @@
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
+            '<button id="lvscAutoBailBtn" style="height:32px;background:rgba(255,209,102,.14);color:#ffd166;border:1px solid rgba(255,209,102,.28)!important;">出狱/验证</button>' +
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
             '<div class="lvsc-section-title">群机器人 Webhook</div>' +
@@ -4750,6 +4794,12 @@
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
+        // 出狱/验证按钮
+        document.getElementById('lvscAutoBailBtn').onclick = function () {
+            checkAndAutoBail(true);
+        };
+        // 每30秒自动检查是否入狱
+        setInterval(function () { checkAndAutoBail(false); }, 30000);
         // 屏蔽更新 checkbox
         document.getElementById('lvscUpdateMuted').checked = localStorage.getItem('lvSpiritCleaner.updateMuted') === '1';
         document.getElementById('lvscUpdateMuted').onchange = function () {
