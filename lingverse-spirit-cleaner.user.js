@@ -128,9 +128,26 @@
         if (stopBtn) stopBtn.style.display = '';
         if (triggerBtn) triggerBtn.textContent = '触发中...';
         setStatus('暴力触发验证中...', 'run');
-        var count = 0;
+        // 铭文draw-ten是真正触发429的接口
         var got429 = false;
-        var urls = ['/api/game/inventory', '/api/game/equipment/current', '/api/master/overview', '/api/game/player-sect/builtin-shop'];
+        var count = 0;
+        var eqId = _inscItemId;
+        if (!eqId) {
+            var selEl = document.getElementById('lvscInscriptionEquipment');
+            eqId = selEl && selEl.value ? selEl.value : '';
+        }
+        if (!eqId) { setStatus('请先在铭文tab选装备', 'warn'); triggerVerifyActive = false; return; }
+        while (triggerVerifyActive) {
+            count++;
+            var res = await gameApi().post('/api/game/inscription/draw-ten', { itemId: eqId });
+            if (res && res.code === 429) {
+                got429 = true;
+                setStatus('429触发！第' + count + '次十连，游戏弹出验证窗', 'run');
+                break;
+            }
+            if (count % 5 === 0) setStatus('暴力触发中... 第' + count + '次十连', 'run');
+            await sleep(100);
+        }
         while (triggerVerifyActive) {
             count++;
             var url = urls[count % urls.length] + '?_=' + count;
