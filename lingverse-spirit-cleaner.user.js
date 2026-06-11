@@ -219,26 +219,62 @@
     };
 
     var state = {
+        // === 基础探索 ===
         reserve: readNumber('lvSpiritCleaner.reserve', 0),
         delayMs: readNumber('lvSpiritCleaner.delayMs', 1200),
-        hireRetryLimit: readNumber('lvSpiritCleaner.hireRetryLimit', 2),
-        hireMode: localStorage.getItem('lvSpiritCleaner.hireMode') || 'cheapest',
-        hireMaxFee: readNumber('lvSpiritCleaner.hireMaxFee', 0),
         keepCurrentMultiplier: localStorage.getItem('lvSpiritCleaner.keepMultiplier') === '1',
+        nightOnlyExplore: localStorage.getItem('lvSpiritCleaner.nightOnlyExplore') === '1',
+        desktopNotify: localStorage.getItem('lvSpiritCleaner.desktopNotify') !== '0',
+        updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
+        onlineStatsEndpoint: DEFAULT_ONLINE_STATS_ENDPOINT,
+
+        // === 商人 ===
+        autoMerchantLegend: localStorage.getItem('lvSpiritCleaner.autoMerchantLegend') !== '0',
         merchantMode: localStorage.getItem('lvSpiritCleaner.merchantMode') || 'legend',
         merchantKeyword: localStorage.getItem('lvSpiritCleaner.merchantKeyword') || '',
         merchantQualityFirst: localStorage.getItem('lvSpiritCleaner.merchantQualityFirst') !== '0',
         merchantMaxPrice: readNumber('lvSpiritCleaner.merchantMaxPrice', 0),
         merchantStrictMatch: localStorage.getItem('lvSpiritCleaner.merchantStrictMatch') === '1',
-        autoMerchantLegend: localStorage.getItem('lvSpiritCleaner.autoMerchantLegend') !== '0',
+
+        // === 护道 ===
         autoHireCheapest: localStorage.getItem('lvSpiritCleaner.autoHireCheapest') !== '0',
+        hireMode: localStorage.getItem('lvSpiritCleaner.hireMode') || 'cheapest',
+        hireRetryLimit: readNumber('lvSpiritCleaner.hireRetryLimit', 2),
+        hireMaxFee: readNumber('lvSpiritCleaner.hireMaxFee', 0),
+
+        // === 战斗恢复 ===
+        autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
+        selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
+        autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
+        autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
+        autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
+        sectQuickRecovery: localStorage.getItem('lvSpiritCleaner.sectQuickRecovery') === '1',
+        autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || '灵力,丹药,宗门',
+        autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || '灵石,丹药,宗门',
+        autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
+        repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
+        autoVoidBody: localStorage.getItem('lvSpiritCleaner.autoVoidBody') !== '0',
+        voidBodyRarity: readNumber('lvSpiritCleaner.voidBodyRarity', 5),
+        voidBodyBuyQty: readNumber('lvSpiritCleaner.voidBodyBuyQty', 1),
+        autoHiddenCharm: localStorage.getItem('lvSpiritCleaner.autoHiddenCharm') === '1',
+        hiddenCharmRarity: readNumber('lvSpiritCleaner.hiddenCharmRarity', 0),
+        hiddenCharmBuyQty: readNumber('lvSpiritCleaner.hiddenCharmBuyQty', 1),
+        hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000),
+        autoReviveDeath: localStorage.getItem('lvSpiritCleaner.autoReviveDeath') !== '0',
+        reviveExploreArea: localStorage.getItem('lvSpiritCleaner.reviveExploreArea') || '',
+
+        // === 自动流程 ===
         autoMeditate: localStorage.getItem('lvSpiritCleaner.autoMeditate') !== '0',
         autoExploreAfterMeditate: localStorage.getItem('lvSpiritCleaner.autoExploreAfterMeditate') !== '0',
-        nightOnlyExplore: localStorage.getItem('lvSpiritCleaner.nightOnlyExplore') === '1',
-        autoReviveDeath: localStorage.getItem('lvSpiritCleaner.autoReviveDeath') !== '0',
         checkDaoyunBoost: localStorage.getItem('lvSpiritCleaner.checkDaoyunBoost') !== '0',
         useAdvancedMeditate: localStorage.getItem('lvSpiritCleaner.useAdvancedMeditate') === '1',
         meditateStopSpirit: readNumber('lvSpiritCleaner.meditateStopSpirit', 0),
+        autoNatalDevour: localStorage.getItem('lvSpiritCleaner.autoNatalDevour') === '1',
+        autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
+        recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
+        autoMasterRequests: localStorage.getItem('lvSpiritCleaner.autoMasterRequests') !== '0',
+
+        // === 铭文 ===
         inscriptionTargets: localStorage.getItem('lvSpiritCleaner.inscriptionTargets') || '攻击:50,防御:50,气血:100,神识:20',
         inscriptionQuality: localStorage.getItem('lvSpiritCleaner.inscriptionQuality') || 'any',
         inscriptionStat: localStorage.getItem('lvSpiritCleaner.inscriptionStat') || '攻击',
@@ -248,45 +284,30 @@
         inscriptionMaxAttempts: readNumber('lvSpiritCleaner.inscriptionMaxAttempts', 0),
         inscriptionResultDelay: readNumber('lvSpiritCleaner.inscriptionResultDelay', 1500),
         inscriptionDiscardDelay: readNumber('lvSpiritCleaner.inscriptionDiscardDelay', 600),
+
+        // === 藏宝图 ===
         treasureBatchSize: readNumber('lvSpiritCleaner.treasureBatchSize', 0),
         treasureUseQuantity: readNumber('lvSpiritCleaner.treasureUseQuantity', 1),
         treasureIntervalMs: readNumber('lvSpiritCleaner.treasureIntervalMs', 0),
-        desktopNotify: localStorage.getItem('lvSpiritCleaner.desktopNotify') !== '0',
+
+        // === 神识监测 ===
         monitorStartSpirit: readNumber('lvSpiritCleaner.monitorStartSpirit', 0),
-        autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
-        selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
-        autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
-        autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
-        autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
-        sectQuickRecovery: localStorage.getItem('lvSpiritCleaner.sectQuickRecovery') === '1',
-        autoHpPriority: localStorage.getItem('lvSpiritCleaner.autoHpPriority') || '灵力,丹药,宗门',
-        autoMpPriority: localStorage.getItem('lvSpiritCleaner.autoMpPriority') || '灵石,丹药,宗门',
-        updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
-        onlineStatsEndpoint: DEFAULT_ONLINE_STATS_ENDPOINT,
-        autoVoidBody: localStorage.getItem('lvSpiritCleaner.autoVoidBody') !== '0',
-        voidBodyRarity: readNumber('lvSpiritCleaner.voidBodyRarity', 5),
-        voidBodyBuyQty: readNumber('lvSpiritCleaner.voidBodyBuyQty', 1),
-        autoHiddenCharm: localStorage.getItem('lvSpiritCleaner.autoHiddenCharm') === '1',
-        hiddenCharmRarity: readNumber('lvSpiritCleaner.hiddenCharmRarity', 0),
-        hiddenCharmBuyQty: readNumber('lvSpiritCleaner.hiddenCharmBuyQty', 1),
-        hiddenCharmRetryMs: readNumber('lvSpiritCleaner.hiddenCharmRetryMs', 60000),
-        autoRepair: localStorage.getItem('lvSpiritCleaner.autoRepair') !== '0',
-        repairThreshold: readNumber('lvSpiritCleaner.repairThreshold', 70),
-        reviveExploreArea: localStorage.getItem('lvSpiritCleaner.reviveExploreArea') || '',
-        autoNatalDevour: localStorage.getItem('lvSpiritCleaner.autoNatalDevour') === '1',
-        autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
-        recruitIntervalMs: readNumber('lvSpiritCleaner.recruitIntervalMs', 5000),
+
+        // === 企业微信 ===
         chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0',
         wecomNotify: localStorage.getItem('lvSpiritCleaner.wecomNotify') === '1',
         wecomNotifyWebhook: localStorage.getItem('lvSpiritCleaner.wecomNotifyWebhook') || '',
         wecomWorldWebhook: localStorage.getItem('lvSpiritCleaner.wecomWorldWebhook') || '',
-        wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || '',
-        autoMasterRequests: localStorage.getItem('lvSpiritCleaner.autoMasterRequests') !== '0'
+        wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || ''
     };
 
     function readNumber(key, fallback) {
         var value = Number(localStorage.getItem(key));
         return Number.isFinite(value) ? value : fallback;
+    }
+
+    function persistSetting(key, value) {
+        localStorage.setItem(key, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
     }
 
     function sleep(ms) {
@@ -500,201 +521,92 @@
         }
     }
 
-    function syncSettingsFromUi() {
-        var reserveInput = document.getElementById('lvscReserve');
-        var delayInput = document.getElementById('lvscDelay');
-        var retryInput = document.getElementById('lvscHireRetryLimit');
-        var hireModeInput = document.getElementById('lvscHireMode');
-        var hireMaxFeeInput = document.getElementById('lvscHireMaxFee');
-        var multiplierInput = document.getElementById('lvscKeepMultiplier');
-        var merchantInput = document.getElementById('lvscAutoMerchant');
-        var merchantModeInput = document.getElementById('lvscMerchantMode');
-        var merchantKeywordInput = document.getElementById('lvscMerchantKeyword');
-        var merchantQualityInput = document.getElementById('lvscMerchantQualityFirst');
-        var merchantMaxPriceInput = document.getElementById('lvscMerchantMaxPrice');
-        var merchantStrictMatchInput = document.getElementById('lvscMerchantStrictMatch');
-        var hireInput = document.getElementById('lvscAutoHire');
-        var meditateInput = document.getElementById('lvscAutoMeditate');
-        var exploreAfterMeditateInput = document.getElementById('lvscAutoExploreAfterMeditate');
-        var nightOnlyInput = document.getElementById('lvscNightOnlyExplore');
-        var reviveDeathInput = document.getElementById('lvscAutoReviveDeath');
-        var daoyunBoostInput = document.getElementById('lvscCheckDaoyunBoost');
-        var advancedMeditateInput = document.getElementById('lvscUseAdvancedMeditate');
-        var meditateStopInput = document.getElementById('lvscMeditateStopSpirit');
-        var inscriptionQualityInput = document.getElementById('lvscInscriptionQuality');
-        var inscriptionStatInput = document.getElementById('lvscInscriptionStat');
-        var inscriptionMinValueInput = document.getElementById('lvscInscriptionMinValue');
-        var inscriptionStopModeInput = document.getElementById('lvscInscriptionStopMode');
-        var inscriptionAutoEquipInput = document.getElementById('lvscInscriptionAutoEquip');
-        var inscriptionMaxAttemptsInput = document.getElementById('lvscInscriptionMaxAttempts');
-        var inscriptionResultDelayInput = document.getElementById('lvscInscriptionResultDelay');
-        var inscriptionDiscardDelayInput = document.getElementById('lvscInscriptionDiscardDelay');
-        var treasureBatchInput = document.getElementById('lvscTreasureBatchSize');
-        var treasureQtyInput = document.getElementById('lvscTreasureUseQuantity');
-        var treasureIntervalInput = document.getElementById('lvscTreasureIntervalMs');
-        var desktopNotifyInput = document.getElementById('lvscDesktopNotify');
-        var monitorStartInput = document.getElementById('lvscMonitorStartSpirit');
-        var selfFightInput = document.getElementById('lvscAutoSelfFightWeak');
-        var selfFightMarginInput = document.getElementById('lvscSelfFightMargin');
-        var sectRecoveryInput = document.getElementById('lvscSectQuickRecovery');
-        var recoveryModeInput = document.getElementById('lvscAutoRecoveryMode');
-        var recoveryThresholdInput = document.getElementById('lvscAutoRecoveryThreshold');
-        var recoveryTargetInput = document.getElementById('lvscAutoRecoveryTarget');
-        var hpPriorityInput = document.getElementById('lvscAutoHpPriority');
-        var mpPriorityInput = document.getElementById('lvscAutoMpPriority');
-        var updateManifestInput = document.getElementById('lvscUpdateManifestUrl');
-        var voidInput = document.getElementById('lvscAutoVoidBody');
-        var voidRarityInput = document.getElementById('lvscVoidRarity');
-        var voidQtyInput = document.getElementById('lvscVoidBuyQty');
-        var hiddenCharmInput = document.getElementById('lvscAutoHiddenCharm');
-        var hiddenCharmRarityInput = document.getElementById('lvscHiddenCharmRarity');
-        var hiddenCharmQtyInput = document.getElementById('lvscHiddenCharmBuyQty');
-        var hiddenCharmRetryInput = document.getElementById('lvscHiddenCharmRetryMs');
-        var autoRepairInput = document.getElementById('lvscAutoRepair');
-        var repairThresholdInput = document.getElementById('lvscRepairThreshold');
-        var reviveExploreAreaInput = document.getElementById('lvscReviveExploreArea');
-        var autoNatalDevourInput = document.getElementById('lvscAutoNatalDevour');
-        var autoRecruitInput = document.getElementById('lvscAutoRecruit');
-        var recruitIntervalInput = document.getElementById('lvscRecruitIntervalMs');
-        var chatOnTopInput = document.getElementById('lvscChatOnTop');
-        var wecomNotifyInput = document.getElementById('lvscWecomNotify');
-        var wecomNotifyWebhookInput = document.getElementById('lvscWecomNotifyWebhook');
-        var wecomWorldWebhookInput = document.getElementById('lvscWecomWorldWebhook');
-        var wecomPrivateWebhookInput = document.getElementById('lvscWecomPrivateWebhook');
-        var autoMasterRequestsInput = document.getElementById('lvscAutoMasterRequests');
+    // 从 UI 一次性读取所有设置到 state（不写 localStorage，仅批读用）
+    function readUiToState() {
+        function num(id, minVal, defaultVal) {
+            var el = document.getElementById(id);
+            return Math.max(minVal, Number(el && el.value || defaultVal));
+        }
+        function str(id, defaultVal) {
+            var el = document.getElementById(id);
+            return String(el && el.value || defaultVal).trim();
+        }
+        function chk(id) {
+            var el = document.getElementById(id);
+            return !!(el && el.checked);
+        }
+        function sel(id, defaultVal, validList) {
+            var v = str(id, defaultVal);
+            return validList.indexOf(v) >= 0 ? v : defaultVal;
+        }
 
-        state.reserve = Math.max(0, Number(reserveInput && reserveInput.value || 0));
-        state.delayMs = Math.max(600, Number(delayInput && delayInput.value || 1200));
-        state.hireRetryLimit = Math.max(1, Math.min(10, Number(retryInput && retryInput.value || 2)));
-        state.hireMode = (hireModeInput && hireModeInput.value) || 'cheapest';
-        if (['cheapest', 'together', 'alone'].indexOf(state.hireMode) < 0) state.hireMode = 'cheapest';
-        state.hireMaxFee = Math.max(0, Number(hireMaxFeeInput && hireMaxFeeInput.value || 0));
-        state.keepCurrentMultiplier = !!(multiplierInput && multiplierInput.checked);
-        state.merchantMode = (merchantModeInput && merchantModeInput.value) || 'legend';
-        if (['legend', 'custom', 'leave'].indexOf(state.merchantMode) < 0) state.merchantMode = 'legend';
-        state.merchantKeyword = String(merchantKeywordInput && merchantKeywordInput.value || '').trim();
-        state.merchantQualityFirst = !!(merchantQualityInput && merchantQualityInput.checked);
-        state.merchantMaxPrice = Math.max(0, Number(merchantMaxPriceInput && merchantMaxPriceInput.value || 0));
-        state.merchantStrictMatch = !!(merchantStrictMatchInput && merchantStrictMatchInput.checked);
-        state.autoMerchantLegend = !!(merchantInput && merchantInput.checked);
-        state.autoHireCheapest = !!(hireInput && hireInput.checked);
-        state.autoMeditate = !!(meditateInput && meditateInput.checked);
-        state.autoExploreAfterMeditate = !!(exploreAfterMeditateInput && exploreAfterMeditateInput.checked);
-        state.nightOnlyExplore = !!(nightOnlyInput && nightOnlyInput.checked);
-        state.autoReviveDeath = !!(reviveDeathInput && reviveDeathInput.checked);
-        state.checkDaoyunBoost = !!(daoyunBoostInput && daoyunBoostInput.checked);
-        state.useAdvancedMeditate = !!(advancedMeditateInput && advancedMeditateInput.checked);
-        state.meditateStopSpirit = Math.max(0, Number(meditateStopInput && meditateStopInput.value || 0));
-        state.inscriptionQuality = String(inscriptionQualityInput && inscriptionQualityInput.value || 'any').trim();
-        if (!state.inscriptionQuality || state.inscriptionQuality === '不限') state.inscriptionQuality = 'any';
-        state.inscriptionStat = (inscriptionStatInput && inscriptionStatInput.value) || '攻击';
-        if (['攻击', '防御', '气血', '神识'].indexOf(state.inscriptionStat) < 0) state.inscriptionStat = '攻击';
-        state.inscriptionMinValue = Math.max(0, Number(inscriptionMinValueInput && inscriptionMinValueInput.value || 0));
+        state.reserve = num('lvscReserve', 0, 0);
+        state.delayMs = num('lvscDelay', 600, 1200);
+        state.hireRetryLimit = Math.max(1, Math.min(10, num('lvscHireRetryLimit', 1, 2)));
+        state.hireMode = sel('lvscHireMode', 'cheapest', ['cheapest', 'together', 'alone']);
+        state.hireMaxFee = num('lvscHireMaxFee', 0, 0);
+        state.keepCurrentMultiplier = chk('lvscKeepMultiplier');
+        state.merchantMode = sel('lvscMerchantMode', 'legend', ['legend', 'custom', 'leave']);
+        state.merchantKeyword = str('lvscMerchantKeyword', '');
+        state.merchantQualityFirst = chk('lvscMerchantQualityFirst');
+        state.merchantMaxPrice = num('lvscMerchantMaxPrice', 0, 0);
+        state.merchantStrictMatch = chk('lvscMerchantStrictMatch');
+        state.autoMerchantLegend = chk('lvscAutoMerchant');
+        state.autoHireCheapest = chk('lvscAutoHire');
+        state.autoMeditate = chk('lvscAutoMeditate');
+        state.autoExploreAfterMeditate = chk('lvscAutoExploreAfterMeditate');
+        state.nightOnlyExplore = chk('lvscNightOnlyExplore');
+        state.autoReviveDeath = chk('lvscAutoReviveDeath');
+        state.checkDaoyunBoost = chk('lvscCheckDaoyunBoost');
+        state.useAdvancedMeditate = chk('lvscUseAdvancedMeditate');
+        state.meditateStopSpirit = num('lvscMeditateStopSpirit', 0, 0);
+        var iQual = str('lvscInscriptionQuality', 'any');
+        state.inscriptionQuality = (!iQual || iQual === '不限') ? 'any' : iQual;
+        state.inscriptionStat = sel('lvscInscriptionStat', '攻击', ['攻击', '防御', '气血', '神识']);
+        state.inscriptionMinValue = num('lvscInscriptionMinValue', 0, 0);
         state.inscriptionTargets = state.inscriptionStat + ':' + state.inscriptionMinValue;
-        state.inscriptionStopMode = (inscriptionStopModeInput && inscriptionStopModeInput.value) || 'any';
-        if (['any', 'all', 'manual'].indexOf(state.inscriptionStopMode) < 0) state.inscriptionStopMode = 'any';
-        state.inscriptionAutoEquip = !!(inscriptionAutoEquipInput && inscriptionAutoEquipInput.checked);
-        state.inscriptionMaxAttempts = Math.max(0, Number(inscriptionMaxAttemptsInput && inscriptionMaxAttemptsInput.value || 0));
-        state.inscriptionResultDelay = Math.max(500, Number(inscriptionResultDelayInput && inscriptionResultDelayInput.value || 1500));
-        state.inscriptionDiscardDelay = Math.max(300, Number(inscriptionDiscardDelayInput && inscriptionDiscardDelayInput.value || 600));
-        state.treasureBatchSize = Math.max(0, Number(treasureBatchInput && treasureBatchInput.value || 0));
-        state.treasureUseQuantity = Math.max(1, Number(treasureQtyInput && treasureQtyInput.value || 1));
-        state.treasureIntervalMs = Math.max(0, Number(treasureIntervalInput && treasureIntervalInput.value || 0));
-        state.desktopNotify = !!(desktopNotifyInput && desktopNotifyInput.checked);
-        state.monitorStartSpirit = Math.max(0, Number(monitorStartInput && monitorStartInput.value || 0));
-        state.autoSelfFightWeak = !!(selfFightInput && selfFightInput.checked);
-        state.selfFightMargin = Math.max(1, Math.min(3, Number(selfFightMarginInput && selfFightMarginInput.value || 1.15)));
-        state.autoRecoveryMode = (recoveryModeInput && recoveryModeInput.value) || 'both';
-        if (['none', 'hp', 'mp', 'both'].indexOf(state.autoRecoveryMode) < 0) state.autoRecoveryMode = 'both';
-        state.sectQuickRecovery = !!(sectRecoveryInput && sectRecoveryInput.checked);
-        state.autoRecoveryThreshold = Math.max(0, Math.min(100, Number(recoveryThresholdInput && recoveryThresholdInput.value || 80)));
-        state.autoRecoveryTarget = Math.max(0, Math.min(100, Number(recoveryTargetInput && recoveryTargetInput.value || 100)));
-        state.autoHpPriority = String(hpPriorityInput && hpPriorityInput.value || '灵力,丹药,宗门').trim();
-        state.autoMpPriority = String(mpPriorityInput && mpPriorityInput.value || '灵石,丹药,宗门').trim();
-        state.updateManifestUrl = String(updateManifestInput && updateManifestInput.value || '').trim();
-        state.autoVoidBody = !!(voidInput && voidInput.checked);
-        state.voidBodyRarity = Math.max(1, Math.min(5, Number(voidRarityInput && voidRarityInput.value || 5)));
-        state.voidBodyBuyQty = Math.max(1, Math.min(999, Number(voidQtyInput && voidQtyInput.value || 1)));
-        state.autoHiddenCharm = !!(hiddenCharmInput && hiddenCharmInput.checked);
-        state.hiddenCharmRarity = Math.max(0, Math.min(5, Number(hiddenCharmRarityInput && hiddenCharmRarityInput.value || 0)));
-        state.hiddenCharmBuyQty = Math.max(1, Math.min(999, Number(hiddenCharmQtyInput && hiddenCharmQtyInput.value || 1)));
-        state.hiddenCharmRetryMs = Math.max(3000, Number(hiddenCharmRetryInput && hiddenCharmRetryInput.value || 60000));
-        state.autoRepair = !!(autoRepairInput && autoRepairInput.checked);
-        state.repairThreshold = Math.max(0, Math.min(100, Number(repairThresholdInput && repairThresholdInput.value || 70)));
-        state.reviveExploreArea = String(reviveExploreAreaInput && reviveExploreAreaInput.value || '').trim();
-        state.autoNatalDevour = !!(autoNatalDevourInput && autoNatalDevourInput.checked);
-        state.autoRecruit = !!(autoRecruitInput && autoRecruitInput.checked);
-        state.recruitIntervalMs = Math.max(1000, Number(recruitIntervalInput && recruitIntervalInput.value || 5000));
-        state.chatOnTop = !!(chatOnTopInput && chatOnTopInput.checked);
-        state.wecomNotify = !!(wecomNotifyInput && wecomNotifyInput.checked);
-        state.wecomNotifyWebhook = String(wecomNotifyWebhookInput && wecomNotifyWebhookInput.value || '').trim();
-        state.wecomWorldWebhook = String(wecomWorldWebhookInput && wecomWorldWebhookInput.value || '').trim();
-        state.wecomPrivateWebhook = String(wecomPrivateWebhookInput && wecomPrivateWebhookInput.value || '').trim();
-        state.autoMasterRequests = !!(autoMasterRequestsInput && autoMasterRequestsInput.checked);
-
-        localStorage.setItem('lvSpiritCleaner.reserve', String(state.reserve));
-        localStorage.setItem('lvSpiritCleaner.delayMs', String(state.delayMs));
-        localStorage.setItem('lvSpiritCleaner.hireRetryLimit', String(state.hireRetryLimit));
-        localStorage.setItem('lvSpiritCleaner.hireMode', state.hireMode);
-        localStorage.setItem('lvSpiritCleaner.hireMaxFee', String(state.hireMaxFee));
-        localStorage.setItem('lvSpiritCleaner.keepMultiplier', state.keepCurrentMultiplier ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.merchantMode', state.merchantMode);
-        localStorage.setItem('lvSpiritCleaner.merchantKeyword', state.merchantKeyword);
-        localStorage.setItem('lvSpiritCleaner.merchantQualityFirst', state.merchantQualityFirst ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.merchantMaxPrice', String(state.merchantMaxPrice));
-        localStorage.setItem('lvSpiritCleaner.merchantStrictMatch', state.merchantStrictMatch ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoMerchantLegend', state.autoMerchantLegend ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoHireCheapest', state.autoHireCheapest ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoMeditate', state.autoMeditate ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoExploreAfterMeditate', state.autoExploreAfterMeditate ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.nightOnlyExplore', state.nightOnlyExplore ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoReviveDeath', state.autoReviveDeath ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.checkDaoyunBoost', state.checkDaoyunBoost ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.useAdvancedMeditate', state.useAdvancedMeditate ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.meditateStopSpirit', String(state.meditateStopSpirit));
-        localStorage.setItem('lvSpiritCleaner.inscriptionTargets', state.inscriptionTargets);
-        localStorage.setItem('lvSpiritCleaner.inscriptionQuality', state.inscriptionQuality);
-        localStorage.setItem('lvSpiritCleaner.inscriptionStat', state.inscriptionStat);
-        localStorage.setItem('lvSpiritCleaner.inscriptionMinValue', String(state.inscriptionMinValue));
-        localStorage.setItem('lvSpiritCleaner.inscriptionStopMode', state.inscriptionStopMode);
-        localStorage.setItem('lvSpiritCleaner.inscriptionAutoEquip', state.inscriptionAutoEquip ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.inscriptionMaxAttempts', String(state.inscriptionMaxAttempts));
-        localStorage.setItem('lvSpiritCleaner.inscriptionResultDelay', String(state.inscriptionResultDelay));
-        localStorage.setItem('lvSpiritCleaner.inscriptionDiscardDelay', String(state.inscriptionDiscardDelay));
-        localStorage.setItem('lvSpiritCleaner.treasureBatchSize', String(state.treasureBatchSize));
-        localStorage.setItem('lvSpiritCleaner.treasureUseQuantity', String(state.treasureUseQuantity));
-        localStorage.setItem('lvSpiritCleaner.treasureIntervalMs', String(state.treasureIntervalMs));
-        localStorage.setItem('lvSpiritCleaner.desktopNotify', state.desktopNotify ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.monitorStartSpirit', String(state.monitorStartSpirit));
-        localStorage.setItem('lvSpiritCleaner.autoSelfFightWeak', state.autoSelfFightWeak ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.selfFightMargin', String(state.selfFightMargin));
-        localStorage.setItem('lvSpiritCleaner.autoRecoveryMode', state.autoRecoveryMode);
-        localStorage.setItem('lvSpiritCleaner.autoRecoveryThreshold', String(state.autoRecoveryThreshold));
-        localStorage.setItem('lvSpiritCleaner.autoRecoveryTarget', String(state.autoRecoveryTarget));
-        localStorage.setItem('lvSpiritCleaner.sectQuickRecovery', state.sectQuickRecovery ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoHpPriority', state.autoHpPriority);
-        localStorage.setItem('lvSpiritCleaner.autoMpPriority', state.autoMpPriority);
-        localStorage.setItem('lvSpiritCleaner.updateManifestUrl', state.updateManifestUrl);
-        localStorage.setItem('lvSpiritCleaner.autoVoidBody', state.autoVoidBody ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.voidBodyRarity', String(state.voidBodyRarity));
-        localStorage.setItem('lvSpiritCleaner.voidBodyBuyQty', String(state.voidBodyBuyQty));
-        localStorage.setItem('lvSpiritCleaner.autoHiddenCharm', state.autoHiddenCharm ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.hiddenCharmRarity', String(state.hiddenCharmRarity));
-        localStorage.setItem('lvSpiritCleaner.hiddenCharmBuyQty', String(state.hiddenCharmBuyQty));
-        localStorage.setItem('lvSpiritCleaner.hiddenCharmRetryMs', String(state.hiddenCharmRetryMs));
-        localStorage.setItem('lvSpiritCleaner.autoRepair', state.autoRepair ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.repairThreshold', String(state.repairThreshold));
-        localStorage.setItem('lvSpiritCleaner.reviveExploreArea', state.reviveExploreArea);
-        localStorage.setItem('lvSpiritCleaner.autoNatalDevour', state.autoNatalDevour ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.autoRecruit', state.autoRecruit ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.recruitIntervalMs', String(state.recruitIntervalMs));
-        localStorage.setItem('lvSpiritCleaner.chatOnTop', state.chatOnTop ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.wecomNotify', state.wecomNotify ? '1' : '0');
-        localStorage.setItem('lvSpiritCleaner.wecomNotifyWebhook', state.wecomNotifyWebhook);
-        localStorage.setItem('lvSpiritCleaner.wecomWorldWebhook', state.wecomWorldWebhook);
-        localStorage.setItem('lvSpiritCleaner.wecomPrivateWebhook', state.wecomPrivateWebhook);
-        localStorage.setItem('lvSpiritCleaner.autoMasterRequests', state.autoMasterRequests ? '1' : '0');
+        state.inscriptionStopMode = sel('lvscInscriptionStopMode', 'any', ['any', 'all', 'manual']);
+        state.inscriptionAutoEquip = chk('lvscInscriptionAutoEquip');
+        state.inscriptionMaxAttempts = num('lvscInscriptionMaxAttempts', 0, 0);
+        state.inscriptionResultDelay = num('lvscInscriptionResultDelay', 500, 1500);
+        state.inscriptionDiscardDelay = num('lvscInscriptionDiscardDelay', 300, 600);
+        state.treasureBatchSize = num('lvscTreasureBatchSize', 0, 0);
+        state.treasureUseQuantity = num('lvscTreasureUseQuantity', 1, 1);
+        state.treasureIntervalMs = num('lvscTreasureIntervalMs', 0, 0);
+        state.desktopNotify = chk('lvscDesktopNotify');
+        state.monitorStartSpirit = num('lvscMonitorStartSpirit', 0, 0);
+        state.autoSelfFightWeak = chk('lvscAutoSelfFightWeak');
+        state.selfFightMargin = Math.max(1, Math.min(3, num('lvscSelfFightMargin', 1, 1.15)));
+        state.autoRecoveryMode = sel('lvscAutoRecoveryMode', 'both', ['none', 'hp', 'mp', 'both']);
+        state.sectQuickRecovery = chk('lvscSectQuickRecovery');
+        state.autoRecoveryThreshold = Math.max(0, Math.min(100, num('lvscAutoRecoveryThreshold', 0, 80)));
+        state.autoRecoveryTarget = Math.max(0, Math.min(100, num('lvscAutoRecoveryTarget', 0, 100)));
+        state.autoHpPriority = str('lvscAutoHpPriority', '灵力,丹药,宗门');
+        state.autoMpPriority = str('lvscAutoMpPriority', '灵石,丹药,宗门');
+        state.updateManifestUrl = str('lvscUpdateManifestUrl', '');
+        state.autoVoidBody = chk('lvscAutoVoidBody');
+        state.voidBodyRarity = Math.max(1, Math.min(5, num('lvscVoidRarity', 1, 5)));
+        state.voidBodyBuyQty = Math.max(1, Math.min(999, num('lvscVoidBuyQty', 1, 1)));
+        state.autoHiddenCharm = chk('lvscAutoHiddenCharm');
+        state.hiddenCharmRarity = Math.max(0, Math.min(5, num('lvscHiddenCharmRarity', 0, 0)));
+        state.hiddenCharmBuyQty = Math.max(1, Math.min(999, num('lvscHiddenCharmBuyQty', 1, 1)));
+        state.hiddenCharmRetryMs = Math.max(3000, num('lvscHiddenCharmRetryMs', 3000, 60000));
+        state.autoRepair = chk('lvscAutoRepair');
+        state.repairThreshold = Math.max(0, Math.min(100, num('lvscRepairThreshold', 0, 70)));
+        state.reviveExploreArea = str('lvscReviveExploreArea', '');
+        state.autoNatalDevour = chk('lvscAutoNatalDevour');
+        state.autoRecruit = chk('lvscAutoRecruit');
+        state.recruitIntervalMs = Math.max(1000, num('lvscRecruitIntervalMs', 1000, 5000));
+        state.chatOnTop = chk('lvscChatOnTop');
+        state.wecomNotify = chk('lvscWecomNotify');
+        state.wecomNotifyWebhook = str('lvscWecomNotifyWebhook', '');
+        state.wecomWorldWebhook = str('lvscWecomWorldWebhook', '');
+        state.wecomPrivateWebhook = str('lvscWecomPrivateWebhook', '');
+        state.autoMasterRequests = chk('lvscAutoMasterRequests');
     }
+
+    // 保证别名：运行循环启动时需要从 UI 读取
+    var syncSettingsFromUi = readUiToState;
 
     async function refreshPlayer() {
         if (typeof window.loadPlayerInfo === 'function') {
@@ -712,18 +624,19 @@
         try {
             var res = await gameApi().get('/api/master/overview');
             if (!res || res.code !== 200 || !res.data) {
-                setStatus('道韵加成检查失败，等待手动确认', 'warn');
-                return window.confirm('道韵加成状态读取失败，是否继续' + modeLabel + '？');
+                setStatus('道韵加成检查失败，继续执行', 'run');
+                return true;
             }
             if (res.data.exploreBoostEnabled) {
                 setStatus('道韵加成已开启', 'run');
                 return true;
             }
-            return window.confirm('道韵加成未开启，是否继续' + modeLabel + '？');
+            setStatus('道韵加成未开启，继续执行', 'run');
+            return true;
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] daoyun boost check failed', err);
-            setStatus('道韵加成检查异常，等待手动确认', 'warn');
-            return window.confirm('道韵加成检查异常，是否继续' + modeLabel + '？');
+            setStatus('道韵加成检查异常，继续执行', 'run');
+            return true;
         }
     }
 
@@ -845,8 +758,8 @@
             if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
             await refreshPlayer();
 
-            // 如果配置了复活后自动前往的区域
-            if (state.reviveExploreArea) {
+            // 如果配置了复活后自动前往的区域（下拉有值才跳转）
+            if (state.reviveExploreArea && state.reviveExploreArea !== '（不跳转）') {
                 var areaSelect = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
                 if (areaSelect) {
                     for (var oi = 0; oi < areaSelect.options.length; oi++) {
@@ -857,6 +770,16 @@
                             break;
                         }
                     }
+                }
+            }
+            // 复活后恢复 HP/MP/神识，避免残血连死
+            await sleep(800);
+            setStatus('复活后恢复 HP/MP', 'run');
+            if (state.sectQuickRecovery) await activeRecover();
+            if (state.autoMeditate) {
+                var reviveInfo = getSpiritInfo();
+                if (reviveInfo.spirit < reviveInfo.cost) {
+                    await meditateUntilSpiritFull();
                 }
             }
             setStatus('已引渡归来，继续流程', 'run');
@@ -1342,6 +1265,39 @@
         return ok;
     }
 
+    // 失败安全阀：虚空淬体和隐秘符连续失败超限自动关闭
+    var voidBodyFailStreak = 0;
+    var hiddenCharmFailStreak = 0;
+    var MAX_BUFF_FAIL_STREAK = 10;
+
+    function hasVoidBodyFailSafe() {
+        voidBodyFailStreak++;
+        if (voidBodyFailStreak >= MAX_BUFF_FAIL_STREAK) {
+            state.autoVoidBody = false;
+            persistSetting('lvSpiritCleaner.autoVoidBody', false);
+            voidBodyFailStreak = 0;
+            setStatus('虚空淬体连续失败超限，已自动关闭', 'warn');
+            wecomEnqueue('虚空淬体自动关闭', '连续失败 ' + MAX_BUFF_FAIL_STREAK + ' 次，已关闭开关');
+            document.getElementById('lvscAutoVoidBody').checked = false;
+            return false;
+        }
+        return true;
+    }
+
+    function hasHiddenCharmFailSafe() {
+        hiddenCharmFailStreak++;
+        if (hiddenCharmFailStreak >= MAX_BUFF_FAIL_STREAK) {
+            state.autoHiddenCharm = false;
+            persistSetting('lvSpiritCleaner.autoHiddenCharm', false);
+            hiddenCharmFailStreak = 0;
+            setStatus('隐秘符连续失败超限，已自动关闭', 'warn');
+            wecomEnqueue('隐秘符自动关闭', '连续失败 ' + MAX_BUFF_FAIL_STREAK + ' 次，已关闭开关');
+            document.getElementById('lvscAutoHiddenCharm').checked = false;
+            return false;
+        }
+        return true;
+    }
+
     var MERCHANT_RARITY_TEXT = {
         '普通': 1,
         '优良': 2,
@@ -1713,6 +1669,8 @@
                 return false;
             }
             await finishCombatResult(fightRes.data, '自战');
+            // 战后检查血量，残血自动恢复
+            await recoverAfterCombat();
             return true;
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] self fight failed', err);
@@ -1727,6 +1685,18 @@
         // 所有恢复由脚本 activeRecover() 主动完成，不依赖游戏内置自动恢复设置。
         syncSettingsFromUi();
         setStatus('已保存恢复配置（脚本主动恢复）', 'run');
+    }
+
+    // 战后检查血量，残血自动恢复（避免连战暴毙）
+    async function recoverAfterCombat() {
+        if (!state.sectQuickRecovery || !gameApi()) return;
+        await sleep(300);
+        await refreshPlayer();
+        var s = getPlayerHpMp();
+        if (pct(s.hp, s.maxHp) < 50 || pct(s.mp, s.maxMp) < 30) {
+            setStatus('战后血量/灵力偏低，自动恢复', 'run');
+            await activeRecover();
+        }
     }
 
     async function fetchSectShopServices() {
@@ -2375,6 +2345,7 @@
             if (typeof window.loadInventory === 'function') window.loadInventory();
             if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
             await refreshPlayer();
+            await recoverAfterCombat();
             return true;
         } catch (err) {
             console.warn('[LingVerse Spirit Cleaner] protector hiring failed', err);
@@ -2447,6 +2418,7 @@
         updateMeter();
         setStatus('自动试炼启动', 'run');
 
+        var trialFailRounds = 0;
         while (autoTrialRunning) {
             try {
                 var infoRes = await gameApi().get('/api/trial-tower/info');
@@ -2460,10 +2432,21 @@
                     setStatus('开始新一轮试炼', 'run');
                     var startRes = await gameApi().post('/api/trial-tower/start', { useAdPoints: false });
                     if (!startRes || startRes.code !== 200) {
-                        setStatus('试炼开始失败，等待重试：' + ((startRes && startRes.message) || '未知错误'), 'warn');
+                        trialFailRounds++;
+                        if (trialFailRounds >= 10) {
+                            setStatus('试炼连续失败，自动切换为探索', 'run');
+                            wecomEnqueue('自动切换', '试炼无法继续，切换为探索模式');
+                            autoTrialRunning = false;
+                            updateMeter();
+                            await sleep(500);
+                            runLoop();
+                            return;
+                        }
+                        setStatus('试炼开始失败（' + trialFailRounds + '/10），等待重试', 'warn');
                         await sleep(state.delayMs);
                         continue;
                     }
+                    trialFailRounds = 0;
                     await refreshTrialPanel();
                     await sleep(state.delayMs);
                     continue;
@@ -2541,6 +2524,7 @@
         }
         autoTreasureRunning = true;
         var usedCount = 0;
+        var treasureIdleRounds = 0;
         updateMeter();
         setStatus('自动刷藏宝图启动', 'run');
 
@@ -2579,10 +2563,22 @@
 
                 var map = await findTreasureMap();
                 if (!map) {
-                    setStatus('背包没有藏宝图，等待补充后继续刷图', 'warn');
+                    treasureIdleRounds++;
+                    // 无图超过 30 轮自动切探索模式
+                    if (treasureIdleRounds >= 30) {
+                        setStatus('藏宝图长期无货，自动切换为探索', 'run');
+                        wecomEnqueue('自动切换', '藏宝图已耗尽，切换为探索模式');
+                        autoTreasureRunning = false;
+                        updateMeter();
+                        await sleep(500);
+                        runLoop();
+                        return;
+                    }
+                    setStatus('背包没有藏宝图（' + treasureIdleRounds + '/30），等待补充', 'warn');
                     await sleep(state.treasureIntervalMs || state.delayMs);
                     continue;
                 }
+                treasureIdleRounds = 0;
 
                 if (state.autoHiddenCharm) {
                     if (!await ensureHiddenCharm(false)) {
@@ -2920,9 +2916,14 @@
                             await sleep(state.inscriptionDiscardDelay);
                             continue;
                         }
-                        setStatus('铭文目标达成，已保留结果等待处理', 'run');
-                        await sleep(Math.max(state.inscriptionResultDelay, 2000));
-                        continue;
+                        setStatus('铭文目标达成，自动切换为探索', 'run');
+                        wecomEnqueue('铭文命中', '铭文目标已达成，切换为探索模式');
+                        autoInscriptionRunning = false;
+                        updateInscriptionPanel();
+                        updateMeter();
+                        await sleep(500);
+                        runLoop();
+                        return;
                     }
                     if (!await clickInscriptionDiscardAll()) {
                         inscriptionLog('已有未命中结果但放弃失败，等待重试');
@@ -2966,21 +2967,20 @@
                     inscriptionStats.kept += 1;
                     updateInscriptionPanel();
                     setStatus('铭文目标达成，已保留结果等待处理', 'run');
-                    notifyUser('铭文目标达成', results.map(function (item) { return item.text; }).join('，'));
                     wecomEnqueue('铭文命中', '第' + inscriptionStats.total + '次 | ' + results.map(function (item) { return item.text; }).join('，'));
                     if (state.inscriptionAutoEquip && await autoEquipInscriptionResults(decision.matches)) {
                         await clickInscriptionDiscardAll();
                         await sleep(state.inscriptionDiscardDelay);
                         continue;
                     }
-                    targetHeld = true;
-                    while (autoInscriptionRunning && targetHeld) {
-                        await sleep(Math.max(state.inscriptionResultDelay, 2000));
-                        var heldResults = parseInscriptionResultCards();
-                        var heldDecision = inscriptionTargetDecision(heldResults);
-                        if (!heldResults.length || !heldDecision.met) targetHeld = false;
-                    }
-                    continue;
+                    // 目标达成，自动切换为探索
+                    setStatus('铭文目标达成，自动切换为探索', 'run');
+                    autoInscriptionRunning = false;
+                    updateInscriptionPanel();
+                    updateMeter();
+                    await sleep(500);
+                    runLoop();
+                    return;
                 }
                 if (await clickInscriptionDiscardAll()) {
                     inscriptionStats.discarded += 1;
@@ -3105,6 +3105,49 @@
         monitorSpiritLoop();
     }
 
+    // 检查商家/遭遇阻塞 → 返回 true 表示已处理（应 continue）
+    async function checkEventBlockers() {
+        if (await handleSpecialEvents()) return true;
+        if (isEncounterActive() && state.autoHireCheapest) return true;
+        if (isMerchantActive() && state.autoMerchantLegend) return true;
+        if (isMerchantActive()) {
+            setStatus('商人事件待处理，等待中', 'warn');
+            return true;
+        }
+        return false;
+    }
+
+    // 检查夜间限制 → 返回 true 表示应 continue
+    function checkNightRestriction() {
+        if (state.nightOnlyExplore && !isGameNight()) {
+            setStatus('当前不是夜晚，等待夜晚探索', 'warn');
+            return true;
+        }
+        return false;
+    }
+
+    // 冥想后继续流程 → 无返回值，直接 continue（调用方负责处理）
+    async function meditateThenWait() {
+        if (!await meditateUntilSpiritFull()) {
+            setStatus('神识不足，自动冥想失败，等待重试', 'warn');
+            return false;
+        }
+        if (!state.autoExploreAfterMeditate) {
+            setStatus('已收功，等待手动停止或开启自动继续探索', 'warn');
+        }
+        return true;
+    }
+
+    // 神识不足时自动转入监测模式（等待自然恢复后自动重启清理）
+    async function switchToMonitor(reason) {
+        running = false;
+        updateMeter();
+        setStatus(reason + '，自动转入神识监测', 'run');
+        wecomEnqueue('转入监测', reason);
+        await sleep(500);
+        monitorSpiritLoop();
+    }
+
     async function runLoop() {
         if (running) return;
         if (autoInscriptionRunning) {
@@ -3131,44 +3174,29 @@
         while (running) {
             await refreshPlayer();
 
-            if (await handleSpecialEvents()) {
+            if (await checkEventBlockers()) {
                 await sleep(state.delayMs);
                 continue;
             }
-            if (isEncounterActive() && state.autoHireCheapest) {
-                await sleep(state.delayMs);
-                continue;
-            }
-            if (isMerchantActive() && state.autoMerchantLegend) {
-                await sleep(state.delayMs);
-                continue;
-            }
-            if (isMerchantActive()) {
-                setStatus('商人事件待处理，等待中', 'warn');
-                await sleep(state.delayMs);
-                continue;
-            }
-
-            if (state.nightOnlyExplore && !isGameNight()) {
-                setStatus('当前不是夜晚，等待夜晚探索', 'warn');
+            if (checkNightRestriction()) {
                 await sleep(Math.max(30000, state.delayMs));
                 continue;
             }
 
+            // 探索前加成（支持失败自动降级）
             try {
                 if (state.autoVoidBody && !hasVoidBodyBuff()) {
-                    if (await ensureVoidBodyBuff(false)) {
+                    var vOk = await ensureVoidBodyBuff(false);
+                    if (!vOk) {
+                        if (!hasVoidBodyFailSafe()) { await switchToMonitor('虚空淬体连续失败'); return; }
                         await sleep(state.delayMs);
                         continue;
                     }
-                    setStatus('虚空淬体补充失败，等待重试', 'warn');
-                    await sleep(state.delayMs);
-                    continue;
                 }
-
                 if (state.autoHiddenCharm) {
-                    if (!await ensureHiddenCharm(false)) {
-                        setStatus('隐秘符未能使用，等待重试', 'warn');
+                    var hOk = await ensureHiddenCharm(false);
+                    if (!hOk) {
+                        if (!hasHiddenCharmFailSafe()) { await switchToMonitor('隐秘符连续失败'); return; }
                         await sleep(state.hiddenCharmRetryMs || state.delayMs);
                         continue;
                     }
@@ -3180,35 +3208,20 @@
                 continue;
             }
 
-            if (state.sectQuickRecovery) {
-                await activeRecover();
-            }
+            // 恢复、维修、吞噬、师门
+            if (state.sectQuickRecovery) await activeRecover();
+            if (state.autoRepair) await triggerAutoRepair(false);
+            if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
+            if (state.autoMasterRequests) await handleMasterRequests();
 
-            if (state.autoRepair) {
-                await triggerAutoRepair(false);
-            }
-
-            if (state.autoNatalDevour) {
-                await triggerAutoNatalDevour(false);
-            }
-
-            if (state.autoMasterRequests) {
-                await handleMasterRequests();
-            }
-
+            // 神识检查 + 冥想
             var stopReason = shouldStopBeforeAction();
             if (stopReason) {
                 if (stopReason === 'need_meditate') {
-                    if (await meditateUntilSpiritFull()) {
-                        if (!state.autoExploreAfterMeditate) {
-                            setStatus('已收功，等待手动停止或开启自动继续探索', 'warn');
-                            await sleep(state.delayMs);
-                            continue;
-                        }
-                        await sleep(state.delayMs);
-                        continue;
+                    if (!await meditateThenWait()) {
+                        await switchToMonitor('神识不足且无法恢复');
+                        return;
                     }
-                    setStatus('神识不足，自动冥想失败，等待重试', 'warn');
                     await sleep(state.delayMs);
                     continue;
                 }
@@ -3217,43 +3230,25 @@
                 continue;
             }
 
+            // 探索
             try {
                 var result = await window.handleExplore();
                 updateMeter();
                 if (result === 'stop') {
                     await sleep(500);
-                    if (await handleSpecialEvents()) {
-                        await sleep(state.delayMs);
-                        continue;
-                    }
-                    if (isEncounterActive() && state.autoHireCheapest) {
-                        setStatus('暂无符合条件的护道，等待重试' + (state.hireMaxFee > 0 ? '（上限 ' + state.hireMaxFee + ' 灵石）' : ''), 'warn');
-                        await sleep(state.delayMs);
-                        continue;
-                    }
-                    if (isMerchantActive() && state.autoMerchantLegend) {
-                        await sleep(state.delayMs);
-                        continue;
-                    }
-                    if (isMerchantActive()) {
-                        setStatus('商人事件待处理，等待中', 'warn');
-                        await sleep(state.delayMs);
-                        continue;
-                    }
-                    await refreshPlayer();
-                    var afterExplore = getSpiritInfo();
-                    if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
-                        if (await meditateUntilSpiritFull()) {
-                            if (!state.autoExploreAfterMeditate) {
-                                setStatus('已收功，等待手动停止或开启自动继续探索', 'warn');
-                                await sleep(state.delayMs);
-                                continue;
+                    if (!await checkEventBlockers()) {
+                        await refreshPlayer();
+                        var afterExplore = getSpiritInfo();
+                        if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
+                            if (!await meditateThenWait()) {
+                                await switchToMonitor('探索后神识不足且无法恢复');
+                                return;
                             }
                             await sleep(state.delayMs);
                             continue;
                         }
+                        setStatus('游戏事件触发，等待处理后重试', 'warn');
                     }
-                    setStatus('游戏事件触发，等待处理后重试', 'warn');
                     await sleep(state.delayMs);
                     continue;
                 }
@@ -3865,6 +3860,61 @@
     window._sortRebuild = sortRebuild;
     window._sortMove = sortMove;
 
+    // 单字段 onchange 工具函数（读UI → 更新state → 只写一个localStorage key）
+    function numVal(id) { var el = document.getElementById(id); return Number(el && el.value || 0); }
+    function strVal(id) { var el = document.getElementById(id); return String(el && el.value || '').trim(); }
+    function chkVal(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+
+    function onNum(id, stateKey, minVal, maxVal) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            state[stateKey] = Math.max(minVal, Math.min(maxVal || Infinity, numVal(id)));
+            persistSetting('lvSpiritCleaner.' + stateKey, String(state[stateKey]));
+        };
+    }
+    function onChk(id, stateKey) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            state[stateKey] = chkVal(id);
+            persistSetting('lvSpiritCleaner.' + stateKey, state[stateKey]);
+        };
+    }
+    function onStr(id, stateKey) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            state[stateKey] = strVal(id);
+            persistSetting('lvSpiritCleaner.' + stateKey, state[stateKey]);
+        };
+    }
+    function onSel(id, stateKey, validList) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            var v = strVal(id);
+            state[stateKey] = validList.indexOf(v) >= 0 ? v : validList[0];
+            persistSetting('lvSpiritCleaner.' + stateKey, state[stateKey]);
+        };
+    }
+    function onNumAlt(id, stateKey, storageKey, minVal, maxVal) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            state[stateKey] = Math.max(minVal, Math.min(maxVal || Infinity, numVal(id)));
+            persistSetting(storageKey, String(state[stateKey]));
+        };
+    }
+    function onChkAlt(id, stateKey, storageKey) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.onchange = function () {
+            state[stateKey] = chkVal(id);
+            persistSetting(storageKey, state[stateKey]);
+        };
+    }
+
     function buildPanel() {
         var oldPanel = document.getElementById('lvscPanel');
         if (oldPanel) oldPanel.remove();
@@ -4094,7 +4144,7 @@
             '<label class="lvsc-check"><input id="lvscAutoExploreAfterMeditate" type="checkbox">收功后自动继续探索</label>' +
             '<label class="lvsc-check"><input id="lvscNightOnlyExplore" type="checkbox">只在游戏夜晚探索</label>' +
             '<label class="lvsc-check"><input id="lvscAutoReviveDeath" type="checkbox">陨落后自动引渡归来</label>' +
-            '<label>复活后前往<input id="lvscReviveExploreArea" type="text" placeholder="区域名称，如：仙城外域"></label>' +
+            '<label>复活后前往<select id="lvscReviveExploreArea"><option value="">（不跳转）</option></select><button id="lvscRefreshAreas" style="height:29px;padding:0 8px;margin-left:4px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;font-size:11px;">刷新地图</button></label>' +
             '<label class="lvsc-check"><input id="lvscCheckDaoyunBoost" type="checkbox">启动前检查道韵加成</label>' +
             '<label class="lvsc-check"><input id="lvscUseAdvancedMeditate" type="checkbox">优先仙缘高级冥想</label>' +
             '</div>' +
@@ -4199,7 +4249,7 @@
         document.getElementById('lvscAutoRepair').checked = state.autoRepair;
         document.getElementById('lvscRepairThreshold').value = String(state.repairThreshold);
         document.getElementById('lvscAutoNatalDevour').checked = state.autoNatalDevour;
-        document.getElementById('lvscReviveExploreArea').value = String(state.reviveExploreArea);
+        // reviveExploreArea 已由 refreshReviveAreaSelect 从 localStorage 恢复选中
         document.getElementById('lvscAutoRecruit').checked = state.autoRecruit;
         document.getElementById('lvscRecruitIntervalMs').value = String(state.recruitIntervalMs);
         document.getElementById('lvscAutoHpPriority').value = String(state.autoHpPriority);
@@ -4324,87 +4374,136 @@
                 activatePanelTab(button.getAttribute('data-tab'));
             };
         });
-        document.getElementById('lvscReserve').onchange = syncSettingsFromUi;
-        document.getElementById('lvscDelay').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHireRetryLimit').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHireMode').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHireMaxFee').onchange = syncSettingsFromUi;
-        document.getElementById('lvscKeepMultiplier').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMerchantMode').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMerchantKeyword').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMerchantQualityFirst').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMerchantStrictMatch').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMerchantMaxPrice').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoMerchant').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoSelfFightWeak').onchange = syncSettingsFromUi;
-        document.getElementById('lvscSelfFightMargin').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoHire').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoRecoveryMode').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoRecoveryThreshold').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoRecoveryTarget').onchange = syncSettingsFromUi;
-        document.getElementById('lvscSectQuickRecovery').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoRepair').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoNatalDevour').onchange = syncSettingsFromUi;
-        document.getElementById('lvscRepairThreshold').onchange = syncSettingsFromUi;
-        document.getElementById('lvscReviveExploreArea').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoRecruit').onchange = function () {
-            syncSettingsFromUi();
-            if (state.autoRecruit) {
-                startRecruitObserver();
-            } else {
-                stopRecruitObserver();
+        // === 单字段 onchange 绑定（只写一个 key）===
+        onNum('lvscReserve', 'reserve', 0);
+        onNum('lvscDelay', 'delayMs', 600);
+        onNum('lvscHireRetryLimit', 'hireRetryLimit', 1);
+        onSel('lvscHireMode', 'hireMode', ['cheapest', 'together', 'alone']);
+        onNum('lvscHireMaxFee', 'hireMaxFee', 0);
+        onChkAlt('lvscKeepMultiplier', 'keepCurrentMultiplier', 'lvSpiritCleaner.keepMultiplier');
+        onSel('lvscMerchantMode', 'merchantMode', ['legend', 'custom', 'leave']);
+        onStr('lvscMerchantKeyword', 'merchantKeyword');
+        onChk('lvscMerchantQualityFirst', 'merchantQualityFirst');
+        onChk('lvscMerchantStrictMatch', 'merchantStrictMatch');
+        onNum('lvscMerchantMaxPrice', 'merchantMaxPrice', 0);
+        onChk('lvscAutoMerchant', 'autoMerchantLegend');
+        onChk('lvscAutoSelfFightWeak', 'autoSelfFightWeak');
+        onNum('lvscSelfFightMargin', 'selfFightMargin', 1);
+        onChk('lvscAutoHire', 'autoHireCheapest');
+        onSel('lvscAutoRecoveryMode', 'autoRecoveryMode', ['none', 'hp', 'mp', 'both']);
+        onNum('lvscAutoRecoveryThreshold', 'autoRecoveryThreshold', 0);
+        onNum('lvscAutoRecoveryTarget', 'autoRecoveryTarget', 0);
+        onChk('lvscSectQuickRecovery', 'sectQuickRecovery');
+        onChk('lvscAutoRepair', 'autoRepair');
+        onChk('lvscAutoNatalDevour', 'autoNatalDevour');
+        onNum('lvscRepairThreshold', 'repairThreshold', 0);
+        // 复活后前往：从游戏 exploreArea 读下拉选项
+        function refreshReviveAreaSelect() {
+            var targetSel = document.getElementById('lvscReviveExploreArea');
+            if (!targetSel) return;
+            var gameSel = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+            var saved = localStorage.getItem('lvSpiritCleaner.reviveExploreArea') || '';
+            targetSel.innerHTML = '<option value="">（不跳转）</option>';
+            if (!gameSel) return;
+            for (var oi = 0; oi < gameSel.options.length; oi++) {
+                var opt = gameSel.options[oi];
+                var val = String(opt.value || '');
+                var txt = String(opt.text || '').trim();
+                if (!txt) continue;
+                targetSel.innerHTML += '<option value="' + txt + '"' + (saved === txt ? ' selected' : '') + '>' + txt + '</option>';
             }
+        }
+        refreshReviveAreaSelect();
+        // 监听大地图切换
+        var gameAreaEl = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+        if (gameAreaEl) {
+            var origOnChange = gameAreaEl.onchange;
+            gameAreaEl.addEventListener('change', function () { setTimeout(refreshReviveAreaSelect, 500); });
+            // MutationObserver 监听 option 变化（切换大地图时 option 可能异步更新）
+            var areaObserver = new MutationObserver(function () { setTimeout(refreshReviveAreaSelect, 500); });
+            areaObserver.observe(gameAreaEl, { childList: true, subtree: true });
+        }
+        // 刷新按钮
+        document.getElementById('lvscRefreshAreas').onclick = refreshReviveAreaSelect;
+        // 保存选中值
+        document.getElementById('lvscReviveExploreArea').onchange = function () {
+            state.reviveExploreArea = this.value;
+            localStorage.setItem('lvSpiritCleaner.reviveExploreArea', state.reviveExploreArea);
         };
-        document.getElementById('lvscRecruitIntervalMs').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoHpPriority').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoMpPriority').onchange = syncSettingsFromUi;
-        document.getElementById('lvscUpdateManifestUrl').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoMeditate').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMeditateStopSpirit').onchange = syncSettingsFromUi;
-        document.getElementById('lvscMonitorStartSpirit').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoExploreAfterMeditate').onchange = syncSettingsFromUi;
-        document.getElementById('lvscNightOnlyExplore').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoReviveDeath').onchange = syncSettingsFromUi;
-        document.getElementById('lvscCheckDaoyunBoost').onchange = syncSettingsFromUi;
-        document.getElementById('lvscUseAdvancedMeditate').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionQuality').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionStat').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionMinValue').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionStopMode').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionMaxAttempts').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionResultDelay').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionDiscardDelay').onchange = syncSettingsFromUi;
-        document.getElementById('lvscInscriptionAutoEquip').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureBatchSize').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureUseQuantity').onchange = syncSettingsFromUi;
-        document.getElementById('lvscTreasureIntervalMs').onchange = syncSettingsFromUi;
-        document.getElementById('lvscDesktopNotify').onchange = syncSettingsFromUi;
+        // 自动收徒：需要额外启停 observer
+        document.getElementById('lvscAutoRecruit').onchange = function () {
+            state.autoRecruit = chkVal('lvscAutoRecruit');
+            persistSetting('lvSpiritCleaner.autoRecruit', state.autoRecruit);
+            if (state.autoRecruit) startRecruitObserver(); else stopRecruitObserver();
+        };
+        onNum('lvscRecruitIntervalMs', 'recruitIntervalMs', 1000);
+        onStr('lvscAutoHpPriority', 'autoHpPriority');
+        onStr('lvscAutoMpPriority', 'autoMpPriority');
+        onStr('lvscUpdateManifestUrl', 'updateManifestUrl');
+        onChk('lvscAutoMeditate', 'autoMeditate');
+        onNum('lvscMeditateStopSpirit', 'meditateStopSpirit', 0);
+        onNum('lvscMonitorStartSpirit', 'monitorStartSpirit', 0);
+        onChk('lvscAutoExploreAfterMeditate', 'autoExploreAfterMeditate');
+        onChk('lvscNightOnlyExplore', 'nightOnlyExplore');
+        onChk('lvscAutoReviveDeath', 'autoReviveDeath');
+        onChk('lvscCheckDaoyunBoost', 'checkDaoyunBoost');
+        onChk('lvscUseAdvancedMeditate', 'useAdvancedMeditate');
+        onSel('lvscInscriptionQuality', 'inscriptionQuality', ['any', 'common', 'uncommon', 'rare', 'epic', 'legend', '普通', '优良', '稀有', '史诗', '传说']);
+        // 铭文属性和最小值变化时需要同步 targets
+        document.getElementById('lvscInscriptionStat').onchange = function () {
+            state.inscriptionStat = strVal('lvscInscriptionStat');
+            state.inscriptionTargets = state.inscriptionStat + ':' + state.inscriptionMinValue;
+            persistSetting('lvSpiritCleaner.inscriptionStat', state.inscriptionStat);
+            persistSetting('lvSpiritCleaner.inscriptionTargets', state.inscriptionTargets);
+        };
+        document.getElementById('lvscInscriptionMinValue').onchange = function () {
+            state.inscriptionMinValue = Math.max(0, numVal('lvscInscriptionMinValue'));
+            state.inscriptionTargets = state.inscriptionStat + ':' + state.inscriptionMinValue;
+            persistSetting('lvSpiritCleaner.inscriptionMinValue', String(state.inscriptionMinValue));
+            persistSetting('lvSpiritCleaner.inscriptionTargets', state.inscriptionTargets);
+        };
+        onSel('lvscInscriptionStopMode', 'inscriptionStopMode', ['any', 'all', 'manual']);
+        onNum('lvscInscriptionMaxAttempts', 'inscriptionMaxAttempts', 0);
+        onNum('lvscInscriptionResultDelay', 'inscriptionResultDelay', 500);
+        onNum('lvscInscriptionDiscardDelay', 'inscriptionDiscardDelay', 300);
+        onChk('lvscInscriptionAutoEquip', 'inscriptionAutoEquip');
+        onNum('lvscTreasureBatchSize', 'treasureBatchSize', 0);
+        onNum('lvscTreasureUseQuantity', 'treasureUseQuantity', 1);
+        onNum('lvscTreasureIntervalMs', 'treasureIntervalMs', 0);
+        onChk('lvscDesktopNotify', 'desktopNotify');
+        // chatOnTop: 额外应用 z-index
         document.getElementById('lvscChatOnTop').onchange = function () {
-            syncSettingsFromUi();
+            state.chatOnTop = chkVal('lvscChatOnTop');
+            persistSetting('lvSpiritCleaner.chatOnTop', state.chatOnTop);
             applyChatZIndex(state.chatOnTop);
         };
+        // wecomNotify: 额外切换字段显示 + 启停 observer
         document.getElementById('lvscWecomNotify').onchange = function () {
-            syncSettingsFromUi();
+            state.wecomNotify = chkVal('lvscWecomNotify');
+            persistSetting('lvSpiritCleaner.wecomNotify', state.wecomNotify);
             document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
             if (state.wecomNotify) startRecruitObserver();
         };
-        document.getElementById('lvscWecomNotifyWebhook').onchange = syncSettingsFromUi;
-        document.getElementById('lvscWecomWorldWebhook').onchange = syncSettingsFromUi;
-        document.getElementById('lvscWecomPrivateWebhook').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoMasterRequests').onchange = syncSettingsFromUi;
+        onStr('lvscWecomNotifyWebhook', 'wecomNotifyWebhook');
+        onStr('lvscWecomWorldWebhook', 'wecomWorldWebhook');
+        onStr('lvscWecomPrivateWebhook', 'wecomPrivateWebhook');
+        onChk('lvscAutoMasterRequests', 'autoMasterRequests');
+        // 企业微信测试按钮：直接从 DOM 读值
         document.getElementById('lvscWecomTestBtn').onclick = function () {
-            syncSettingsFromUi();
+            state.wecomNotifyWebhook = strVal('lvscWecomNotifyWebhook');
+            state.wecomWorldWebhook = strVal('lvscWecomWorldWebhook');
+            state.wecomPrivateWebhook = strVal('lvscWecomPrivateWebhook');
             if (state.wecomNotifyWebhook) wecomEnqueue('通知测试', '通知 OK！', state.wecomNotifyWebhook);
             if (state.wecomWorldWebhook) wecomEnqueue('世界测试', '世界 OK！', state.wecomWorldWebhook);
             if (state.wecomPrivateWebhook) wecomEnqueue('私信测试', '私信 OK！', state.wecomPrivateWebhook);
         };
-        document.getElementById('lvscAutoVoidBody').onchange = syncSettingsFromUi;
-        document.getElementById('lvscVoidRarity').onchange = syncSettingsFromUi;
-        document.getElementById('lvscVoidBuyQty').onchange = syncSettingsFromUi;
-        document.getElementById('lvscAutoHiddenCharm').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHiddenCharmRarity').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHiddenCharmBuyQty').onchange = syncSettingsFromUi;
-        document.getElementById('lvscHiddenCharmRetryMs').onchange = syncSettingsFromUi;
+        onChk('lvscAutoVoidBody', 'autoVoidBody');
+        onNum('lvscVoidRarity', 'voidBodyRarity', 1);
+        onNum('lvscVoidBuyQty', 'voidBodyBuyQty', 1);
+        onChk('lvscAutoHiddenCharm', 'autoHiddenCharm');
+        onNum('lvscHiddenCharmRarity', 'hiddenCharmRarity', 0);
+        onNum('lvscHiddenCharmBuyQty', 'hiddenCharmBuyQty', 1);
+        onNum('lvscHiddenCharmRetryMs', 'hiddenCharmRetryMs', 3000);
 
         setPanelCollapsed(panel, localStorage.getItem('lvSpiritCleaner.collapsed') === '1');
         activatePanelTab(localStorage.getItem('lvSpiritCleaner.activeTab') || 'basic');
