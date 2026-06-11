@@ -2814,20 +2814,22 @@
     }
     function parseDrawResults(data) {
         if (!data) return [];
-        // 游戏返回格式: { inscriptions: [...], info: {...} }
         var items = data.inscriptions || data.results || data.pendingInscriptions || [];
         if (!Array.isArray(items) || !items.length) return [];
         var results = [];
         for (var di = 0; di < items.length; di++) {
             var item = items[di];
             if (!item) continue;
+            var qNum = Number(item.quality || 0);
+            var qName = inscriptionQualityName(qNum);
             results.push({
-                quality: item.quality || 0,
-                qualityName: inscriptionQualityName(item.quality || 0),
+                quality: qName,           // 用文字名（天纹/仙纹等），匹配 inscriptionQualityOk
+                qualityNum: qNum,         // 保留数字备用
+                qualityName: qName,
                 stat: item.stat || item.statName || '',
                 value: Number(item.value || 0),
                 pendingIndex: item.pendingIndex != null ? Number(item.pendingIndex) : di,
-                text: inscriptionQualityName(item.quality || 0) + '·' + (item.stat || item.statName || '') + '+' + (item.value || 0)
+                text: qName + '·' + (item.stat || item.statName || '') + '+' + (item.value || 0)
             });
         }
         return results;
