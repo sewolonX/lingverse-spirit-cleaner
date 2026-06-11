@@ -2830,16 +2830,18 @@
             var qName = inscriptionQualityName(qNum);
             var st = item.statType || item.stat || item.statName || '';
             var sName = inscriptionStatName(st, qNum);
-            // 天纹 value 是百分比（如 45 = 45%），普通是数值
-            var val = Number(item.value || 0);
-            var valText = qNum === 7 ? '+' + val + '%' : '+' + val;
+            var rawVal = Number(item.value || 0);
+            // 天纹 value 除以10才是百分比（45 → 4.5%）
+            var val = qNum === 7 ? rawVal / 10 : rawVal;
+            var valText = qNum === 7 ? '+' + val.toFixed(1) + '%' : '+' + val;
             results.push({
                 quality: qName,
                 qualityNum: qNum,
                 qualityName: qName,
-                stat: sName,             // 中文属性名（攻击/防御/气血/神识）
-                statKey: st,             // 原始英文 key（attack/defense/hp/spirit）
+                stat: sName,
+                statKey: st,
                 value: val,
+                rawValue: rawVal,
                 pendingIndex: item.pendingIndex != null ? Number(item.pendingIndex) : di,
                 text: qName + '·' + sName + valText
             });
@@ -3192,10 +3194,14 @@
                     await sleep(Math.max(state.inscriptionResultDelay, 2000));
                     continue;
                 }
-                var best = results.slice().sort(function (a, b) { return Number(b.value || 0) - Number(a.value || 0); })[0];
+                var best = results.slice().sort(function (a, b) { return Number(b.qualityNum || 0) - Number(a.qualityNum || 0) || Number(b.value || 0) - Number(a.value || 0); })[0];
                 if (best) inscriptionStats.best = best.text;
                 var decision = inscriptionTargetDecision(results);
-                inscriptionLog('第' + inscriptionStats.total + ' 次：' + results.map(function (item) { return item.text; }).join('，') + '：' + decision.reason);
+                // 日志只显示最优3条 + 汇总
+                var sorted = results.slice().sort(function (a, b) { return Number(b.qualityNum || 0) - Number(a.qualityNum || 0) || Number(b.value || 0) - Number(a.value || 0); });
+                var top3 = sorted.slice(0, 3).map(function (r) { return r.text; }).join('，');
+                var summary = (data.drawCount ? '百连(' + data.keptCount + '/' + data.drawCount + ')' : '十连') + ' 最优: ' + top3;
+                inscriptionLog('第' + inscriptionStats.total + ' 次 ' + summary + ' → ' + decision.reason);
                 if (decision.met) {
                     inscriptionStats.kept += 1;
                     updateInscriptionPanel();
