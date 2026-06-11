@@ -17,3 +17,5 @@ publish.ps1
 skills-lock.json
 docx_tmp/
 __pycache__/
+.agents/
+.claude/skills/
