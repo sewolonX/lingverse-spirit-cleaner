@@ -146,19 +146,12 @@
                 break;
             }
             if (count % 5 === 0) setStatus('暴力触发中... 第' + count + '次十连', 'run');
-            await sleep(100);
-        }
-        while (triggerVerifyActive) {
-            count++;
-            var url = urls[count % urls.length] + '?_=' + count;
-            var res = await gameApi().get(url);
-            if (res && res.code === 429) {
-                got429 = true;
-                setStatus('429触发！第' + count + '次，游戏弹出验证窗', 'run');
-                break;
-            }
-            if (count % 20 === 0) setStatus('暴力触发中... 第' + count + '次', 'run');
-            await sleep(30);
+            // 用 setTimeout 式轮询，让 stop 按钮能即时生效
+            await new Promise(function (r) {
+                var start = Date.now();
+                function tick() { if (!triggerVerifyActive || Date.now() - start >= 100) r(); else setTimeout(tick, 20); }
+                tick();
+            });
         }
         triggerVerifyActive = false;
         if (stopBtn) stopBtn.style.display = 'none';
