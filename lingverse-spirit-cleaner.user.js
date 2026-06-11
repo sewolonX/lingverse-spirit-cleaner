@@ -116,25 +116,40 @@
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
     var autoBailRunning = false;
+    var triggerVerifyActive = false;
 
-    // 主动触发人机验证（测试用）
+    // 一键触发验证：不触发不罢休
     async function triggerTestVerification() {
         if (!gameApi()) return;
-        setStatus('连续请求触发429...', 'run');
-        // 快速打5次API逼服务端出429封锁
-        var triggered = false;
-        for (var i = 0; i < 5; i++) {
+        if (triggerVerifyActive) return;
+        triggerVerifyActive = true;
+        var stopBtn = document.getElementById('lvscStopTriggerBtn');
+        var triggerBtn = document.getElementById('lvscTriggerVerifyBtn');
+        if (stopBtn) stopBtn.style.display = '';
+        if (triggerBtn) triggerBtn.textContent = '触发中...';
+        setStatus('暴力触发验证中...', 'run');
+        var count = 0;
+        while (triggerVerifyActive) {
+            count++;
+            // 狂发请求直到服务端受不了返回429
             var res = await gameApi().get('/api/game/anti-cheat/verify-challenge');
-            if (res && res.code === 429) { triggered = true; break; }
-            await sleep(100);
+            if (res && res.code === 429) {
+                setStatus('429已触发！游戏将弹出验证窗', 'run');
+                // 再发一个任意API让游戏层弹出真实验证
+                await gameApi().get('/api/game/inventory');
+                break;
+            }
+            if (!triggerVerifyActive) break;
+            setStatus('暴力触发中... 第' + count + '次，还没429', 'run');
+            await sleep(50); // 50ms一发
         }
-        if (triggered) {
-            setStatus('429已触发，等待游戏弹验证', 'run');
-            // 再发一次普通API让游戏弹出真正的验证窗
-            await gameApi().get('/api/game/inventory');
-        } else {
-            setStatus('服务端未返回429，无法触发真实验证', 'warn');
-        }
+        triggerVerifyActive = false;
+        if (stopBtn) stopBtn.style.display = 'none';
+        if (triggerBtn) triggerBtn.textContent = '一键触发验证';
+        if (!triggerVerifyActive) setStatus('触发已终止', 'idle');
+    }
+    function stopTriggerVerify() {
+        triggerVerifyActive = false;
     }
 
     // 自动出狱：检测并保释
@@ -4631,7 +4646,7 @@
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
-            '<button id="lvscTriggerVerifyBtn" style="height:32px;background:rgba(255,209,102,.14);color:#ffd166;border:1px solid rgba(255,209,102,.28)!important;" title="连发请求触发429封锁，测试真实验证弹窗">触发验证</button>' +
+            '<div style="display:flex;gap:6px;"><button id="lvscTriggerVerifyBtn" style="flex:1;height:32px;background:rgba(255,209,102,.14);color:#ffd166;border:1px solid rgba(255,209,102,.28)!important;" title="暴力连发请求直到触发429真实验证">一键触发验证</button><button id="lvscStopTriggerBtn" style="display:none;height:32px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28)!important;">终止</button></div>' +
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
             '<div class="lvsc-section-title">群机器人 Webhook</div>' +
@@ -4821,6 +4836,9 @@
         // 触发验证按钮
         document.getElementById('lvscTriggerVerifyBtn').onclick = function () {
             triggerTestVerification();
+        };
+        document.getElementById('lvscStopTriggerBtn').onclick = function () {
+            stopTriggerVerify();
         };
         // 每30秒自动检查是否入狱（需开启自动出狱）
         document.getElementById('lvscAutoBail').checked = state.autoBail;
