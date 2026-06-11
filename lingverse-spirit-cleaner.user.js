@@ -120,33 +120,20 @@
     // 主动触发人机验证（测试用）
     async function triggerTestVerification() {
         if (!gameApi()) return;
-        setStatus('主动触发人机验证...', 'run');
-        try {
-            var challenge = await gameApi().get('/api/game/anti-cheat/verify-challenge');
-            if (challenge && challenge.code === 200 && challenge.data) {
-                var q = challenge.data.question || '';
-                if (typeof window.gamePrompt === 'function') {
-                    // 用原始 gamePrompt（不被自动解题拦截），让你手动看验证弹窗
-                    var promptFn = window._origGamePrompt || window.gamePrompt;
-                    promptFn(
-                        '<p style="color:var(--text-muted);font-size:12px;margin-top:8px;">请输入下方算式结果，验证通过后会自动重试刚才的操作。</p>' +
-                        '<div style="margin-top:10px;font-size:20px;color:var(--accent-gold);font-weight:bold;text-align:center;">' + (q || '') + '</div>',
-                        '验证', function (answer) {
-                            // 自动解题已填入，提交验证
-                            gameApi().post('/api/game/anti-cheat/verify', { token: challenge.data.token, answer: parseFloat(answer) || answer }).then(function (v) {
-                                setStatus(v && v.code === 200 ? '验证通过' : '验证失败', v && v.code === 200 ? 'run' : 'warn');
-                            });
-                        }, function () { setStatus('验证取消', 'warn'); }, true,
-                        { type: 'text', inputmode: 'decimal', placeholder: '输入结果' }
-                    );
-                } else {
-                    setStatus('验证题已获取但gamePrompt不可用', 'warn');
-                }
-            } else {
-                setStatus('暂无验证需求', 'run');
-            }
-        } catch (err) {
-            setStatus('触发验证失败: ' + (err.message || ''), 'warn');
+        setStatus('连续请求触发429...', 'run');
+        // 快速打5次API逼服务端出429封锁
+        var triggered = false;
+        for (var i = 0; i < 5; i++) {
+            var res = await gameApi().get('/api/game/anti-cheat/verify-challenge');
+            if (res && res.code === 429) { triggered = true; break; }
+            await sleep(100);
+        }
+        if (triggered) {
+            setStatus('429已触发，等待游戏弹验证', 'run');
+            // 再发一次普通API让游戏弹出真正的验证窗
+            await gameApi().get('/api/game/inventory');
+        } else {
+            setStatus('服务端未返回429，无法触发真实验证', 'warn');
         }
     }
 
