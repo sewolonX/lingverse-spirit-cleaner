@@ -116,8 +116,16 @@
     var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
     var onlineHeartbeatStarted = false;
 
-    // 自动解决反脚本验证（算术题）
+    // 自动解决反脚本验证（算术题）- 支持中文数字
     var ANTI_CHEAT_AUTO_SOLVE = true;
+    var CHINESE_NUMS = { '零':0,'〇':0,'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'百':100,'千':1000,'万':10000,'壹':1,'贰':2,'叁':3,'肆':4,'伍':5,'陆':6,'柒':7,'捌':8,'玖':9,'拾':10 };
+    function parseChineseNum(s) {
+        s = String(s || '').trim();
+        var n = parseFloat(s); if (Number.isFinite(n)) return n;
+        var r = 0, c = 0;
+        for (var i = 0; i < s.length; i++) { var v = CHINESE_NUMS[s[i]]; if (v === undefined) return NaN; if (v >= 10) { if (c === 0) c = 1; r += c * v; c = 0; } else c = v; }
+        r += c; return r || NaN;
+    }
     function hookAntiCheatAutoSolve() {
         if (!ANTI_CHEAT_AUTO_SOLVE) return;
         // 拦截 gamePrompt，当问题是算式时自动计算答案
@@ -126,20 +134,18 @@
         window.gamePrompt = function (message, title, onOk, onCancel, isDestructive, inputOpts) {
             // 检测是否是反脚本验证
             if (message && message.indexOf('请输入下方算式结果') >= 0) {
-                // 提取算式：从 HTML 中找算式文本
                 var tmp = document.createElement('div');
                 tmp.innerHTML = message;
                 var text = (tmp.textContent || '').replace(/\s+/g, ' ');
                 // 尝试直接匹配算式模式：数字 运算符 数字
-                var exprMatch = text.match(/([\d.]+)\s*([+\-×÷*\/xX])\s*([\d.]+)/);
-                if (!exprMatch) {
-                    // 用原始 message 再试
-                    exprMatch = message.replace(/<[^>]+>/g, ' ').match(/([\d.]+)\s*([+\-×÷*\/xX])\s*([\d.]+)/);
-                }
+                var numRe = '([\\d.]+|[一二三四五六七八九十百千万零〇壹贰叁肆伍陆柒捌玖拾]+)';
+                var opRe = '([+\\-×÷*\\/xX＋－−])';
+                var exprMatch = text.match(new RegExp(numRe + '\\s*' + opRe + '\\s*' + numRe));
+                if (!exprMatch) { exprMatch = message.replace(/<[^>]+>/g, ' ').match(new RegExp(numRe + '\\s*' + opRe + '\\s*' + numRe)); }
                 if (exprMatch) {
-                    var a = parseFloat(exprMatch[1]);
+                    var a = parseChineseNum(exprMatch[1]);
                     var op = exprMatch[2];
-                    var b = parseFloat(exprMatch[3]);
+                    var b = parseChineseNum(exprMatch[3]);
                     var answer = NaN;
                     if (op === '+' || op === '＋') answer = a + b;
                     else if (op === '-' || op === '－' || op === '−') answer = a - b;
