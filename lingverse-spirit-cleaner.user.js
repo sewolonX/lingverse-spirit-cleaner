@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.3.1
+// @version      1.3.2
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -106,7 +106,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.3.1';
+    var SCRIPT_VERSION = '1.3.2';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -118,6 +118,15 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.3.2',
+            title: '复活下拉修复 + 铭文百连 + 屏蔽更新',
+            notes: [
+                '复活前往下拉从游戏地图弹窗抓取地名（打开一次地图即可），死亡后通过move API自动跳转。',
+                '铭文洗练新增百连模式（十连/百连可选），百连找不到按钮自动回退十连。',
+                '更新tab新增"屏蔽更新提醒"复选框，勾选后不再弹更新公告。'
+            ]
+        },
         {
             version: '1.3.1',
             title: '修复复活下拉 + 道韵弹窗',
@@ -306,6 +315,7 @@
         inscriptionMaxAttempts: readNumber('lvSpiritCleaner.inscriptionMaxAttempts', 0),
         inscriptionResultDelay: readNumber('lvSpiritCleaner.inscriptionResultDelay', 1500),
         inscriptionDiscardDelay: readNumber('lvSpiritCleaner.inscriptionDiscardDelay', 600),
+        inscriptionPullMode: Number(localStorage.getItem('lvSpiritCleaner.inscriptionPullMode') || 10),
 
         // === 藏宝图 ===
         treasureBatchSize: readNumber('lvSpiritCleaner.treasureBatchSize', 0),
@@ -592,6 +602,7 @@
         state.inscriptionMaxAttempts = num('lvscInscriptionMaxAttempts', 0, 0);
         state.inscriptionResultDelay = num('lvscInscriptionResultDelay', 500, 1500);
         state.inscriptionDiscardDelay = num('lvscInscriptionDiscardDelay', 300, 600);
+        state.inscriptionPullMode = Number(str('lvscInscriptionPullMode', '10')) || 10;
         state.treasureBatchSize = num('lvscTreasureBatchSize', 0, 0);
         state.treasureUseQuantity = num('lvscTreasureUseQuantity', 1, 1);
         state.treasureIntervalMs = num('lvscTreasureIntervalMs', 0, 0);
@@ -819,12 +830,46 @@
 
             // 如果配置了复活后自动前往的区域（下拉有值才跳转）
             if (state.reviveExploreArea && state.reviveExploreArea !== '（不跳转）') {
-                var areaSelect = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
-                if (areaSelect) {
-                    for (var oi = 0; oi < areaSelect.options.length; oi++) {
-                        if (areaSelect.options[oi].text.indexOf(state.reviveExploreArea) >= 0 || areaSelect.options[oi].value.indexOf(state.reviveExploreArea) >= 0) {
-                            areaSelect.value = areaSelect.options[oi].value;
-                            if (typeof window.onExploreAreaChange === 'function') window.onExploreAreaChange();
+                var navigated = false;
+                // 优先：用游戏 move API（支持自定义地图）
+                var areaId = _areaNameToId[state.reviveExploreArea];
+                if (areaId && gameApi()) {
+                    try {
+                        var moveRes = await gameApi().post('/api/game/move', { areaId: areaId });
+                        if (moveRes && moveRes.code === 200) {
+                            setStatus('已引渡归来，前往 ' + state.reviveExploreArea, 'run');
+                            navigated = true;
+                        }
+                    } catch (_) {}
+                }
+                // 兜底：原生 select
+                if (!navigated) {
+                    var areaSelect = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+                    if (!areaSelect) {
+                        var all = document.querySelectorAll('select');
+                        for (var ai = 0; ai < all.length; ai++) {
+                            if (all[ai].closest && all[ai].closest('#lvscPanel')) continue;
+                            if (all[ai].options && all[ai].options.length > 1) { areaSelect = all[ai]; break; }
+                        }
+                    }
+                    if (areaSelect) {
+                        for (var oi = 0; oi < areaSelect.options.length; oi++) {
+                            if (areaSelect.options[oi].text.indexOf(state.reviveExploreArea) >= 0 || areaSelect.options[oi].value.indexOf(state.reviveExploreArea) >= 0) {
+                                areaSelect.value = areaSelect.options[oi].value;
+                                if (typeof window.onExploreAreaChange === 'function') window.onExploreAreaChange();
+                                setStatus('已引渡归来，前往 ' + state.reviveExploreArea, 'run');
+                                navigated = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // 最后兜底：直接点地图节点
+                if (!navigated) {
+                    var nodes = document.querySelectorAll('.map-node[data-map-area-id]');
+                    for (var ni = 0; ni < nodes.length; ni++) {
+                        if ((nodes[ni].textContent || '').indexOf(state.reviveExploreArea) >= 0) {
+                            nodes[ni].click();
                             setStatus('已引渡归来，前往 ' + state.reviveExploreArea, 'run');
                             break;
                         }
@@ -2894,7 +2939,7 @@
         return { met: matches.length > 0, matches: matches, reason: matches.length ? '任一目标达成' : '未命中目标' };
     }
 
-    async function clickInscriptionTenPull() {
+    async function clickInscriptionPull(mode) {
         var selectors = [
             '.modal-action-btn__text',
             'button',
@@ -2902,20 +2947,37 @@
             '[role=button]',
             '[onclick*="TenPull"]',
             '[onclick*="tenPull"]',
+            '[onclick*="HundredPull"]',
+            '[onclick*="hundredPull"]',
             '[onclick*="Inscription"]',
             '[onclick*="inscription"]'
         ];
+        var tenKw = mode === 100 ? ['百连灵纹', '百连'] : ['十连灵纹', '十连'];
+        var hundredKw = mode === 10 ? [] : ['百连灵纹', '百连'];
+        var keywords = tenKw.concat(hundredKw);
+        // 文本匹配兜底
+        var extraKw = mode === 100 ? ['HundredPull', 'hundredPull', '百次'] : ['TenPull', 'tenPull', '十次'];
         var buttons = document.querySelectorAll(selectors.join(','));
         for (var i = 0; i < buttons.length; i++) {
             var text = String(buttons[i].textContent || '').trim();
             var onclickText = String(buttons[i].getAttribute && buttons[i].getAttribute('onclick') || '');
-            if (text === '十连灵纹' || text.indexOf('十连') >= 0 || onclickText.indexOf('TenPull') >= 0 || onclickText.indexOf('tenPull') >= 0) {
+            var haystack = text + ' ' + onclickText;
+            var matched = false;
+            for (var k = 0; k < keywords.length; k++) { if (text.indexOf(keywords[k]) >= 0) { matched = true; break; } }
+            if (!matched) {
+                for (var e = 0; e < extraKw.length; e++) { if (haystack.indexOf(extraKw[e]) >= 0) { matched = true; break; } }
+            }
+            if (matched) {
                 var target = buttons[i].closest && buttons[i].closest('button') || buttons[i];
                 if (target && !isElementDisabled(target) && isElementVisible(target)) {
                     await humanClick(target);
                     return true;
                 }
             }
+        }
+        // 如果百连找不到，回退十连
+        if (mode === 100) {
+            return await clickInscriptionPull(10);
         }
         return false;
     }
@@ -3001,9 +3063,10 @@
                     await sleep(Math.max(state.inscriptionResultDelay, 2000));
                     continue;
                 }
-                if (!await clickInscriptionTenPull()) {
-                    inscriptionLog('未找到“十连灵纹”按钮，等待重试');
-                    setStatus('未找到十连按钮，等待重试', 'warn');
+                if (!await clickInscriptionPull(state.inscriptionPullMode)) {
+                    var modeLabel = state.inscriptionPullMode === 100 ? '百连' : '十连';
+                    inscriptionLog('未找到”' + modeLabel + '灵纹”按钮，等待重试');
+                    setStatus('未找到' + modeLabel + '按钮，等待重试', 'warn');
                     await sleep(Math.max(state.inscriptionResultDelay, 2000));
                     continue;
                 }
@@ -3746,6 +3809,8 @@
 
     async function checkCloudUpdate(manual) {
         if (checkingCloudUpdate) return false;
+        // 屏蔽更新时只有手动检查才执行
+        if (!manual && localStorage.getItem('lvSpiritCleaner.updateMuted') === '1') return false;
         syncSettingsFromUi();
         checkingCloudUpdate = true;
         try {
@@ -3918,6 +3983,41 @@
 
     window._sortRebuild = sortRebuild;
     window._sortMove = sortMove;
+
+    // 从游戏地图弹窗抓取区域名+ID（地图打开时 .map-node 才存在）
+    var _cachedAreaNames = [];
+    var _areaNameToId = {};  // 地名 → areaId 映射
+    function scanMapNodes() {
+        var names = [];
+        var nodes = document.querySelectorAll('.map-node[data-map-area-id]');
+        for (var i = 0; i < nodes.length; i++) {
+            var areaId = nodes[i].getAttribute('data-map-area-id') || nodes[i].getAttribute('data-area-id') || '';
+            var t = (nodes[i].textContent || '').replace(/[\s\d①②③④⑤⑥⑦⑧⑨⑩★☆⚔🛡]+/g, ' ').trim();
+            var m = t.match(/^[一-鿿]{2,6}/);
+            if (m && areaId) {
+                names.push(m[0]);
+                _areaNameToId[m[0]] = areaId;
+            }
+        }
+        if (names.length) _cachedAreaNames = names;
+        return names;
+    }
+
+    function findGameAreaOptions() {
+        if (_cachedAreaNames.length) return _cachedAreaNames.slice();
+        var scanned = scanMapNodes();
+        if (scanned.length) return scanned;
+        var sel = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+        if (sel && sel.options) {
+            var result = [];
+            for (var oi = 0; oi < sel.options.length; oi++) {
+                var txt = String(sel.options[oi].text || '').trim();
+                if (txt) result.push(txt);
+            }
+            if (result.length > 1) return result;
+        }
+        return [];
+    }
 
     // 单字段 onchange 工具函数（读UI → 更新state → 只写一个localStorage key）
     function numVal(id) { var el = document.getElementById(id); return Number(el && el.value || 0); }
@@ -4250,6 +4350,7 @@
             '<label class="lvsc-check"><input id="lvscInscriptionAutoEquip" type="checkbox">命中后自动装配</label>' +
             '<label>最大次数<input id="lvscInscriptionMaxAttempts" type="number" min="0" step="1" title="填 0 表示无限"></label>' +
             '<label>结果等待(ms)<input id="lvscInscriptionResultDelay" type="number" min="500" step="100"></label>' +
+            '<label>洗练模式<select id="lvscInscriptionPullMode"><option value="10">十连</option><option value="100">百连</option></select></label>' +
             '<label>放弃等待(ms)<input id="lvscInscriptionDiscardDelay" type="number" min="300" step="100"></label>' +
             '<button id="lvscAutoInscriptionBtn">自动刷铭文</button>' +
             '</div>' +
@@ -4264,6 +4365,7 @@
             '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
             '<label class="lvsc-check"><input id="lvscChatOnTop" type="checkbox">传音筒始终上层</label>' +
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
+            '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
             '</div>' +
             '<div class="lvsc-section" id="lvscWecomFields" style="display:none;">' +
@@ -4412,6 +4514,15 @@
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
+        // 屏蔽更新 checkbox
+        document.getElementById('lvscUpdateMuted').checked = localStorage.getItem('lvSpiritCleaner.updateMuted') === '1';
+        document.getElementById('lvscUpdateMuted').onchange = function () {
+            if (this.checked) {
+                localStorage.setItem('lvSpiritCleaner.updateMuted', '1');
+            } else {
+                localStorage.removeItem('lvSpiritCleaner.updateMuted');
+            }
+        };
         document.getElementById('lvscCollapseBtn').onclick = function () {
             setPanelCollapsed(panel, true);
         };
@@ -4456,50 +4567,37 @@
         onChk('lvscAutoRepair', 'autoRepair');
         onChk('lvscAutoNatalDevour', 'autoNatalDevour');
         onNum('lvscRepairThreshold', 'repairThreshold', 0);
-        // 复活后前往：从游戏 exploreArea 读下拉选项
+        // 复活后前往：从游戏地图弹窗抓取区域名，或从原生 select 读取
         var reviveAreaRetries = 0;
         function refreshReviveAreaSelect() {
             var targetSel = document.getElementById('lvscReviveExploreArea');
             if (!targetSel) return;
-            var gameSel = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
+            var areas = findGameAreaOptions();
             var saved = localStorage.getItem('lvSpiritCleaner.reviveExploreArea') || '';
             targetSel.innerHTML = '<option value="">（不跳转）</option>';
-            if (!gameSel || !gameSel.options.length) {
-                // 游戏下拉还没加载出来，延迟重试
-                if (reviveAreaRetries < 12) {
+            if (!areas.length) {
+                if (reviveAreaRetries < 30) {
                     reviveAreaRetries++;
-                    setTimeout(refreshReviveAreaSelect, 1000);
+                    setTimeout(refreshReviveAreaSelect, 2000);
                 }
                 return;
             }
             reviveAreaRetries = 0;
-            for (var oi = 0; oi < gameSel.options.length; oi++) {
-                var opt = gameSel.options[oi];
-                var txt = String(opt.text || '').trim();
-                if (!txt) continue;
-                targetSel.innerHTML += '<option value="' + txt + '"' + (saved === txt ? ' selected' : '') + '>' + txt + '</option>';
+            for (var ai = 0; ai < areas.length; ai++) {
+                var txt = areas[ai];
+                targetSel.innerHTML += '<option value="' + txt.replace(/"/g, '&quot;') + '"' + (saved === txt ? ' selected' : '') + '>' + txt + '</option>';
             }
         }
         refreshReviveAreaSelect();
-        // 监听大地图切换：用定时轮询 + change 事件兜底
-        var gameAreaEl = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
-        if (gameAreaEl) {
-            var lastAreaOptCount = gameAreaEl.options ? gameAreaEl.options.length : 0;
-            gameAreaEl.addEventListener('change', function () { setTimeout(refreshReviveAreaSelect, 600); });
-            // 定时检测 option 数量变化（大地图切换后游戏异步更新 option）
-            setInterval(function () {
-                var el = document.getElementById('exploreArea') || document.querySelector('select[name="area"]');
-                if (!el) return;
-                var cnt = el.options ? el.options.length : 0;
-                if (cnt !== lastAreaOptCount) {
-                    lastAreaOptCount = cnt;
-                    refreshReviveAreaSelect();
-                }
-            }, 2000);
-        }
+        // 每3秒扫描地图弹窗节点（用户打开地图时就能抓取到区域名）
+        setInterval(function () {
+            if (scanMapNodes().length) refreshReviveAreaSelect();
+        }, 3000);
         // 刷新按钮
         document.getElementById('lvscRefreshAreas').onclick = function () {
             reviveAreaRetries = 0;
+            _cachedAreaNames = [];
+            _areaNameToId = {};
             refreshReviveAreaSelect();
         };
         // 保存选中值
@@ -4544,6 +4642,11 @@
         onNum('lvscInscriptionResultDelay', 'inscriptionResultDelay', 500);
         onNum('lvscInscriptionDiscardDelay', 'inscriptionDiscardDelay', 300);
         onChk('lvscInscriptionAutoEquip', 'inscriptionAutoEquip');
+        document.getElementById('lvscInscriptionPullMode').value = String(state.inscriptionPullMode);
+        document.getElementById('lvscInscriptionPullMode').onchange = function () {
+            state.inscriptionPullMode = Number(this.value) || 10;
+            persistSetting('lvSpiritCleaner.inscriptionPullMode', String(state.inscriptionPullMode));
+        };
         onNum('lvscTreasureBatchSize', 'treasureBatchSize', 0);
         onNum('lvscTreasureUseQuantity', 'treasureUseQuantity', 1);
         onNum('lvscTreasureIntervalMs', 'treasureIntervalMs', 0);

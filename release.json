@@ -1,12 +1,18 @@
 {
-  "version": "1.3.1",
-  "title": "神识清理 v1.3.1 — 修复复活下拉 + 道韵弹窗",
+  "version": "1.3.2",
+  "title": "神识清理 v1.3.2 — 复活下拉 + 铭文百连 + 屏蔽更新",
   "notes": [
-    "复活前往下拉增加延迟重试+定时轮询",
-    "道韵加成检查改用脚本风格自定义弹窗"
+    "复活前往下拉从游戏地图弹窗抓取地名，死亡后API自动跳转",
+    "铭文洗练新增百连模式",
+    "更新tab新增屏蔽更新提醒"
   ],
-  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.3.1",
+  "downloadUrl": "https://raw.githubusercontent.com/SuRanHF/lingverse-spirit-cleaner/main/lingverse-spirit-cleaner.user.js?v=1.3.2",
   "changelog": [
+    {
+      "version": "1.3.2",
+      "title": "复活下拉 + 铭文百连 + 屏蔽更新",
+      "notes": ["复活下拉抓取地图节点", "铭文百连", "屏蔽更新"]
+    },
     {
       "version": "1.3.1",
       "title": "修复复活下拉 + 道韵弹窗",
@@ -14,38 +20,13 @@
     },
     {
       "version": "1.3.0",
-      "title": "操作逻辑大优化 + UI改进",
-      "notes": [
-        "清理↔监测自动衔接",
-        "道韵不弹窗",
-        "复活后恢复",
-        "战斗后查血",
-        "buff失败自动关闭",
-        "各模式完成自动切探索",
-        "复活前往下拉框"
-      ]
+      "title": "操作逻辑大优化",
+      "notes": ["清理↔监测衔接", "复活后恢复", "战斗后查血", "buff自动关闭", "各模式自动切探索"]
     },
     {
       "version": "1.2.9",
       "title": "本命吞噬修复2",
-      "notes": [
-        "去掉hasBonus检查",
-        "type为空时也尝试吞噬"
-      ]
-    },
-    {
-      "version": "1.2.8",
-      "title": "本命吞噬修复",
-      "notes": [
-        "改查背包装备"
-      ]
-    },
-    {
-      "version": "1.2.7",
-      "title": "本命武器自动吞噬",
-      "notes": [
-        "主循环自动吞噬"
-      ]
+      "notes": ["去掉hasBonus检查"]
     }
   ]
 }
