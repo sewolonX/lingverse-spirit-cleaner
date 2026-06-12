@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.4.1
+// @version      1.4.2
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -10,7 +10,7 @@
 // @updateURL    https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/lingverse-spirit-cleaner.user.js
 // @downloadURL  https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/lingverse-spirit-cleaner.user.js
 // @grant        GM_xmlhttpRequest
-// @connect      lingshen.ccwu.cc
+// @connect      unreclaimable-unyieldingly-coretta.ngrok-free.dev
 // @connect      qyapi.weixin.qq.com
 // @run-at       document-idle
 // ==/UserScript==
@@ -220,14 +220,14 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.4.1';
+    var SCRIPT_VERSION = '1.4.2';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
     var ONLINE_HEARTBEAT_MS = 30000;
     var GITHUB_REPO_SLUG = 'SuRanHF/lingverse-spirit-cleaner';
     var DEFAULT_UPDATE_MANIFEST_URL = 'https://gitee.com/wanoujj/lingverse-spirit-cleaner/raw/main/release.json?v=' + SCRIPT_VERSION;
-    var DEFAULT_ONLINE_STATS_ENDPOINT = 'http://lingshen.ccwu.cc/api/heartbeat';
+    var DEFAULT_ONLINE_STATS_ENDPOINT = 'https://unreclaimable-unyieldingly-coretta.ngrok-free.dev/api/heartbeat';
     var onlineHeartbeatStarted = false;
 
     // 清理统计
@@ -378,6 +378,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.4.2',
+            title: '修复了一个bug',
+            notes: ['修复在线统计连接问题。']
+        },
         {
             version: '1.4.1',
             title: '批量炼丹炼器 + 装备套装',
