@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.4.2
+// @version      1.4.3
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -220,7 +220,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.4.2';
+    var SCRIPT_VERSION = '1.4.3';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -379,6 +379,11 @@
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
+            version: '1.4.3',
+            title: '地图+夜晚+倍率+状态栏',
+            notes: ['复活地图名截掉渡劫等标签，areaId存localStorage。夜晚探索白天自动冥想。', '探索倍率优选+不足自动降档，高倍率弹窗自动确认。状态栏分类开关。']
+        },
+        {
             version: '1.4.2',
             title: '修复了一个bug',
             notes: ['修复在线统计连接问题。']
@@ -422,6 +427,7 @@
         reserve: readNumber('lvSpiritCleaner.reserve', 0),
         delayMs: readNumber('lvSpiritCleaner.delayMs', 1200),
         keepCurrentMultiplier: localStorage.getItem('lvSpiritCleaner.keepMultiplier') === '1',
+        preferMultiplier: localStorage.getItem('lvSpiritCleaner.preferMultiplier') || '1',
         nightOnlyExplore: localStorage.getItem('lvSpiritCleaner.nightOnlyExplore') === '1',
         desktopNotify: localStorage.getItem('lvSpiritCleaner.desktopNotify') !== '0',
         updateManifestUrl: localStorage.getItem('lvSpiritCleaner.updateManifestUrl') || DEFAULT_UPDATE_MANIFEST_URL,
@@ -509,7 +515,8 @@
         wecomNotify: localStorage.getItem('lvSpiritCleaner.wecomNotify') === '1',
         wecomNotifyWebhook: localStorage.getItem('lvSpiritCleaner.wecomNotifyWebhook') || '',
         wecomWorldWebhook: localStorage.getItem('lvSpiritCleaner.wecomWorldWebhook') || '',
-        wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || ''
+        wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || '',
+        wecomShowStatus: localStorage.getItem('lvSpiritCleaner.wecomShowStatus') !== '0'
     };
 
     function readNumber(key, fallback) {
@@ -672,7 +679,9 @@
         };
     }
 
-    function setStatus(text, tone) {
+    var _statusMuted = {};
+    function setStatus(text, tone, category) {
+        if (category && _statusMuted[category]) return;
         var el = document.getElementById('lvscStatus');
         var compactEl = document.getElementById('lvscCompactStatus');
         if (el) {
@@ -890,14 +899,82 @@
         }
     }
 
-    function normalizeMultiplier() {
+    function applyExploreMultiplier() {
         if (state.keepCurrentMultiplier) return;
+        // 尝试原生 select
         var select = document.getElementById('exploreMultiplier');
-        if (!select || select.value === '1') return;
-        select.value = '1';
-        if (typeof window.onExploreMultiplierChange === 'function') {
-            window.onExploreMultiplierChange();
+        var isSelect = select && select.options && select.options.length;
+        if (!select) return;
+        var preferred = state.preferMultiplier || '1';
+        var info = getSpiritInfo();
+        // 所有可用倍率（从DOM读取或硬编码）
+        var availMultis = [];
+        if (isSelect) {
+            for (var oi = 0; oi < select.options.length; oi++) {
+                availMultis.push(Number(select.options[oi].value) || 1);
+            }
+        } else {
+            // 按钮组：读取所有倍率按钮的data-value或文本
+            var btns = select.querySelectorAll('button, [data-value], .multiplier-btn');
+            for (var bi = 0; bi < btns.length; bi++) {
+                var dv = btns[bi].getAttribute('data-value') || btns[bi].textContent || '';
+                var nv = parseInt(dv.replace(/[^\d]/g, ''), 10) || 0;
+                if (nv > 0) availMultis.push(nv);
+            }
+            if (!availMultis.length) availMultis = [1, 5, 10, 20, 50];
         }
+        availMultis.sort(function (a, b) { return b - a; }); // 从大到小
+        var chosen = 1;
+        // 首选能用就用首选
+        var prefNum = Number(preferred) || 1;
+        if (info.spirit >= info.cost * prefNum) {
+            chosen = prefNum;
+        } else {
+            // 从大到小找第一个能用的
+            for (var di = 0; di < availMultis.length; di++) {
+                if (info.spirit >= info.cost * availMultis[di]) { chosen = availMultis[di]; break; }
+            }
+        }
+        var chosenStr = String(chosen);
+        var currentVal = isSelect ? select.value : getCurrentMultiplierValue();
+        if (currentVal !== chosenStr) {
+            setExploreMultiplier(chosenStr);
+            if (chosenStr !== preferred && preferred !== '1') {
+                setStatus('神识不足×' + preferred + '，降为×' + chosenStr, 'warn');
+            }
+        }
+    }
+    function getCurrentMultiplierValue() {
+        var select = document.getElementById('exploreMultiplier');
+        if (select && select.options) return select.value;
+        // 按钮组：找高亮/active的按钮
+        var active = document.querySelector('#exploreMultiplier .active, #exploreMultiplier [data-selected], #exploreMultiplier .multiplier-btn--active');
+        if (active) return String(parseInt((active.textContent || '').replace(/[^\d]/g, ''), 10) || 1);
+        return '1';
+    }
+    function setExploreMultiplier(val) {
+        var select = document.getElementById('exploreMultiplier');
+        if (select && select.options) {
+            select.value = val;
+            if (typeof window.onExploreMultiplierChange === 'function') window.onExploreMultiplierChange();
+            dismissMultiplierWarning();
+            return;
+        }
+        // 按钮组：点对应按钮
+        var btns = document.querySelectorAll('#exploreMultiplier button, #exploreMultiplier [data-value], #exploreMultiplier .multiplier-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var dv = btns[i].getAttribute('data-value') || btns[i].textContent || '';
+            if (String(parseInt(dv.replace(/[^\d]/g, ''), 10) || '') === val) {
+                btns[i].click();
+                break;
+            }
+        }
+        // 高倍率确认弹窗自动关
+        setTimeout(dismissMultiplierWarning, 300);
+    }
+    function dismissMultiplierWarning() {
+        var btn = document.getElementById('gameAlertOkBtn');
+        if (btn && isElementVisible(btn)) btn.click();
     }
 
     function shouldStopBeforeAction() {
@@ -1013,7 +1090,10 @@
             // 如果配置了复活后自动前往的区域（下拉有值才跳转）
             if (state.reviveExploreArea && state.reviveExploreArea !== '（不跳转）') {
                 var navigated = false;
-                // 优先：用游戏 move API（支持自定义地图）
+                // 死后地图节点不可见，从 localStorage 恢复映射
+                if (!_areaNameToId[state.reviveExploreArea]) {
+                    try { var saved = JSON.parse(localStorage.getItem('lvSpiritCleaner.areaNameToId') || '{}'); _areaNameToId = saved; } catch (_) {}
+                }
                 var areaId = _areaNameToId[state.reviveExploreArea];
                 if (areaId && gameApi()) {
                     try {
@@ -2241,9 +2321,9 @@
         try {
             var resp = await gmFetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msgtype: 'text', text: { content: text } }) });
             var data = await resp.json();
-            if (data && data.errcode === 0) { setStatus('企业微信: 已发送', 'run'); return; }
-            setStatus('企业微信失败: ' + ((data && data.errmsg) || '未知').substring(0, 40), 'warn');
-        } catch (err) { setStatus('企业微信异常: ' + (err.message || '').substring(0, 40), 'warn'); }
+            if (data && data.errcode === 0) return;
+            setStatus('企业微信失败: ' + ((data && data.errmsg) || '未知').substring(0, 40), 'warn', 'Wecom');
+        } catch (err) { setStatus('企业微信异常: ' + (err.message || '').substring(0, 40), 'warn', 'Wecom'); }
     }
 
     function wecomEnqueue(title, content, webhookUrl) {
@@ -3576,6 +3656,11 @@
     // 检查夜间限制 → 返回 true 表示应 continue
     function checkNightRestriction() {
         if (state.nightOnlyExplore && !isGameNight()) {
+            // 自动冥想等夜晚
+            if (state.autoMeditate && !monitoringSpirit) {
+                setStatus('白天自动冥想，等夜晚收工探索', 'run');
+                return 'meditate_until_night';
+            }
             setStatus('当前不是夜晚，等待夜晚探索', 'warn');
             return true;
         }
@@ -3613,7 +3698,7 @@
         monitoringSpirit = false;
         running = true;
         syncSettingsFromUi();
-        normalizeMultiplier();
+        applyExploreMultiplier();
         updateMeter();
         setStatus('启动中', 'run');
         if (!await checkDaoyunBeforeStart('自动清理')) {
@@ -3643,7 +3728,31 @@
                 await sleep(state.delayMs);
                 continue;
             }
-            if (checkNightRestriction()) {
+            var nightCheck = checkNightRestriction();
+            if (nightCheck === 'meditate_until_night') {
+                // 白天普通冥想等入夜（不浪费高级冥想/仙缘）
+                var nightMedStarted = false;
+                while (running && !isGameNight()) {
+                    var ni = getSpiritInfo();
+                    if (ni.spirit < ni.maxSpirit && gameApi()) {
+                        if (!nightMedStarted) {
+                            setStatus('白天挂机冥想等入夜', 'run');
+                            await gameApi().post('/api/game/meditate/start', {});
+                            nightMedStarted = true;
+                        }
+                        await sleep(10000);
+                    } else {
+                        await sleep(10000);
+                    }
+                }
+                if (nightMedStarted) {
+                    setStatus('已入夜，收功', 'run');
+                    await stopMeditationAndRefresh();
+                }
+                setStatus('入夜了，继续探索', 'run');
+                continue;
+            }
+            if (nightCheck) {
                 await sleep(Math.max(30000, state.delayMs));
                 continue;
             }
@@ -3677,6 +3786,7 @@
             if (state.sectQuickRecovery) await activeRecover();
             if (state.autoRepair) await triggerAutoRepair(false);
             if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
+            applyExploreMultiplier();
             if (state.autoMasterRequests) await handleMasterRequests();
 
             // 神识检查 + 冥想
@@ -4350,13 +4460,18 @@
         for (var i = 0; i < nodes.length; i++) {
             var areaId = nodes[i].getAttribute('data-map-area-id') || nodes[i].getAttribute('data-area-id') || '';
             var t = (nodes[i].textContent || '').replace(/[\s\d①②③④⑤⑥⑦⑧⑨⑩★☆⚔🛡]+/g, ' ').trim();
+            // 去掉地名尾部的标签（渡劫/传送/飞升/突破等）
+            t = t.replace(/(渡劫|传送|飞升|轮回|天劫|雷劫|突破|修炼|入道|道场|宗门|师门|返回).*$/, '').trim();
             var m = t.match(/^[一-鿿]{2,6}/);
             if (m && areaId) {
                 names.push(m[0]);
                 _areaNameToId[m[0]] = areaId;
             }
         }
-        if (names.length) _cachedAreaNames = names;
+        if (names.length) {
+            _cachedAreaNames = names;
+            localStorage.setItem('lvSpiritCleaner.areaNameToId', JSON.stringify(_areaNameToId));
+        }
         return names;
     }
 
@@ -4568,6 +4683,7 @@
             '<label>保留神识<input id="lvscReserve" type="number" min="0" step="1"></label>' +
             '<label>间隔毫秒<input id="lvscDelay" type="number" min="600" step="100"></label>' +
             '<label>监测到神识<input id="lvscMonitorStartSpirit" type="number" min="0" step="1" title="填 0 表示神识满了再开始清理"></label>' +
+            '<label>优先倍率<select id="lvscPreferMultiplier"><option value="1">×1</option><option value="2">×2</option><option value="5">×5</option><option value="10">×10</option><option value="20">×20</option><option value="50">×50</option></select></label>' +
             '<label class="lvsc-check"><input id="lvscKeepMultiplier" type="checkbox">使用当前探索倍率</label>' +
             '</div>' +
             '</div>' +
@@ -4744,6 +4860,18 @@
             '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
             '<label class="lvsc-check"><input id="lvscChatOnTop" type="checkbox">传音筒始终上层</label>' +
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
+            '<div class="lvsc-help" style="margin-top:4px;">状态栏提示（默认全开，取消勾选不再显示对应类型）：</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 8px;">' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusRun" type="checkbox" checked>运行</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusFight" type="checkbox" checked>战斗</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusMerchant" type="checkbox" checked>商人</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusMeditate" type="checkbox" checked>冥想</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusRecover" type="checkbox" checked>恢复</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusBuff" type="checkbox" checked>Buff</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusInsc" type="checkbox" checked>铭文</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusCraft" type="checkbox" checked>炼制</label>' +
+            '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusWecom" type="checkbox" checked>企业微信</label>' +
+            '</div>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
             '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
             '<button id="lvscTestNotifyBtn" style="height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;">测试通知</button>' +
@@ -5032,6 +5160,8 @@
         onSel('lvscHireMode', 'hireMode', ['cheapest', 'together', 'alone']);
         onNum('lvscHireMaxFee', 'hireMaxFee', 0);
         onChkAlt('lvscKeepMultiplier', 'keepCurrentMultiplier', 'lvSpiritCleaner.keepMultiplier');
+        document.getElementById('lvscPreferMultiplier').value = state.preferMultiplier;
+        document.getElementById('lvscPreferMultiplier').onchange = function () { state.preferMultiplier = this.value; persistSetting('lvSpiritCleaner.preferMultiplier', this.value); };
         onSel('lvscMerchantMode', 'merchantMode', ['legend', 'custom', 'leave']);
         onStr('lvscMerchantKeyword', 'merchantKeyword');
         onChk('lvscMerchantQualityFirst', 'merchantQualityFirst');
@@ -5156,6 +5286,16 @@
             if (state.wecomNotify) startRecruitObserver();
         };
         onStr('lvscWecomNotifyWebhook', 'wecomNotifyWebhook');
+        // 状态栏分类开关
+        var statusCats = ['Run','Fight','Merchant','Meditate','Recover','Buff','Insc','Craft','Wecom'];
+        for (var sci = 0; sci < statusCats.length; sci++) {
+            var cat = statusCats[sci];
+            var key = 'lvSpiritCleaner.statusMuted' + cat;
+            var muted = localStorage.getItem(key) === '1';
+            _statusMuted[cat] = muted;
+            var cb = document.getElementById('lvscStatus' + cat);
+            if (cb) { cb.checked = !muted; cb.onchange = function (c, k) { return function () { _statusMuted[c] = !this.checked; localStorage.setItem(k, this.checked ? '0' : '1'); }; }(cat, key); }
+        }
         onStr('lvscWecomWorldWebhook', 'wecomWorldWebhook');
         onStr('lvscWecomPrivateWebhook', 'wecomPrivateWebhook');
         onChk('lvscAutoMasterRequests', 'autoMasterRequests');
