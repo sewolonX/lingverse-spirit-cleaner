@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.2
+// @version      1.5.3
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -220,7 +220,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.2';
+    var SCRIPT_VERSION = '1.5.3';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -395,6 +395,7 @@
     async function farmHarvest() { if (!gameApi()) return false; var r = await gameApi().post('/api/game/player-sect/farm/harvest-all', {}); return !!(r && r.code === 200); }
     var _lastFarmExpandTime = 0;
     async function farmPlant(seedId) { if (!gameApi() || !seedId) return false; var r = await gameApi().post('/api/game/player-sect/farm/plant-all', { seedId: seedId }); return !!(r && r.code === 200); }
+    async function farmInvasionAttack() { if (!gameApi()) return false; var r = await gameApi().post('/api/game/player-sect/farm/invasion/attack', {}); return !!(r && r.code === 200); }
     async function farmExpand(wantCount) {
         if (!gameApi() || !wantCount) return false;
         // 从 overview 动态计算最大开垦数
@@ -417,7 +418,7 @@
         farmLog('开垦失败: ' + (r2 ? (r2.message || r2.code) : (r ? (r.message || r.code) : 'err')));
         return false;
     }
-    async function autoFarmLoop() { if (autoFarmRunning) return; autoFarmRunning = true; updateMeter(); farmLog('灵田监控启动'); while (autoFarmRunning) { try { var data = await farmOverview(); if (!data) { farmLog('获取灵田数据失败'); await sleep(10000); continue; } var mature = data.myMatureCount || 0, idle = data.myIdleCount || 0; if (mature > 0 && state.farmAutoHarvest) { farmLog('收获成熟 ×' + mature); await farmHarvest(); await sleep(500); } if (idle > 0 && state.farmAutoPlant && state.farmSeedId) { farmLog('种植 ' + state.farmSeedName + ' ×' + idle); await farmPlant(state.farmSeedId); await sleep(500); } if (state.farmExpandCount >= 0 && state.farmExpandHours > 0 && Date.now() - _lastFarmExpandTime > state.farmExpandHours * 3600000) { _lastFarmExpandTime = Date.now(); var cnt = state.farmExpandCount > 0 ? state.farmExpandCount : 999; farmLog('自动开垦 ' + (state.farmExpandCount > 0 ? cnt + ' 块' : '最大')); await farmExpand(cnt); } } catch (e) { farmLog('异常: ' + (e.message || '')); } await sleep(state.farmInterval * 1000); } updateMeter(); }
+    async function autoFarmLoop() { if (autoFarmRunning) return; autoFarmRunning = true; updateMeter(); farmLog('灵田监控启动'); while (autoFarmRunning) { try { var data = await farmOverview(); if (!data) { farmLog('获取灵田数据失败'); await sleep(10000); continue; } var mature = data.myMatureCount || 0, idle = data.myIdleCount || 0, total = data.myPlotTotal || 0; farmLog("成熟"+mature+" 空闲"+idle+" 总计"+total); if (mature > 0 && state.farmAutoHarvest) { farmLog('收获成熟 ×' + mature); await farmHarvest(); await sleep(500); } if (idle > 0 && state.farmAutoPlant && state.farmSeedId) { farmLog('种植 ' + state.farmSeedName + ' ×' + idle); await farmPlant(state.farmSeedId); await sleep(500); } if (data.farmInvasion && state.farmAutoInvasion) { farmLog('迎击灵田入侵...'); await farmInvasionAttack(); await sleep(500); } if (state.farmExpandEnabled && idle <= 0 && Date.now() - _lastFarmExpandTime > 3600000) { _lastFarmExpandTime = Date.now(); farmLog('开垦...'); await farmExpand(999); } } catch (e) { farmLog('异常: ' + (e.message || '')); } await sleep(state.farmInterval * 1000); } updateMeter(); }
     function stopFarm() { autoFarmRunning = false; updateMeter(); }
     function farmLog(msg) { var log = document.getElementById('lvscFarmLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
 
@@ -553,6 +554,11 @@
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
+            version: '1.5.3',
+            title: '灵田优化 + 入侵迎击',
+            notes: ['灵田自动开垦简化：去间隔手动输入，两次开垦自动间隔1小时。每次扫描显示实时状态。', '灵田新增妖怪入侵自动迎击（POST invasion/attack API）。']
+        },
+        {
             version: '1.5.2',
             title: '恢复重写 + 铭文装配修复 + 扫荡 + 涅槃丹 + 灵田',
             notes: ['恢复系统重写：严格按用户优先级，宗门服务一次回满，15秒冷却避免天罚。', '铭文装配修复：空槽重复装bug、maxSlots补全、当前装备选项、usedSlots去重。', '新增试练塔扫荡、涅槃重生丹自动炼造使用、灵田自动开垦(动态上限)、配置导入导出。', '安装链接永久走Gitee，同版本不重复弹公告。昼夜冥想优化。']
@@ -675,9 +681,8 @@
         farmSeedId: localStorage.getItem('lvSpiritCleaner.farmSeedId') || '',
         farmSeedName: localStorage.getItem('lvSpiritCleaner.farmSeedName') || '',
         farmInterval: readNumber('lvSpiritCleaner.farmInterval', 30),
-        farmExpandCount: readNumber('lvSpiritCleaner.farmExpandCount', 0),
-        farmExpandHours: readNumber('lvSpiritCleaner.farmExpandHours', 1),
-        pavilionItemId: localStorage.getItem('lvSpiritCleaner.pavilionItemId') || '',
+        farmExpandEnabled: localStorage.getItem('lvSpiritCleaner.farmExpandEnabled') === '1',
+        farmAutoInvasion: localStorage.getItem('lvSpiritCleaner.farmAutoInvasion') !== '0',
         pavilionItemName: localStorage.getItem('lvSpiritCleaner.pavilionItemName') || '',
         pavilionQty: readNumber('lvSpiritCleaner.pavilionQty', 99),
         pavilionLoop: readNumber('lvSpiritCleaner.pavilionLoop', 10),
@@ -5680,7 +5685,8 @@
                 g.querySelector('label').appendChild(rfrBtn('lvscRefreshFarm'));
                 s.appendChild(g);
                 s.innerHTML += '<div class="lvsc-grid2" style="grid-template-columns:1fr 1fr 1fr"><label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoHarvest" type="checkbox" checked>收获</label><label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoPlant" type="checkbox" checked>种植</label></div>';
-                s.innerHTML += '<div class="lvsc-grid2"><label class="lvsc-check" style="font-size:11px"><input id="lvscFarmExpandEn" type="checkbox">自动开垦</label><label style="font-size:11px">间隔(时)<input id="lvscFarmExpandHours" type="number" min="1" value="' + state.farmExpandHours + '" style="height:24px"></label></div>';
+                s.innerHTML += '<label class="lvsc-check" style="font-size:11px"><input id="lvscFarmExpandEn" type="checkbox">自动开垦</label>';
+                s.innerHTML += '<label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoInvasion" type="checkbox" checked>迎击入侵</label>';
                 var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
                 btnRow.appendChild(actBtn('lvscFarmStartBtn', '开始监控'));
                 btnRow.appendChild(stopBtn('lvscFarmStopBtn'));
@@ -5755,9 +5761,9 @@
                 if (fSeed) fSeed.onchange = function() { state.farmSeedId = this.value; state.farmSeedName = this.options[this.selectedIndex].textContent || ''; persistSetting('lvSpiritCleaner.farmSeedId', state.farmSeedId); persistSetting('lvSpiritCleaner.farmSeedName', state.farmSeedName); };
                 var fRef = document.getElementById('lvscRefreshFarm'); if (fRef) fRef.onclick = refreshFarmSeeds;
                 var fExpC = document.getElementById('lvscFarmExpandEn');
-                if (fExpC) { fExpC.checked = state.farmExpandCount >= 0; fExpC.onchange = function() { state.farmExpandCount = this.checked ? 0 : -1; persistSetting('lvSpiritCleaner.farmExpandCount', String(state.farmExpandCount)); }; }
+                if (fExpC) { fExpC.checked = state.farmExpandEnabled; fExpC.onchange = function() { state.farmExpandEnabled = this.checked; persistSetting('lvSpiritCleaner.farmExpandEnabled', this.checked); }; }
+                var fInv = document.getElementById('lvscFarmAutoInvasion'); if (fInv) { fInv.checked = state.farmAutoInvasion; fInv.onchange = function() { state.farmAutoInvasion = this.checked; persistSetting('lvSpiritCleaner.farmAutoInvasion', this.checked); }; }
                 var fExpH = document.getElementById('lvscFarmExpandHours');
-                if (fExpH) { fExpH.value = String(state.farmExpandHours); fExpH.onchange = function() { state.farmExpandHours = Math.max(1, Number(this.value) || 1); persistSetting('lvSpiritCleaner.farmExpandHours', String(state.farmExpandHours)); }; }
                 setTimeout(refreshFarmSeeds, 2500);
 
                 // 珍宝阁
