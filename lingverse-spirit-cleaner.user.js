@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.7
+// @version      1.5.8
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -221,7 +221,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.7';
+    var SCRIPT_VERSION = '1.5.8';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -725,6 +725,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.5.8',
+            title: '系统模式完善 + 激进模式 + 在线公告',
+            notes: ['系统自带模式功能对齐API模式：涅槃丹/虚空淬体/隐秘符/恢复/突破全接入。', '探索↔监测↔冥想全自动闭环，冥想完自动恢复探索。', '新增⚔激进模式：遇怪直接打不找护道，更快但更险。', '系统模式遭遇/商人卡死自动兜底接管。', '新增在线公告弹窗系统（dashboard发布，脚本端2分钟内弹窗）。', '修复系统模式死亡不复活、企业微信通知刷屏、冥想完不会收功等问题。', '⚠ 系统清理尚不稳定，如有bug请反馈。']
+        },
         {
             version: '1.5.7',
             title: '探索模式 + 系统自带 + 联动闭环',

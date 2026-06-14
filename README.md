@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.5.7-dbb970?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/version-1.5.8-dbb970?style=for-the-badge" />
   <img src="https://img.shields.io/badge/platform-Tampermonkey-9be7c3?style=for-the-badge" />
   <img src="https://img.shields.io/badge/license-MIT-8f846f?style=for-the-badge" />
 </p>
@@ -43,7 +43,7 @@
 
 | 模块 | 能力 |
 |---|---|
-| 🔄 **核心循环** | 双模式探索(脚本API/系统自带) · 探索↔监测自动联动 · 夜间模式 · 倍率自由 · 刷新自动恢复 |
+| 🔄 **核心循环** | 双模式探索(脚本API/系统自带) · 探索↔监测↔冥想全自动闭环 · 夜间模式 · 倍率自由 · 刷新自动恢复 · ⚠系统模式不稳定请反馈 |
 | ⚔️ **战斗系统** | 弱怪自战 · 自动护道(最低价/合击/单独) · 战后自动回血 |
 | 🛒 **商人处理** | 传说才买 · 关键词+品质筛选 · 价格上限 · 严格/宽松匹配 |
 | 💚 **自动恢复** | 回血/回灵独立优先级 · 宗门治疗 · 装备自动维修 |
