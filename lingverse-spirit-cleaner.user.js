@@ -4134,17 +4134,20 @@
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
         console.log('[SysExplore] start. medActive=' + window._meditationActive + ' medProg=' + window._meditationInProgress + ' _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
         // 如果正在冥想，先收功再启动
-        if (window._meditationActive || window._meditationInProgress) {
+        var playerNow = getPlayer() || {};
+        if (playerNow.isMeditating) {
             setStatus('检测到正在冥想，先收功...', 'run');
-            console.log('[SysExplore] meditating, stopping...');
+            console.log('[SysExplore] player isMeditating, stopping meditation...');
             try {
+                await gameApi().post('/api/game/meditate/stop', {});
+                await sleep(1500);
+                // 强制清除UI残留
                 if (typeof forceClearMeditationUi === 'function') forceClearMeditationUi();
-                var stopRes = await gameApi().post('/api/game/meditate/stop', {});
-                console.log('[SysExplore] meditate/stop res:', stopRes && stopRes.code);
-            } catch (e) { console.log('[SysExplore] meditate/stop err:', e.message); }
-            await sleep(1000);
-            window._meditationActive = false;
-            window._meditationInProgress = false;
+                window._meditationActive = false;
+                window._meditationInProgress = false;
+                // 点"收工并继续" — 刷新玩家数据
+                await refreshPlayer();
+            } catch (e) { console.log('[SysExplore] meditate stop err:', e.message); }
             setStatus('已收功，启动系统探索', 'run');
         }
         running = true;
@@ -4155,6 +4158,12 @@
             // 启动/重启系统自动探索
             console.log('[SysExplore] loop top. _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
             if (typeof _autoExploreRunning === 'undefined' || !_autoExploreRunning) {
+                // 如果还在冥想状态，先收功
+                var pNow = getPlayer() || {};
+                if (pNow.isMeditating) {
+                    console.log('[SysExplore] still meditating before restart, stopping...');
+                    try { await gameApi().post('/api/game/meditate/stop', {}); await sleep(1500); await refreshPlayer(); } catch(_) {}
+                }
                 // 确保游戏自带的自动探索开关是勾上的，否则 startAutoExplore 会直接 return
                 var toggle = document.getElementById('autoExploreToggle');
                 if (toggle && !toggle.checked) { toggle.checked = true; console.log('[SysExplore] autoExploreToggle forced on'); }
