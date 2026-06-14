@@ -317,7 +317,7 @@
                 setStatus('炼造涅槃重生丹 x' + qty + '...', 'run');
                 for (var ci = 0; ci < qty; ci++) {
                     try { await gameApi().post('/api/game/alchemy/craft', { pillId: pillId }); } catch (_) {}
-                    if (ci < qty - 1) await sleep(300);
+                    if (ci < qty - 1) await sleep(300 + Math.floor(Math.random() * 700));
                 }
                 await sleep(500);
                 // 炼好了，查背包使用
