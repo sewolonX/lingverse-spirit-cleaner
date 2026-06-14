@@ -4220,6 +4220,7 @@
             var _sci = getSpiritInfo();
             if (_sci.player && _sci.spirit < _sci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
+                if (state.autoMeditate && await meditateThenWait()) continue;
                 await switchToMonitor('系统探索神识不足');
                 return;
             }
@@ -4295,6 +4296,7 @@
             }
             if (ci.spirit < ci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
+                if (state.autoMeditate && await meditateThenWait()) continue;
                 await switchToMonitor('系统探索神识不足');
                 return;
             }
