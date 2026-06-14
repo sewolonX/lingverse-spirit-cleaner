@@ -4227,6 +4227,9 @@
             console.log('[SysExplore] entering monitor loop');
             while (running && typeof _autoExploreRunning !== 'undefined' && _autoExploreRunning) {
                 try {
+                    if (state.autoNirvanaPill) await ensureNirvanaPill();
+                    if (state.autoVoidBody && !hasVoidBodyBuff()) await ensureVoidBodyBuff(false);
+                    if (state.autoHiddenCharm) await ensureHiddenCharm(false);
                     if (state.sectQuickRecovery) await activeRecover();
                     if (state.autoRepair) await triggerAutoRepair(false);
                     if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
