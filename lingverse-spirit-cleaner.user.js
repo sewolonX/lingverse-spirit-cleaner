@@ -4234,6 +4234,12 @@
                 if (state.autoReviveDeath && isDeathActive()) { await revivePlayer(); await sleep(2000); continue; }
                 setStatus('死亡，停止', 'warn'); break;
             }
+            if (ci.spirit < ci.cost) {
+                console.log('[SysExplore] low spirit, switchToMonitor');
+                if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
+                await switchToMonitor('系统探索神识不足');
+                return;
+            }
             console.log('[SysExplore] unknown stop, retry in 3s');
             setStatus('系统探索中断，3秒后重启', 'run');
             await sleep(3000);
