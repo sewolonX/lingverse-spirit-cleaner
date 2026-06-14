@@ -314,10 +314,13 @@
             if (nirvana) {
                 var pillId = nirvana.pillId || nirvana.id;
                 var qty = Math.max(1, Math.min(999, state.nirvanaCraftQty || 1));
-                setStatus('炼造涅槃重生丹 x' + qty + '...', 'run');
-                for (var ci = 0; ci < qty; ci++) {
-                    try { await gameApi().post('/api/game/alchemy/craft', { pillId: pillId }); } catch (_) {}
-                    if (ci < qty - 1) await sleep(300 + Math.floor(Math.random() * 700));
+                var BATCH_CAP = 100;
+                var batches = Math.ceil(qty / BATCH_CAP);
+                setStatus('炼造涅槃重生丹 x' + qty + ' (' + batches + '批)...', 'run');
+                for (var bi = 0; bi < batches; bi++) {
+                    var batchCount = Math.min(BATCH_CAP, qty - bi * BATCH_CAP);
+                    try { await gameApi().post('/api/game/alchemy/batch-craft', { pillId: pillId, count: batchCount }); } catch (_) {}
+                    if (bi < batches - 1) await sleep(500 + Math.floor(Math.random() * 800));
                 }
                 await sleep(500);
                 // 炼好了，查背包使用
