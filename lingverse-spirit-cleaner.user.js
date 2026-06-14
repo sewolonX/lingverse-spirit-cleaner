@@ -4375,26 +4375,26 @@
             try {
                 var result = await window.handleExplore();
                 updateMeter();
+                // 每次探索后强制刷新并检查神识，不依赖 result==='stop'
+                await sleep(300);
+                await refreshPlayer();
+                var afterExplore = getSpiritInfo();
+                if (afterExplore.player && afterExplore.spirit < afterExplore.cost) {
+                    if (state.autoMeditate) {
+                        if (await meditateThenWait()) {
+                            await refreshPlayer();
+                            var pmc = getSpiritInfo();
+                            if (pmc.spirit >= pmc.cost) { await sleep(state.delayMs); continue; }
+                        }
+                    }
+                    await switchToMonitor('探索后神识不足');
+                    return;
+                }
                 if (result === 'stop') {
                     await sleep(500);
-                    if (!await checkEventBlockers()) {
-                        await refreshPlayer();
-                        var afterExplore = getSpiritInfo();
-                        if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
-                            if (!await meditateThenWait()) {
-                                await switchToMonitor('探索后神识不足且无法恢复');
-                                return;
-                            }
-                            await refreshPlayer();
-                            var postMedCheck2 = getSpiritInfo();
-                            if (postMedCheck2.spirit < postMedCheck2.cost) {
-                                await switchToMonitor('冥想后神识仍不足');
-                                return;
-                            }
-                            await sleep(state.delayMs);
-                            continue;
-                        }
-                        setStatus('游戏事件触发，等待处理后重试', 'warn');
+                    if (await checkEventBlockers()) {
+                        await sleep(state.delayMs);
+                        continue;
                     }
                     await sleep(state.delayMs);
                     continue;
