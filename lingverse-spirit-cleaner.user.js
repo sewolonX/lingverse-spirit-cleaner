@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.3
+// @version      1.5.6
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -220,7 +220,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.3';
+    var SCRIPT_VERSION = '1.5.6';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -249,7 +249,10 @@
     function getPlayerRealmStr() {
         var p = getPlayer() || {};
         var realm = p.realm || p.realmName || '?';
-        var pct = parseFloat(p.realmProgress || p.progress || 0) || 0;
+        var pct = 0;
+        if (p.cultivationNeeded > 0) {
+            pct = Math.min(100, (p.cultivation || 0) / p.cultivationNeeded * 100);
+        }
         return realm + ' ' + pct.toFixed(1) + '%';
     }
     function getCurrentAreaName() {
@@ -271,22 +274,18 @@
     // --- 涅槃重生丹 ---
     async function ensureNirvanaPill() {
         if (!gameApi()) return;
-        // 查背包
+        // 查背包，有就直接用
         try { var invRes = await gameApi().get('/api/game/inventory'); } catch (_) { return; }
         if (!invRes || invRes.code !== 200 || !Array.isArray(invRes.data)) return;
-        var has = invRes.data.some(function(item) {
-            var tid = String(item.templateId || '').toLowerCase();
-            return tid.indexOf('pill_nirvana_') >= 0 || tid.indexOf('bp_pill_rebirth') >= 0;
+        var item = invRes.data.find(function(it) {
+            var t = String(it.templateId || '').toLowerCase();
+            return t.indexOf('pill_nirvana_') >= 0 || t.indexOf('bp_pill_rebirth') >= 0;
         });
-        if (has) {
-            // 使用
-            var item = invRes.data.find(function(it) { var t = String(it.templateId || '').toLowerCase(); return t.indexOf('pill_nirvana_') >= 0 || t.indexOf('bp_pill_rebirth') >= 0; });
-            if (item) {
-                var itemId = item.id || item.itemId || item.instanceId;
-                if (itemId) {
-                    setStatus('使用涅槃重生丹...', 'run');
-                    try { await gameApi().post('/api/game/use-item', { itemId: itemId }); } catch (_) {}
-                }
+        if (item) {
+            var itemId = item.id || item.itemId || item.instanceId;
+            if (itemId) {
+                setStatus('使用涅槃重生丹...', 'run');
+                try { await gameApi().post('/api/game/use-item', { itemId: itemId }); } catch (_) {}
             }
             return;
         }
@@ -295,25 +294,39 @@
             var recipes = await gameApi().get('/api/game/alchemy/recipes');
             if (!recipes || recipes.code !== 200 || !recipes.data) return;
             var list = Array.isArray(recipes.data) ? recipes.data : (recipes.data.recipes || []);
+            var rarity = state.nirvanaRarity || 3;
+            // 按品质筛选匹配的涅槃丹配方
             var nirvana = list.find(function(r) {
                 var name = (r.pillName || r.name || '').toLowerCase();
                 var tid = String(r.pillId || r.id || '').toLowerCase();
+                var rRarity = r.rarity || r.quality || 0;
+                if (rRarity && Number(rRarity) !== Number(rarity)) return false;
                 return name.indexOf('涅槃') >= 0 || name.indexOf('重生') >= 0 || tid.indexOf('pill_nirvana_') >= 0;
             });
+            if (!nirvana) {
+                // 没有精确匹配品质的，退而求其次找任意涅槃丹
+                nirvana = list.find(function(r) {
+                    var name = (r.pillName || r.name || '').toLowerCase();
+                    var tid = String(r.pillId || r.id || '').toLowerCase();
+                    return name.indexOf('涅槃') >= 0 || name.indexOf('重生') >= 0 || tid.indexOf('pill_nirvana_') >= 0;
+                });
+            }
             if (nirvana) {
                 var pillId = nirvana.pillId || nirvana.id;
-                setStatus('炼造涅槃重生丹...', 'run');
-                var craftRes = await gameApi().post('/api/game/alchemy/craft', { pillId: pillId });
-                if (craftRes && craftRes.code === 200) {
-                    await sleep(500);
-                    // 炼好了，查背包使用
-                    var invRes2 = await gameApi().get('/api/game/inventory');
-                    if (invRes2 && invRes2.code === 200 && Array.isArray(invRes2.data)) {
-                        var crafted = invRes2.data.find(function(it) { var t = String(it.templateId || '').toLowerCase(); return t.indexOf('pill_nirvana_') >= 0 || t.indexOf('bp_pill_rebirth') >= 0; });
-                        if (crafted) {
-                            var cid = crafted.id || crafted.itemId || crafted.instanceId;
-                            if (cid) { try { await gameApi().post('/api/game/use-item', { itemId: cid }); setStatus('涅槃重生丹已使用', 'run'); } catch (_) {} }
-                        }
+                var qty = Math.max(1, Math.min(999, state.nirvanaCraftQty || 1));
+                setStatus('炼造涅槃重生丹 x' + qty + '...', 'run');
+                for (var ci = 0; ci < qty; ci++) {
+                    try { await gameApi().post('/api/game/alchemy/craft', { pillId: pillId }); } catch (_) {}
+                    if (ci < qty - 1) await sleep(300);
+                }
+                await sleep(500);
+                // 炼好了，查背包使用
+                var invRes2 = await gameApi().get('/api/game/inventory');
+                if (invRes2 && invRes2.code === 200 && Array.isArray(invRes2.data)) {
+                    var crafted = invRes2.data.find(function(it) { var t = String(it.templateId || '').toLowerCase(); return t.indexOf('pill_nirvana_') >= 0 || t.indexOf('bp_pill_rebirth') >= 0; });
+                    if (crafted) {
+                        var cid = crafted.id || crafted.itemId || crafted.instanceId;
+                        if (cid) { try { await gameApi().post('/api/game/use-item', { itemId: cid }); setStatus('涅槃重生丹已使用', 'run'); } catch (_) {} }
                     }
                 }
             }
@@ -352,6 +365,144 @@
     }
     var autoSweepRunning = false;
     var _sweepCount = 0, _sweepMaps = 0, _sweepCost = 0;
+    var _lastLuckCheck = 0, _lastBreakCheck = 0, _lastOriginCheck = 0, _lastSellCheck = 0;
+
+    var autoRefreshLuckRunning = false;
+    function updateLuckDisplay() {
+        var el = document.getElementById('lvscLuckNow'); if (!el) return;
+        var p = getPlayer() || {};
+        var luck = Number(p.luck || 0);
+        el.textContent = '当前: ' + (luck || '?');
+        el.style.color = luck >= state.minLuck ? '#6bc9a0' : '#dbb970';
+    }
+    async function autoRefreshLuckLoop() {
+        if (autoRefreshLuckRunning || !gameApi()) return;
+        // 先刷新玩家数据拿到最新气运
+        await refreshPlayer();
+        var p = getPlayer() || {};
+        var curLuck = Number(p.luck || 0);
+        updateLuckDisplay();
+        if (curLuck >= state.minLuck) {
+            setStatus('气运已达标: ' + curLuck + ' ≥ ' + state.minLuck + '，无需刷新', 'run');
+            return;
+        }
+        autoRefreshLuckRunning = true;
+        var useAd = state.luckRefreshMethod === 'ad';
+        var methodLabel = useAd ? '仙缘' : '灵石';
+        setStatus('气运 ' + curLuck + ' < ' + state.minLuck + '，开始刷(' + methodLabel + ')...', 'run');
+        try {
+            var startBtn = document.getElementById('lvscLuckRefreshStartBtn');
+            var stopBtn = document.getElementById('lvscLuckRefreshStopBtn');
+            if (startBtn) startBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = '';
+        } catch (_) {}
+        var count = 0;
+        while (autoRefreshLuckRunning) {
+            try {
+                var r = await gameApi().post('/api/game/refresh-luck', { useAdPoints: useAd });
+                if (!autoRefreshLuckRunning) break;
+                if (r && r.code === 200 && r.data) {
+                    count++;
+                    var newLuck = Number(r.data.newLuck || 0);
+                    setStatus('第' + count + '次: ' + curLuck + '→' + newLuck + (newLuck >= state.minLuck ? ' 达标' : ''), 'run');
+                    // 更新缓存和显示
+                    if (window._lastPlayerData) window._lastPlayerData.luck = newLuck;
+                    updateLuckDisplay();
+                    curLuck = newLuck;
+                    if (newLuck >= state.minLuck) break;
+                } else {
+                    setStatus('刷新失败: ' + ((r && r.message) || '未知'), 'warn');
+                    break;
+                }
+            } catch (e) { setStatus('异常: ' + (e.message || ''), 'warn'); break; }
+            await sleep(1500);
+        }
+        autoRefreshLuckRunning = false;
+        try {
+            var startBtn2 = document.getElementById('lvscLuckRefreshStartBtn');
+            var stopBtn2 = document.getElementById('lvscLuckRefreshStopBtn');
+            if (startBtn2) startBtn2.style.display = '';
+            if (stopBtn2) stopBtn2.style.display = 'none';
+        } catch (_) {}
+    }
+    function stopLuckRefresh() { autoRefreshLuckRunning = false; }
+    async function autoBreakthroughCheck() { if (!gameApi() || Date.now() - _lastBreakCheck < 300000) return; _lastBreakCheck = Date.now(); var p = getPlayer() || {}; if (!p.canBreakthrough) return; try { setStatus('尝试突破...', 'run'); var r = await gameApi().post('/api/game/breakthrough', { daoBonusPercent: 0 }); if (r && r.code === 200 && r.data && r.data.success === 'true') { setStatus('突破成功!', 'run'); wecomEnqueue('突破成功', (p.realm||'') + ' 突破成功'); } } catch (_) {} }
+    async function autoOriginRepairCheck() { if (!gameApi() || Date.now() - _lastOriginCheck < 120000) return; _lastOriginCheck = Date.now(); var p = getPlayer() || {}; var od = p.originDamage; if (!od || !od.hasDamage) return; try { setStatus('修复本源碎裂...', 'run'); await gameApi().post('/api/player/origin-damage/repair', { type: 'stone' }); wecomEnqueue('本源修复', '已修复本源碎裂'); } catch (_) {} }
+    var autoDisposeRunning = false;
+    var SCOPE_LABELS = {equip:'装备',pill:'丹药',scroll:'卷轴',misc:'杂物',all:'全部'};
+    var RARITY_LABELS = ['','普通','优良','稀有','史诗'];
+    function disposeLog(msg) { if (window._disposeLog) window._disposeLog(msg); }
+    async function autoDisposeLoop() {
+        if (autoDisposeRunning || !gameApi()) return;
+        autoDisposeRunning = true;
+        disposeLog('监控已启动');
+        try {
+            var startBtn = document.getElementById('lvscDisposeStartBtn');
+            var stopBtn = document.getElementById('lvscDisposeStopBtn');
+            if (startBtn) startBtn.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = '';
+        } catch (_) {}
+        while (autoDisposeRunning) {
+            var rules = Array.isArray(state.autoDisposeRules) ? state.autoDisposeRules.slice() : [];
+            if (!rules.length) { await sleep(5000); continue; }
+            disposeLog('── 开始一轮检测 ──');
+            for (var ri = 0; ri < rules.length; ri++) {
+                if (!autoDisposeRunning) break;
+                var rule = rules[ri];
+                if (!rule || !rule.action) continue;
+                var scopeLabel = SCOPE_LABELS[rule.scope] || rule.scope;
+                var rarityLabel = RARITY_LABELS[rule.maxRarity] || rule.maxRarity;
+                var desc = scopeLabel + '[' + rarityLabel + '及以下]';
+                var ok = false;
+                try {
+                    if (rule.action === 'sell') {
+                        var p = { maxRarity: rule.maxRarity };
+                        if (rule.scope !== 'all') p.scope = rule.scope;
+                        var preview = await gameApi().post('/api/game/sell-batch/preview', p);
+                        if (preview && preview.code === 200 && preview.data && preview.data.count) {
+                            var batch = await gameApi().post('/api/game/sell-batch', p);
+                            if (batch && batch.code === 200 && batch.data) {
+                                disposeLog('✓ 出售 ' + desc + '：' + batch.data.count + '件，+' + batch.data.totalGold + '灵石');
+                                ok = true;
+                            }
+                        } else {
+                            disposeLog('  出售 ' + desc + '：无待售物品');
+                        }
+                    } else if (rule.action === 'dismantle') {
+                        var sp = { maxRarity: rule.maxRarity };
+                        var spv = await gameApi().post('/api/game/salvage-batch/preview', sp);
+                        if (spv && spv.code === 200 && spv.data && Array.isArray(spv.data.itemIds) && spv.data.itemIds.length) {
+                            var sb = await gameApi().post('/api/game/salvage-batch', { maxRarity: rule.maxRarity, count: spv.data.itemIds.length, itemIds: spv.data.itemIds });
+                            if (sb && sb.code === 200 && sb.data) {
+                                var rewardStr = (sb.data.rewards || []).map(function(r) { return r.name + 'x' + r.quantity; }).join(', ');
+                                disposeLog('✓ 分解 ' + desc + '：' + sb.data.count + '件' + (rewardStr ? ' → ' + rewardStr : ''));
+                                ok = true;
+                            }
+                        } else {
+                            disposeLog('  分解 ' + desc + '：无待分解装备');
+                        }
+                    }
+                } catch (e) { disposeLog('  ✗ ' + desc + '：' + (e.message || '异常')); }
+                if (!autoDisposeRunning) break;
+                if (ok) await sleep(200);
+            }
+            if (!autoDisposeRunning) break;
+            disposeLog('── 本轮完成，' + state.autoDisposeInterval + '秒后再次检测 ──');
+            var waited = 0;
+            while (autoDisposeRunning && waited < state.autoDisposeInterval * 1000) {
+                await sleep(1000); waited += 1000;
+            }
+        }
+        autoDisposeRunning = false;
+        try {
+            var startBtn2 = document.getElementById('lvscDisposeStartBtn');
+            var stopBtn2 = document.getElementById('lvscDisposeStopBtn');
+            if (startBtn2) startBtn2.style.display = '';
+            if (stopBtn2) stopBtn2.style.display = 'none';
+        } catch (_) {}
+        disposeLog('监控已停止');
+    }
+    function stopDispose() { autoDisposeRunning = false; }
 
     // --- 试练塔扫荡 ---
     async function autoSweepLoop() {
@@ -418,9 +569,18 @@
         farmLog('开垦失败: ' + (r2 ? (r2.message || r2.code) : (r ? (r.message || r.code) : 'err')));
         return false;
     }
-    async function autoFarmLoop() { if (autoFarmRunning) return; autoFarmRunning = true; updateMeter(); farmLog('灵田监控启动'); while (autoFarmRunning) { try { var data = await farmOverview(); if (!data) { farmLog('获取灵田数据失败'); await sleep(10000); continue; } var mature = data.myMatureCount || 0, idle = data.myIdleCount || 0, total = data.myPlotTotal || 0; farmLog("成熟"+mature+" 空闲"+idle+" 总计"+total); if (mature > 0 && state.farmAutoHarvest) { farmLog('收获成熟 ×' + mature); await farmHarvest(); await sleep(500); } if (idle > 0 && state.farmAutoPlant && state.farmSeedId) { farmLog('种植 ' + state.farmSeedName + ' ×' + idle); await farmPlant(state.farmSeedId); await sleep(500); } if (data.farmInvasion && state.farmAutoInvasion) { farmLog('迎击灵田入侵...'); await farmInvasionAttack(); await sleep(500); } if (state.farmExpandEnabled && idle <= 0 && Date.now() - _lastFarmExpandTime > 3600000) { _lastFarmExpandTime = Date.now(); farmLog('开垦...'); await farmExpand(999); } } catch (e) { farmLog('异常: ' + (e.message || '')); } await sleep(state.farmInterval * 1000); } updateMeter(); }
+    async function autoFarmLoop() { if (autoFarmRunning) return; autoFarmRunning = true; updateMeter(); farmLog('灵田监控启动'); while (autoFarmRunning) { try { var data = await farmOverview(); if (!data) { farmLog('获取灵田数据失败'); await sleep(10000); continue; } var mature = data.myMatureCount || 0, idle = data.myIdleCount || 0, total = data.myPlotTotal || 0; farmLog("成熟"+mature+" 空闲"+idle+" 总计"+total); if (mature > 0 && state.farmAutoHarvest) { farmLog('收获成熟 ×' + mature); await farmHarvest(); await sleep(500); } if (idle > 0 && state.farmAutoPlant && state.farmSeedId) { farmLog('种植 ' + state.farmSeedName + ' ×' + idle); await farmPlant(state.farmSeedId); await sleep(500); } if (data.farmInvasion && state.farmAutoInvasion) { farmLog('迎击灵田入侵...'); await farmInvasionAttack(); await sleep(500); } if (state.farmExpandEnabled && idle <= 0 && Date.now() - _lastFarmExpandTime > 3600000) { _lastFarmExpandTime = Date.now(); farmLog('开垦...'); await farmExpand(999); } updateFarmExpandTimer(); } catch (e) { farmLog('异常: ' + (e.message || '')); } await sleep(state.farmInterval * 1000); } updateMeter(); }
     function stopFarm() { autoFarmRunning = false; updateMeter(); }
     function farmLog(msg) { var log = document.getElementById('lvscFarmLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
+    function updateFarmExpandTimer() {
+        var el = document.getElementById('lvscFarmNextExpand'); if (!el) return;
+        var next = _lastFarmExpandTime + 3600000;
+        var remain = Math.max(0, next - Date.now());
+        if (remain <= 0) { el.textContent = '可开垦'; return; }
+        var m = Math.floor(remain / 60000);
+        var s = Math.floor((remain % 60000) / 1000);
+        el.textContent = '下次开垦: ' + m + '分' + s + '秒后';
+    }
 
     // --- 珍宝阁 ---
     async function fetchPavilionShop() { if (!gameApi()) return []; try { var res = await gameApi().get('/api/game/player-sect/builtin-shop'); return (res && res.code === 200 && Array.isArray(res.data)) ? res.data : []; } catch (_) { return []; } }
@@ -554,6 +714,11 @@
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
         {
+            version: '1.5.6',
+            title: '出售&分解 + 一键气运 + 监控面板',
+            notes: ['出售&分解监控列表：多规则批量出售/分解，类别+品质+操作类型，带执行日志。', '一键刷气运：灵石/仙缘消耗可选，当前气运实时显示，循环刷新达标自动停。', '涅槃重生丹完善：品质选择+炼制数量+批量循环炼造。', '新增自动突破、自动修复本源。', '所有功能标题加 自动/需启动 徽章，一眼分清。', '探索tab加已开启摘要+正在监控列表。', '灵田加下次开垦时间倒计时。', '修复修为进度通知显示0.0%。', '修复企业微信通知路由。']
+        },
+        {
             version: '1.5.3',
             title: '灵田优化 + 入侵迎击',
             notes: ['灵田自动开垦简化：去间隔手动输入，两次开垦自动间隔1小时。每次扫描显示实时状态。', '灵田新增妖怪入侵自动迎击（POST invasion/attack API）。']
@@ -676,6 +841,15 @@
         autoMasterRequests: localStorage.getItem('lvSpiritCleaner.autoMasterRequests') !== '0',
         autoBail: localStorage.getItem('lvSpiritCleaner.autoBail') !== '0',
         bailMethod: localStorage.getItem('lvSpiritCleaner.bailMethod') || 'stone',
+        minLuck: readNumber('lvSpiritCleaner.minLuck', 5),
+        luckRefreshMethod: localStorage.getItem('lvSpiritCleaner.luckRefreshMethod') || 'stone',
+        autoBreakthrough: localStorage.getItem('lvSpiritCleaner.autoBreakthrough') === '1',
+        autoOriginRepair: localStorage.getItem('lvSpiritCleaner.autoOriginRepair') === '1',
+        nirvanaRarity: readNumber('lvSpiritCleaner.nirvanaRarity', 3),
+        nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
+        autoDisposeEnabled: localStorage.getItem('lvSpiritCleaner.autoDisposeEnabled') === '1',
+        autoDisposeRules: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeRules') || '[]'); } catch(_) { return []; } })(),
+        autoDisposeInterval: readNumber('lvSpiritCleaner.autoDisposeInterval', 300),
         farmAutoHarvest: localStorage.getItem('lvSpiritCleaner.farmAutoHarvest') !== '0',
         farmAutoPlant: localStorage.getItem('lvSpiritCleaner.farmAutoPlant') !== '0',
         farmSeedId: localStorage.getItem('lvSpiritCleaner.farmSeedId') || '',
@@ -2591,7 +2765,8 @@
         var isPrivate = isPrivateMessage(msgEl);
         var label = epChannel === 'MASTER' ? '师门' : epChannel === 'SECT' ? '宗门' : isPrivate ? '私信' : '世界';
         var prefix = '[' + label + '] ';
-        var webhook = isPrivate ? (state.wecomPrivateWebhook || state.wecomNotifyWebhook) : (state.wecomWorldWebhook || state.wecomNotifyWebhook);
+        var webhook = isPrivate ? state.wecomPrivateWebhook : state.wecomWorldWebhook;
+        if (!webhook) return;
         wecomEnqueue(prefix + info.name + (info.realm ? ' [' + info.realm + ']' : ''), text || '(空消息)', webhook);
     }
 
@@ -3972,7 +4147,8 @@
             if (Date.now() - _lastCleanReport > 600000) {
                 _lastCleanReport = Date.now();
                 var ci = getSpiritInfo();
-                wecomEnqueue('🔄 清理中', '神识剩余：' + ci.spirit + '/' + ci.maxSpirit);
+                wecomEnqueue('🔄 清理中', '神识剩余：' + ci.spirit + '/' + ci.maxSpirit + '\n修为：' + getPlayerRealmStr());
+                if (window._renderRunningMonitors) window._renderRunningMonitors();
             }
 
             if (await checkEventBlockers()) {
@@ -4043,6 +4219,8 @@
             if (state.sectQuickRecovery) await activeRecover();
             if (state.autoRepair) await triggerAutoRepair(false);
             if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
+            if (state.autoBreakthrough) await autoBreakthroughCheck();
+            if (state.autoOriginRepair) await autoOriginRepairCheck();
             applyExploreMultiplier();
             if (state.autoMasterRequests) await handleMasterRequests();
 
@@ -5441,6 +5619,10 @@
         Array.prototype.forEach.call(document.querySelectorAll('#lvscTabs .lvsc-tab'), function (button) {
             button.onclick = function () {
                 activatePanelTab(button.getAttribute('data-tab'));
+                if (button.getAttribute('data-tab') === 'explore') {
+                    if (window._renderAutoStatus) window._renderAutoStatus();
+                    if (window._renderRunningMonitors) window._renderRunningMonitors();
+                }
             };
         });
         // === 单字段 onchange 绑定（只写一个 key）===
@@ -5658,34 +5840,115 @@
         // ====== 动态功能注入 ======
         try {(function() {
             function el(t, c, h) { var e = document.createElement(t); if (c) e.className = c; if (h) e.innerHTML = h; return e; }
-            function sec(title) { var s = el('div', 'lvsc-section'); s.appendChild(el('div', 'lvsc-section-title-row', '<span>' + title + '</span>')); return s; }
+            function sec(title, badge) { var s = el('div', 'lvsc-section'); var bh = ''; if (badge === 'auto') { bh = '<span class="lvsc-badge" style="font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;background:rgba(107,201,160,.14);color:#6bc9a0">自动</span>'; s.setAttribute('data-badge', 'auto'); } else if (badge === 'manual') { bh = '<span class="lvsc-badge" style="font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;background:rgba(224,160,64,.14);color:#e0a040">需启动</span>'; s.setAttribute('data-badge', 'manual'); } s.appendChild(el('div', 'lvsc-section-title-row', '<span>' + title + bh + '</span>')); return s; }
             function rfrBtn(id) { var b = el('button'); b.id = id; b.style.cssText = 'height:29px;padding:0 8px;margin-left:4px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1);border-radius:6px;font-size:11px;cursor:pointer'; b.textContent = '刷新'; return b; }
             function goldBtn(id, text) { var b = el('button'); b.id = id; b.style.cssText = 'flex:1;height:34px;background:#dbb970;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700'; b.textContent = text; return b; }
             function actBtn(id, text) { var b = el('button'); b.id = id; b.className = 'lvsc-action-btn'; b.style.cssText = 'flex:1;height:32px'; b.textContent = text; return b; }
             function stopBtn(id) { var b = el('button'); b.id = id; b.style.cssText = 'flex:1;height:32px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28);border-radius:6px;cursor:pointer;font-weight:700;display:none'; b.textContent = '停止'; return b; }
             function logDiv(id) { var d = el('div'); d.id = id; d.style.cssText = 'min-height:60px;max-height:120px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px;font-family:Consolas,monospace'; d.textContent = '待命'; return d; }
 
-            // 涅槃丹 checkbox 加到虚空淬体旁边
+            // 涅槃重生丹 → auto tab
             (function() {
-                var vSec = document.querySelector('#lvscAutoVoidBody');
-                if (!vSec) return;
-                var p = vSec.closest('.lvsc-section');
-                if (!p) return;
-                var label = el('label', 'lvsc-check');
-                var cb = el('input'); cb.type = 'checkbox'; cb.id = 'lvscAutoNirvanaPill'; cb.checked = state.autoNirvanaPill;
-                label.appendChild(cb); label.appendChild(document.createTextNode(' 涅槃重生丹'));
-                p.appendChild(label);
+                var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
+                var s = sec('涅槃重生丹', 'auto'), g = el('div', 'lvsc-grid2');
+                g.innerHTML = '<label class="lvsc-check" style="font-size:11px"><input id="lvscAutoNirvanaPill" type="checkbox">自动炼造使用</label><label>品质<select id="lvscNirvanaRarity"><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label><label>炼制数量<input id="lvscNirvanaCraftQty" type="number" min="1" max="999" value="' + state.nirvanaCraftQty + '"></label>';
+                s.appendChild(g);
+                p.insertBefore(s, p.firstChild);
             })();
 
+            // ---------- 气运+突破+本源 → auto ----------
+            (function() {
+                var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
+                var s = sec('气运 & 突破');
+                s.innerHTML = '<div class="lvsc-grid2"><label style="font-size:11px">最低气运<input id="lvscMinLuck" type="number" min="1" max="10" value="' + state.minLuck + '" style="height:24px"></label><label style="font-size:11px">消耗<select id="lvscLuckRefreshMethod"><option value="stone">灵石</option><option value="ad">仙缘</option></select></label><span id="lvscLuckNow" style="font-size:11px;color:#dbb970;line-height:28px">当前: ?</span><div style="display:flex;gap:4px"><button id="lvscLuckRefreshStartBtn" class="lvsc-action-btn" style="flex:1;height:28px;font-size:11px">开始刷气运</button><button id="lvscLuckRefreshStopBtn" style="flex:1;height:28px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28);border-radius:6px;cursor:pointer;font-weight:700;display:none;font-size:11px">停止</button></div><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoBreakthrough" type="checkbox">自动突破</label><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoOriginRepair" type="checkbox">自动修复本源</label></div>';
+                p.insertBefore(s, p.firstChild);
+            })();
+            // ---------- 出售 & 分解 → auto ----------
+            (function() {
+                var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
+                var s = sec('出售 & 分解', 'manual');
+                // 添加规则行
+                var addRow = el('div'); addRow.style.cssText = 'display:flex;gap:4px;align-items:center;flex-wrap:wrap';
+                var actSel = el('select'); actSel.id = 'lvscDisposeAction'; actSel.innerHTML = '<option value="sell">出售</option><option value="dismantle">分解</option>';
+                var scopeSel = el('select'); scopeSel.id = 'lvscDisposeScope'; scopeSel.innerHTML = '<option value="equip">装备</option><option value="pill">丹药</option><option value="scroll">卷轴</option><option value="misc">杂物</option><option value="all">全部</option>';
+                var raritySel = el('select'); raritySel.id = 'lvscDisposeRarity'; raritySel.innerHTML = '<option value="1">普通及以下</option><option value="2">优良及以下</option><option value="3">稀有及以下</option><option value="4">史诗及以下</option>';
+                var addBtn = el('button'); addBtn.id = 'lvscDisposeAddBtn'; addBtn.textContent = '+ 添加监控'; addBtn.style.cssText = 'height:28px;padding:0 10px;background:#4a7c5c;color:#e8f0e0;border:0;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap';
+                addRow.appendChild(actSel); addRow.appendChild(scopeSel); addRow.appendChild(raritySel); addRow.appendChild(addBtn);
+                s.appendChild(addRow);
+                // 启用 + 间隔
+                var cfgRow = el('div'); cfgRow.style.cssText = 'display:flex;gap:6px;align-items:center';
+                cfgRow.innerHTML = '<label class="lvsc-check" style="font-size:11px"><input id="lvscAutoDisposeEnabled" type="checkbox">启用监控</label><label style="font-size:11px">间隔(秒)<input id="lvscAutoDisposeInterval" type="number" min="60" value="' + state.autoDisposeInterval + '" style="width:70px;height:24px"></label>';
+                s.appendChild(cfgRow);
+                // 开始/停止
+                var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
+                btnRow.appendChild(actBtn('lvscDisposeStartBtn', '开始监控'));
+                btnRow.appendChild(stopBtn('lvscDisposeStopBtn'));
+                s.appendChild(btnRow);
+                // 监控列表
+                var listDiv = el('div'); listDiv.id = 'lvscDisposeRulesList'; listDiv.style.cssText = 'min-height:20px;font-size:11px;color:#cfc6b2';
+                s.appendChild(listDiv);
+                // 日志
+                var logDiv2 = el('div'); logDiv2.id = 'lvscDisposeLog'; logDiv2.style.cssText = 'min-height:40px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:var(--text-muted);background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:6px;font-family:Consolas,monospace;margin-top:4px'; logDiv2.textContent = '等待执行...';
+                s.appendChild(logDiv2);
+                p.insertBefore(s, p.firstChild);
+                // 日志函数
+                window._disposeLog = function(msg) {
+                    var l = document.getElementById('lvscDisposeLog'); if (!l) return;
+                    var t = new Date().toLocaleTimeString();
+                    l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || '');
+                    if (l.textContent.length > 2000) l.textContent = l.textContent.substring(0, 2000);
+                };
+                // 渲染函数
+                window._renderDisposeRules = function() {
+                    var list = document.getElementById('lvscDisposeRulesList'); if (!list) return;
+                    var rules = state.autoDisposeRules || [];
+                    var actionNames = {sell:'出售',dismantle:'分解'};
+                    var scopeNames = {equip:'装备',pill:'丹药',scroll:'卷轴',misc:'杂物',all:'全部'};
+                    var rarityNames = ['','普通','优良','稀有','史诗'];
+                    if (!rules.length) { list.innerHTML = '<div style="color:var(--text-muted)">暂无监控规则，请添加</div>'; return; }
+                    var html = '';
+                    for (var i = 0; i < rules.length; i++) {
+                        var r = rules[i];
+                        html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+                            '<span style="color:' + (r.action === 'dismantle' ? '#6bc9a0' : '#dbb970') + ';min-width:28px">' + (actionNames[r.action]||r.action) + '</span>' +
+                            '<span style="min-width:28px">' + (scopeNames[r.scope]||r.scope) + '</span>' +
+                            '<span style="min-width:72px">' + (rarityNames[r.maxRarity]||r.maxRarity) + '及以下</span>' +
+                            '<button onclick="window._removeDisposeRule(' + i + ')" style="margin-left:auto;height:20px;padding:0 6px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28);border-radius:4px;cursor:pointer;font-size:10px">删除</button>' +
+                            '</div>';
+                    }
+                    list.innerHTML = html;
+                };
+                window._addDisposeRule = function() {
+                    var a = document.getElementById('lvscDisposeAction');
+                    var s2 = document.getElementById('lvscDisposeScope');
+                    var r2 = document.getElementById('lvscDisposeRarity');
+                    if (!a || !s2 || !r2) return;
+                    var rule = { action: a.value, scope: s2.value, maxRarity: Number(r2.value) };
+                    var rules = Array.isArray(state.autoDisposeRules) ? state.autoDisposeRules.slice() : [];
+                    rules.push(rule);
+                    state.autoDisposeRules = rules;
+                    persistSetting('lvSpiritCleaner.autoDisposeRules', JSON.stringify(rules));
+                    window._renderDisposeRules();
+                };
+                window._removeDisposeRule = function(idx) {
+                    var rules = Array.isArray(state.autoDisposeRules) ? state.autoDisposeRules.slice() : [];
+                    rules.splice(idx, 1);
+                    state.autoDisposeRules = rules;
+                    persistSetting('lvSpiritCleaner.autoDisposeRules', JSON.stringify(rules));
+                    window._renderDisposeRules();
+                };
+                addBtn.addEventListener('click', window._addDisposeRule);
+                window._renderDisposeRules();
+            })();
             // ---------- 灵田 → auto ----------
             (function() {
                 var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
-                var s = sec('灵田'), g = el('div', 'lvsc-grid2');
+                var s = sec('灵田', 'manual'), g = el('div', 'lvsc-grid2');
                 g.innerHTML = '<label>种子<select id="lvscFarmSeed"><option value="">点击刷新</option></select></label><label>检测间隔(秒)<input id="lvscFarmInterval" type="number" min="5" step="5" value="' + state.farmInterval + '"></label>';
                 g.querySelector('label').appendChild(rfrBtn('lvscRefreshFarm'));
                 s.appendChild(g);
                 s.innerHTML += '<div class="lvsc-grid2" style="grid-template-columns:1fr 1fr 1fr"><label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoHarvest" type="checkbox" checked>收获</label><label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoPlant" type="checkbox" checked>种植</label></div>';
-                s.innerHTML += '<label class="lvsc-check" style="font-size:11px"><input id="lvscFarmExpandEn" type="checkbox">自动开垦</label>';
+                s.innerHTML += '<label class="lvsc-check" style="font-size:11px"><input id="lvscFarmExpandEn" type="checkbox">自动开垦</label><span id="lvscFarmNextExpand" style="font-size:10px;color:var(--text-muted);margin-left:4px"></span>';
                 s.innerHTML += '<label class="lvsc-check" style="font-size:11px"><input id="lvscFarmAutoInvasion" type="checkbox" checked>迎击入侵</label>';
                 var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
                 btnRow.appendChild(actBtn('lvscFarmStartBtn', '开始监控'));
@@ -5697,7 +5960,7 @@
             // ---------- 珍宝阁 → craft ----------
             (function() {
                 var p = document.querySelector('[data-tab-panel="craft"]'); if (!p) return;
-                var s = sec('珍宝阁'), g = el('div', 'lvsc-grid2');
+                var s = sec('珍宝阁', 'manual'), g = el('div', 'lvsc-grid2');
                 g.innerHTML = '<label>商品<select id="lvscPavilionItem"><option value="">点击刷新</option></select></label><label>单次数量<input id="lvscPavilionQty" type="number" min="1" max="999" value="' + state.pavilionQty + '"></label><label>循环次数<input id="lvscPavilionLoop" type="number" min="1" value="' + state.pavilionLoop + '"></label><label>间隔(ms)<input id="lvscPavilionDelay" type="number" min="100" step="100" value="' + state.pavilionDelay + '"></label>';
                 g.querySelector('label').appendChild(rfrBtn('lvscRefreshPavilion'));
                 s.appendChild(g);
@@ -5711,7 +5974,7 @@
             // ---------- 扫荡 → craft ----------
             (function() {
                 var p = document.querySelector('[data-tab-panel="craft"]'); if (!p) return;
-                var s = sec('试练塔扫荡'), g = el('div', 'lvsc-grid2');
+                var s = sec('试练塔扫荡', 'manual'), g = el('div', 'lvsc-grid2');
                 g.innerHTML = '<label>最大次数<input id="lvscSweepMax" type="number" min="0" value="0" placeholder="0=无限"></label><label>间隔(ms)<input id="lvscSweepDelay" type="number" min="500" step="500" value="3000"></label>';
                 s.appendChild(g);
                 var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
@@ -5737,8 +6000,114 @@
                 if (ct && !ct.querySelector('option[value="talisman"]')) { var o = document.createElement('option'); o.value = 'talisman'; o.textContent = '制符'; ct.appendChild(o); }
             })();
 
+            // ---------- 已开启功能摘要 → explore tab ----------
+            (function() {
+                var ep = document.querySelector('[data-tab-panel="explore"]'); if (!ep) return;
+                var s = sec('已开启', 'auto');
+                var tagsDiv = el('div'); tagsDiv.id = 'lvscAutoStatusTags'; tagsDiv.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;font-size:11px';
+                s.appendChild(tagsDiv);
+                ep.insertBefore(s, ep.firstChild);
+                window._renderAutoStatus = function() {
+                    var td = document.getElementById('lvscAutoStatusTags'); if (!td) return;
+                    var items = [];
+                    var add = function(cond, name) { if (cond) items.push(name); };
+                    add(state.autoMeditate, '自动冥想');
+                    add(state.autoHireCheapest, '自动护道');
+                    add(state.autoMerchantLegend, '传奇商人');
+                    add(state.autoSelfFightWeak, '自战弱者');
+                    add(state.autoReviveDeath, '自动复活');
+                    add(state.checkDaoyunBoost, '道运检测');
+                    add(state.autoVoidBody, '虚空淬体');
+                    add(state.autoHiddenCharm, '隐藏仙缘');
+                    add(state.autoRepair, '修复装备');
+                    add(state.autoNatalDevour, '吞噬法宝');
+                    add(state.autoRecruit, '自动招募');
+                    add(state.autoBreakthrough, '自动突破');
+                    add(state.autoOriginRepair, '本源修复');
+                    add(state.autoDisposeEnabled && (state.autoDisposeRules||[]).length, '出售&分解');
+                    add(state.autoNirvanaPill, '涅槃丹');
+                    add(state.autoBail, '自动保释');
+                    add(state.autoMasterRequests, '师门请求');
+                    add(state.equipSwapEnabled, '装备切换');
+                    add(state.inscriptionAutoEquip, '铭文装配');
+                    add(state.wecomNotify, '企微通知');
+                    add(state.autoRecoveryMode !== 'none', '自动恢复');
+                    add(state.sectQuickRecovery, '宗门恢复');
+                    add(state.autoSweepMode || state.autoExploreMode, '自动模式');
+                    if (!items.length) { td.innerHTML = '<span style="color:var(--text-muted)">暂无已开启的自动功能</span>'; return; }
+                    td.innerHTML = items.map(function(n) { return '<span style="padding:2px 7px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:4px;white-space:nowrap">' + n + '</span>'; }).join('');
+                };
+                window._renderAutoStatus();
+                // 正在监控
+                var s2 = sec('正在监控', 'manual');
+                var monDiv = el('div'); monDiv.id = 'lvscRunningMonitors'; monDiv.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;font-size:11px';
+                s2.appendChild(monDiv);
+                ep.insertBefore(s2, ep.firstChild);
+                window._renderRunningMonitors = function() {
+                    var md = document.getElementById('lvscRunningMonitors'); if (!md) return;
+                    var items = [];
+                    if (typeof autoFarmRunning !== 'undefined' && autoFarmRunning) items.push('灵田');
+                    if (typeof autoSweepRunning !== 'undefined' && autoSweepRunning) items.push('扫荡');
+                    if (typeof autoPavilionRunning !== 'undefined' && autoPavilionRunning) items.push('珍宝阁');
+                    if (typeof autoTalismanRunning !== 'undefined' && autoTalismanRunning) items.push('批量用符');
+                    if (typeof autoInscriptionRunning !== 'undefined' && autoInscriptionRunning) items.push('铭文洗练');
+                    if (typeof autoCraftRunning !== 'undefined' && autoCraftRunning) items.push('炼制');
+                    if (typeof autoTreasureRunning !== 'undefined' && autoTreasureRunning) items.push('藏宝图');
+                    if (typeof autoDisposeRunning !== 'undefined' && autoDisposeRunning) items.push('出售&分解');
+                    if (typeof autoRefreshLuckRunning !== 'undefined' && autoRefreshLuckRunning) items.push('刷气运');
+                    if (typeof autoTrialRunning !== 'undefined' && autoTrialRunning) items.push('试练塔');
+                    if (!items.length) { md.innerHTML = '<span style="color:var(--text-muted)">暂无正在运行的监控</span>'; return; }
+                    md.innerHTML = items.map(function(n) { return '<span style="padding:2px 7px;background:rgba(224,160,64,.12);color:#e0a040;border-radius:4px;white-space:nowrap">● ' + n + '</span>'; }).join('');
+                };
+                window._renderRunningMonitors();
+            })();
+
+            // --- 统一给所有 section 标题打徽章 ---
+            window._stampSectionBadges = function() {
+                // 用内部控件 ID 识别，比标题文本更稳定
+                var ID_BADGE = {
+                    // auto（只有 checkbox/input，无 start 按钮）
+                    lvscAutoHireCheapest:'auto', lvscAutoMerchant:'auto', lvscAutoMerchantLegend:'auto',
+                    lvscAutoSelfFightWeak:'auto', lvscAutoRecoveryMode:'auto', lvscAutoHpPriority:'auto',
+                    lvscAutoMpPriority:'auto', lvscAutoRepair:'auto', lvscAutoNatalDevour:'auto',
+                    lvscAutoBail:'auto', lvscAutoRecruit:'auto', lvscAutoMeditate:'auto',
+                    lvscEquipSwapEnabled:'auto', lvscAutoVoidBody:'auto', lvscAutoHiddenCharm:'auto',
+                    lvscWecomNotify:'auto',
+                    // manual（有 start/stop 按钮）
+                    lvscCraftRecipe:'manual', lvscFarmStartBtn:'manual',
+                    lvscAutoPavilionBtn:'manual', lvscSweepStartBtn:'manual',
+                    lvscStartTalismanBtn:'manual', lvscDisposeStartBtn:'manual',
+                    lvscAutoTreasureBtn:'manual', lvscAutoTrialBtn:'manual',
+                    lvscLuckRefreshStartBtn:'manual'
+                };
+                var sections = document.querySelectorAll('.lvsc-section');
+                for (var si = 0; si < sections.length; si++) {
+                    var sct = sections[si];
+                    // 已有 data-badge（sec() 设置）或已有徽章 → 跳过
+                    if (sct.getAttribute('data-badge') || sct.querySelector('.lvsc-badge')) continue;
+                    // 查找 section 内第一个匹配的控件 ID
+                    var badgeType = null;
+                    var inputs = sct.querySelectorAll('[id]');
+                    for (var ii = 0; ii < inputs.length; ii++) {
+                        if (ID_BADGE[inputs[ii].id]) { badgeType = ID_BADGE[inputs[ii].id]; break; }
+                    }
+                    if (!badgeType) continue;
+                    sct.setAttribute('data-badge', badgeType);
+                    var titleEl = sct.querySelector('.lvsc-section-title-row > span') || sct.querySelector('.lvsc-section-title');
+                    if (!titleEl) continue;
+                    var badge = document.createElement('span');
+                    badge.className = 'lvsc-badge';
+                    badge.style.cssText = 'font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;white-space:nowrap;' + (badgeType === 'auto' ? 'background:rgba(107,201,160,.14);color:#6bc9a0' : 'background:rgba(224,160,64,.14);color:#e0a040');
+                    badge.textContent = badgeType === 'auto' ? '自动' : '需启动';
+                    titleEl.appendChild(badge);
+                }
+            };
+            window._stampSectionBadges();
+
             // 绑定新元素的事件（延迟执行避免ID未注册）
             setTimeout(function() {
+                // 再跑一次确保全部到位
+                if (window._stampSectionBadges) window._stampSectionBadges();
                 // 灵田
                 var fsStart = document.getElementById('lvscFarmStartBtn');
                 if (fsStart) fsStart.onclick = function() { this.style.display = 'none'; document.getElementById('lvscFarmStopBtn').style.display = ''; autoFarmLoop(); };
@@ -5801,9 +6170,33 @@
                 var tStart = document.getElementById('lvscStartTalismanBtn'); if (tStart) tStart.onclick = autoTalismanLoop;
                 var tStop = document.getElementById('lvscStopTalismanBtn'); if (tStop) tStop.onclick = stopTalisman;
 
+                // 气运/突破/本源/出售
+                var ml = document.getElementById('lvscMinLuck'); if (ml) { ml.value = state.minLuck; ml.onchange = function() { state.minLuck = Math.max(1, Math.min(10, Number(this.value)||5)); persistSetting('lvSpiritCleaner.minLuck', String(state.minLuck)); }; }
+                var lm = document.getElementById('lvscLuckRefreshMethod'); if (lm) { lm.value = state.luckRefreshMethod || 'stone'; lm.onchange = function() { state.luckRefreshMethod = this.value; persistSetting('lvSpiritCleaner.luckRefreshMethod', this.value); }; }
+                var lrStart = document.getElementById('lvscLuckRefreshStartBtn'); if (lrStart) lrStart.onclick = function() { autoRefreshLuckLoop(); };
+                var lrStop = document.getElementById('lvscLuckRefreshStopBtn'); if (lrStop) lrStop.onclick = stopLuckRefresh;
+                updateLuckDisplay();
+                var bt = document.getElementById('lvscAutoBreakthrough'); if (bt) { bt.checked = state.autoBreakthrough; bt.onchange = function() { state.autoBreakthrough = this.checked; persistSetting('lvSpiritCleaner.autoBreakthrough', this.checked); }; }
+                var or = document.getElementById('lvscAutoOriginRepair'); if (or) { or.checked = state.autoOriginRepair; or.onchange = function() { state.autoOriginRepair = this.checked; persistSetting('lvSpiritCleaner.autoOriginRepair', this.checked); }; }
+                // 出售 & 分解
+                var deCb = document.getElementById('lvscAutoDisposeEnabled');
+                if (deCb) { deCb.checked = state.autoDisposeEnabled; deCb.onchange = function() { state.autoDisposeEnabled = this.checked; persistSetting('lvSpiritCleaner.autoDisposeEnabled', this.checked); }; }
+                var deIntv = document.getElementById('lvscAutoDisposeInterval'); if (deIntv) { deIntv.value = state.autoDisposeInterval || 300; deIntv.onchange = function() { state.autoDisposeInterval = Math.max(60, Number(this.value)||300); persistSetting('lvSpiritCleaner.autoDisposeInterval', String(state.autoDisposeInterval)); }; }
+                var dsStart = document.getElementById('lvscDisposeStartBtn');
+                if (dsStart) dsStart.onclick = function() { this.style.display = 'none'; document.getElementById('lvscDisposeStopBtn').style.display = ''; autoDisposeLoop(); };
+                var dsStop = document.getElementById('lvscDisposeStopBtn');
+                if (dsStop) dsStop.onclick = stopDispose;
+                // 重新渲染规则列表 + 自动状态 + 运行状态
+                if (window._renderDisposeRules) window._renderDisposeRules();
+                if (window._renderAutoStatus) window._renderAutoStatus();
+                if (window._renderRunningMonitors) window._renderRunningMonitors();
                 // 涅槃丹
                 var nirvCb = document.getElementById('lvscAutoNirvanaPill');
                 if (nirvCb) { nirvCb.checked = state.autoNirvanaPill; nirvCb.onchange = function() { state.autoNirvanaPill = this.checked; persistSetting('lvSpiritCleaner.autoNirvanaPill', this.checked); }; }
+                var nirvRarity = document.getElementById('lvscNirvanaRarity');
+                if (nirvRarity) { nirvRarity.value = String(state.nirvanaRarity || 3); nirvRarity.onchange = function() { state.nirvanaRarity = Number(this.value); persistSetting('lvSpiritCleaner.nirvanaRarity', String(state.nirvanaRarity)); }; }
+                var nirvQty = document.getElementById('lvscNirvanaCraftQty');
+                if (nirvQty) { nirvQty.value = state.nirvanaCraftQty || 1; nirvQty.onchange = function() { state.nirvanaCraftQty = Math.max(1, Math.min(999, Number(this.value)||1)); persistSetting('lvSpiritCleaner.nirvanaCraftQty', String(state.nirvanaCraftQty)); }; }
 
                 // 扫荡
                 var swStart = document.getElementById('lvscSweepStartBtn');

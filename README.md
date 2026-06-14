@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.9-dbb970?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/version-1.5.6-dbb970?style=for-the-badge" />
   <img src="https://img.shields.io/badge/platform-Tampermonkey-9be7c3?style=for-the-badge" />
   <img src="https://img.shields.io/badge/license-MIT-8f846f?style=for-the-badge" />
 </p>
@@ -55,7 +55,13 @@
 | ⚗️ **Buff管理** | 虚空淬体自动维持 · 隐秘符自动使用 · 失败自动关闭 |
 | 🗡️ **本命吞噬** | 自动吞噬同类型装备或材料 |
 | 👥 **社交处理** | 自动收徒 · 处理徒弟问道/护道/历练 |
-| 📱 **微信通知** | 清理中10min/冥想中20min推送 · 死亡/复活通知 · 清理统计 |
+| 💰 **出售 & 分解** | 多规则监控列表 · 类别+品质+操作类型 · 批量执行带日志 |
+| 🍀 **一键气运** | 灵石/仙缘消耗可选 · 循环刷新达标自动停 · 当前气运实时显示 |
+| 🔮 **突破 & 本源** | 自动突破 · 自动修复本源碎裂 |
+| 🌾 **灵田监控** | 自动收获/种植 · 自动开垦(1h冷却) · 入侵迎击 · 开垦倒计时 |
+| 🏷️ **功能徽章** | 每个功能标题标注 自动/需启动，一目了然 |
+| 📊 **探索面板** | 已开启自动功能摘要 · 正在运行的监控列表 |
+| 📱 **微信通知** | 清理中10min/冥想中20min推送 · 死亡/复活通知 · 清理统计(含修为进度) |
 
 ---
 
