@@ -4138,6 +4138,7 @@
     // --- 系统自带探索 + 脚本特性监控 ---
     async function systemExploreLoop() {
         if (running || autoInscriptionRunning) { console.log('[SysExplore] blocked: running=' + running + ' insc=' + autoInscriptionRunning); return; }
+        if (monitoringSpirit) { monitoringSpirit = false; updateMeter(); }
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
         console.log('[SysExplore] start. medActive=' + window._meditationActive + ' medProg=' + window._meditationInProgress + ' _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
         // 如果正在冥想，先收功再启动
@@ -4238,6 +4239,7 @@
 
     async function runLoop() {
         if (running) return;
+        if (monitoringSpirit) { monitoringSpirit = false; updateMeter(); }
         if (autoInscriptionRunning) {
             setStatus('铭文洗练中，不能开始清理', 'warn');
             return;
