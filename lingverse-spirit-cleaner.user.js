@@ -4152,6 +4152,15 @@
     // 神识不足时自动转入监测模式（等待自然恢复后自动重启清理）
     async function switchToMonitor(reason) {
         console.log('[switchToMonitor] called, reason=' + reason + ' running=' + running + ' monitoringSpirit=' + monitoringSpirit);
+        // 冥想前先清理遭遇/商人，否则卡住无法冥想
+        if (typeof _encounterActive !== 'undefined' && _encounterActive) {
+            try { if (state.aggressiveMode) await handleEncounterEvent(); else await handleSelfFightEvent(false); } catch(_) {}
+            await sleep(500);
+        }
+        if (typeof _merchantActive !== 'undefined' && _merchantActive) {
+            try { await handleMerchantEvent(); } catch(_) {}
+            await sleep(500);
+        }
         running = false;
         monitoringSpirit = false;
         persistRunning(false);
