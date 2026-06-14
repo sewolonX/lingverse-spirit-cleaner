@@ -92,6 +92,7 @@
 
     var running = false;
     var monitoringSpirit = false;
+    function persistRunning(v) { try { localStorage.setItem('lvSpiritCleaner.wasRunning', v ? '1' : '0'); } catch(_) {} }
     var autoTrialRunning = false;
     var autoTreasureRunning = false;
     var autoInscriptionRunning = false;
@@ -4132,6 +4133,7 @@
         if (running || autoInscriptionRunning) return;
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
         running = true;
+        persistRunning(true);
         updateMeter();
         setStatus('系统自动探索启动（脚本监控中）', 'run');
         while (running) {
@@ -4178,6 +4180,7 @@
             break;
         }
         running = false;
+        persistRunning(false);
         updateMeter();
         setStatus('系统探索已停止', 'idle');
     }
@@ -4190,6 +4193,7 @@
         }
         monitoringSpirit = false;
         running = true;
+        persistRunning(true);
         syncSettingsFromUi();
         applyExploreMultiplier();
         updateMeter();
@@ -4343,6 +4347,7 @@
     }
     function stop(reason) {
         running = false;
+        persistRunning(false);
         // 清理完成统计
         if (_cleanStats.explores > 0) {
             var elapsed = Math.floor((Date.now() - _cleanStats.startTime) / 60000);
@@ -6302,6 +6307,14 @@
     function waitForGame() {
         if (document.body && (window.api || window._lastPlayerData || document.getElementById('exploreBtn'))) {
             buildPanel();
+            // 刷新后自动恢复运行状态
+            var wasRunning = localStorage.getItem('lvSpiritCleaner.wasRunning') === '1';
+            if (wasRunning && !running) {
+                setTimeout(function() {
+                    if (state.exploreMode === 'system') { systemExploreLoop(); }
+                    else { runLoop(); }
+                }, 2000); // 等面板渲染完
+            }
             return;
         }
         setTimeout(waitForGame, 800);
