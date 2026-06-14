@@ -4041,7 +4041,8 @@
                         setStatus('预计神识已到，收功后开始清理', 'run');
                         await stopMeditationAndRefresh();
                         await sleep(300);
-                        await runLoop();
+                        if (state.exploreMode === 'system') { await systemExploreLoop(); }
+                        else { await runLoop(); }
                         return;
                     }
                 } else if (info.spirit >= target) {
@@ -4049,7 +4050,8 @@
                     updateMeter();
                     setStatus('神识已到 ' + info.spirit + '/' + target + '，开始清理', 'run');
                     await sleep(300);
-                    await runLoop();
+                    if (state.exploreMode === 'system') { await systemExploreLoop(); }
+                    else { await runLoop(); }
                     return;
                 } else {
                     setStatus('监测中：神识 ' + info.spirit + '/' + target, 'run');
@@ -4209,14 +4211,9 @@
             if (ci.spirit < ci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
                 if (typeof forceClearMeditationUi === 'function') forceClearMeditationUi();
-                setStatus('神识不足，自动冥想', 'run');
-                console.log('[SysExplore] low spirit, meditating...');
-                if (state.autoMeditate) {
-                    var medOk = await meditateThenWait();
-                    console.log('[SysExplore] meditate done: ' + medOk);
-                    if (medOk) { setStatus('冥想完成，重启系统探索', 'run'); continue; }
-                }
-                setStatus('神识不足且无法恢复，停止', 'warn'); break;
+                console.log('[SysExplore] low spirit, switching to monitor');
+                await switchToMonitor('系统探索神识不足');
+                return; // switchToMonitor 会启动 monitorSpiritLoop，神识满了自动调 runLoop
             }
             console.log('[SysExplore] unknown stop, retry in 3s');
             setStatus('系统探索中断，3秒后重启', 'run');
