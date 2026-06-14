@@ -5460,7 +5460,7 @@
         document.getElementById('lvscWecomWorldWebhook').value = String(state.wecomWorldWebhook);
         document.getElementById('lvscWecomPrivateWebhook').value = String(state.wecomPrivateWebhook);
         document.getElementById('lvscAutoMasterRequests').checked = state.autoMasterRequests;
-        document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
+        document.getElementById('lvscWecomFields').style.display = '';
         document.getElementById('lvscAutoVoidBody').checked = state.autoVoidBody;
         document.getElementById('lvscVoidRarity').value = String(state.voidBodyRarity);
         document.getElementById('lvscVoidBuyQty').value = String(state.voidBodyBuyQty);
@@ -5759,7 +5759,7 @@
         document.getElementById('lvscWecomNotify').onchange = function () {
             state.wecomNotify = chkVal('lvscWecomNotify');
             persistSetting('lvSpiritCleaner.wecomNotify', state.wecomNotify);
-            document.getElementById('lvscWecomFields').style.display = state.wecomNotify ? '' : 'none';
+            document.getElementById('lvscWecomFields').style.display = '';
             if (state.wecomNotify) startRecruitObserver();
         };
         onStr('lvscWecomNotifyWebhook', 'wecomNotifyWebhook');
