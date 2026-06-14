@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.6
+// @version      1.5.7
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -221,7 +221,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.6';
+    var SCRIPT_VERSION = '1.5.7';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -725,6 +725,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.5.7',
+            title: '探索模式 + 系统自带 + 联动闭环',
+            notes: ['探索tab新增模式切换：脚本API（全功能）/ 系统自带（游戏内置自动探索+脚本监控）。', '系统自带模式：启动游戏自动探索，脚本5秒巡查，死亡复活/冥想衔接/恢复修复全覆盖。', '探索↔监测自动联动：神识耗尽自动转监测，满了自动收功恢复探索，双模式无缝闭环。', '页面刷新后自动恢复运行状态。', '涅槃丹优化：改用batch-craft批量炼制（单批上限100），检测身上buff避免重复浪费。', '反馈修复：改回GM_xmlhttpRequest桥接绕过CORS。', '企业微信：通知路由恢复fallback，webhook输入框始终可见。', '状态栏新增灵田/出售分解/气运/突破/本源5个分类开关。']
+        },
         {
             version: '1.5.6',
             title: '出售&分解 + 一键气运 + 监控面板',
