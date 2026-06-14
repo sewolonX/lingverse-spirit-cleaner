@@ -4142,11 +4142,22 @@
         monitoringSpirit = false;
         persistRunning(false);
         updateMeter();
-        console.log('[switchToMonitor] after reset: running=' + running + ' monitoringSpirit=' + monitoringSpirit + ' runBtn=' + (document.getElementById('lvscRunBtn')||{}).textContent);
         setStatus(reason + '，自动转入神识监测', 'run');
         wecomEnqueue('转入监测', reason);
+        // 直接在这里启动冥想，不等 monitorSpiritLoop
+        if (state.autoMeditate && gameApi()) {
+            var info = getSpiritInfo();
+            if (info.player && info.spirit < info.maxSpirit) {
+                setStatus('开始冥想...', 'run');
+                try {
+                    var startRes = await gameApi().post('/api/game/meditate/start', {});
+                    if (startRes && startRes.code === 200 && typeof window.startMeditationUI === 'function') {
+                        try { window.startMeditationUI(); } catch (_) {}
+                    }
+                } catch (_) {}
+            }
+        }
         await sleep(500);
-        console.log('[switchToMonitor] calling monitorSpiritLoop');
         monitorSpiritLoop();
     }
 
@@ -4183,13 +4194,6 @@
             var _sci = getSpiritInfo();
             if (_sci.player && _sci.spirit < _sci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
-                if (state.autoMeditate) {
-                    if (await meditateThenWait()) {
-                        await refreshPlayer();
-                        var _sci2 = getSpiritInfo();
-                        if (_sci2.spirit >= _sci2.cost) continue;
-                    }
-                }
                 await switchToMonitor('系统探索神识不足');
                 return;
             }
@@ -4245,7 +4249,6 @@
                 setStatus('死亡，停止', 'warn'); break;
             }
             if (ci.spirit < ci.cost) {
-                console.log('[SysExplore] low spirit, switchToMonitor');
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
                 await switchToMonitor('系统探索神识不足');
                 return;
@@ -4294,15 +4297,7 @@
             // 每次循环第一件事：检查神识。不够就直接转监测，不依赖任何分支。
             // ################################################################
             var _ci = getSpiritInfo();
-            console.log('[runLoop top] spirit=' + _ci.spirit + ' cost=' + _ci.cost + ' running=' + running + ' mon=' + monitoringSpirit);
             if (_ci.player && _ci.spirit < _ci.cost) {
-                if (state.autoMeditate) {
-                    if (await meditateThenWait()) {
-                        await refreshPlayer();
-                        var _ci2 = getSpiritInfo();
-                        if (_ci2.spirit >= _ci2.cost) continue;
-                    }
-                }
                 await switchToMonitor('神识不足');
                 return;
             }
