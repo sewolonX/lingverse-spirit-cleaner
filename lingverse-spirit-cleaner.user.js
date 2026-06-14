@@ -4132,6 +4132,18 @@
     async function systemExploreLoop() {
         if (running || autoInscriptionRunning) return;
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
+        // 如果正在冥想，先收功再启动
+        if (window._meditationActive || window._meditationInProgress) {
+            setStatus('检测到正在冥想，先收功...', 'run');
+            try {
+                if (typeof forceClearMeditationUi === 'function') forceClearMeditationUi();
+                await gameApi().post('/api/game/meditate/stop', {});
+            } catch (_) {}
+            await sleep(1000);
+            window._meditationActive = false;
+            window._meditationInProgress = false;
+            setStatus('已收功，启动系统探索', 'run');
+        }
         running = true;
         persistRunning(true);
         updateMeter();
