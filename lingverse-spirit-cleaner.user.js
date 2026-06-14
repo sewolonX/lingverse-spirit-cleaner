@@ -5576,9 +5576,8 @@
                 var player = getPlayer() || {};
                 var payload = { text: text,  playerName: player.name || player.playerName || '', version: SCRIPT_VERSION, timestamp: Date.now() };
                 var endpoint = (state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/feedback');
-                fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-                    .then(function() { setStatus('感谢反馈！', 'run'); })
-                    .catch(function() { setStatus('反馈发送失败，请检查网络', 'warn'); });
+                window.dispatchEvent(new CustomEvent('lvsc:feedback', { detail: JSON.stringify({ endpoint: endpoint, payload: payload }) }));
+                setStatus('感谢反馈！', 'run');
                 modal.remove();
             };
         };
