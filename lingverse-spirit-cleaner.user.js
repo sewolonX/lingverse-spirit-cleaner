@@ -4127,6 +4127,61 @@
         monitorSpiritLoop();
     }
 
+    // --- 系统自带探索 + 脚本特性监控 ---
+    async function systemExploreLoop() {
+        if (running || autoInscriptionRunning) return;
+        if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
+        running = true;
+        updateMeter();
+        setStatus('系统自动探索启动（脚本监控中）', 'run');
+        while (running) {
+            // 启动/重启系统自动探索
+            if (typeof _autoExploreRunning === 'undefined' || !_autoExploreRunning) {
+                startAutoExplore();
+                await sleep(3000); // 等它起来
+            }
+            // 监控循环
+            while (running && typeof _autoExploreRunning !== 'undefined' && _autoExploreRunning) {
+                // 脚本特性：在系统探索运行时同步维护
+                try {
+                    // 恢复 + 修复
+                    if (state.sectQuickRecovery) await activeRecover();
+                    if (state.autoRepair) await triggerAutoRepair(false);
+                    if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
+                    // 突破 + 本源
+                    if (state.autoBreakthrough) await autoBreakthroughCheck();
+                    if (state.autoOriginRepair) await autoOriginRepairCheck();
+                    // 事件处理
+                    if (await checkEventBlockers()) { await sleep(state.delayMs); continue; }
+                    if (state.autoMasterRequests) await handleMasterRequests();
+                    applyExploreMultiplier();
+                } catch (_) {}
+                await sleep(5000); // 5秒巡查一次，不跟系统探索抢节奏
+            }
+            if (!running) break;
+            // 系统探索停了，排查原因
+            var p = getPlayer() || {};
+            var ci = getSpiritInfo();
+            // 死亡
+            if (p.isDead || window.playerDead) {
+                setStatus('系统探索因死亡停止，尝试复活', 'warn');
+                if (state.autoReviveDeath && isDeathActive()) { await revivePlayer(); await sleep(2000); continue; }
+                setStatus('死亡，停止', 'warn'); break;
+            }
+            // 神识不足
+            if (ci.spirit < ci.cost) {
+                setStatus('神识不足，自动冥想', 'run');
+                if (state.autoMeditate) { if (await meditateThenWait()) continue; }
+                setStatus('神识不足且无法恢复，停止', 'warn'); break;
+            }
+            // 其他原因（可能是手动停止或正常结束）
+            break;
+        }
+        running = false;
+        updateMeter();
+        setStatus('系统探索已停止', 'idle');
+    }
+
     async function runLoop() {
         if (running) return;
         if (autoInscriptionRunning) {
@@ -5482,12 +5537,12 @@
         document.getElementById('lvscHiddenCharmRetryMs').value = String(state.hiddenCharmRetryMs);
         document.getElementById('lvscRunBtn').onclick = function () {
             if (running) { stop('手动停止'); return; }
-            if (state.exploreMode === 'system') { if (typeof startAutoExplore === 'function') startAutoExplore(); else setStatus('系统自动探索不可用', 'warn'); return; }
+            if (state.exploreMode === 'system') { systemExploreLoop(); return; }
             runLoop();
         };
         document.getElementById('lvscCompactRunBtn').onclick = function () {
             if (running) { stop('手动停止'); return; }
-            if (state.exploreMode === 'system') { if (typeof startAutoExplore === 'function') startAutoExplore(); else setStatus('系统自动探索不可用', 'warn'); return; }
+            if (state.exploreMode === 'system') { systemExploreLoop(); return; }
             runLoop();
         };
         // 停止时同步停止系统自动探索
