@@ -4887,12 +4887,11 @@
     async function checkAnnounce() {
         try {
             var endpoint = (state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/announce');
-            var res = await fetch(endpoint);
+            var res = await fetch(endpoint, { headers: { 'ngrok-skip-browser-warning': 'true' } });
             if (!res.ok) return;
             var data = await res.json();
             if (!data || !data.active || !data.message) return;
-            if (data.id && data.id === _lastAnnounceSeen) return; // 已看过
-            // 显示公告弹窗
+            if (data.id && data.id === _lastAnnounceSeen) return;
             showAnnounceModal(data);
         } catch (_) {}
     }
@@ -6394,13 +6393,20 @@
     function waitForGame() {
         if (document.body && (window.api || window._lastPlayerData || document.getElementById('exploreBtn'))) {
             buildPanel();
-            // 刷新后自动恢复运行状态
+            // 刷新后自动恢复运行状态（冥想中不打断，转监测等收功）
             var wasRunning = localStorage.getItem('lvSpiritCleaner.wasRunning') === '1';
             if (wasRunning && !running) {
                 setTimeout(function() {
+                    var p = getPlayer() || {};
+                    if (p.isMeditating) {
+                        // 正在冥想中，不打断，启动监测模式等收功后自动衔接
+                        setStatus('刷新检测：冥想中，转入监测', 'run');
+                        monitorSpiritLoop();
+                        return;
+                    }
                     if (state.exploreMode === 'system') { systemExploreLoop(); }
                     else { runLoop(); }
-                }, 2000); // 等面板渲染完
+                }, 2000);
             }
             return;
         }
