@@ -4188,6 +4188,8 @@
         persistRunning(true);
         updateMeter();
         setStatus('系统自动探索启动（脚本监控中）', 'run');
+        var pName = (getPlayer() || {}).name || '';
+        wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
         while (running) {
             // 每次循环第一件事：检查神识
             await refreshPlayer();
