@@ -4356,6 +4356,13 @@
                         await switchToMonitor('神识不足且无法恢复');
                         return;
                     }
+                    // 冥想后二次确认，避免缓存数据导致假成功
+                    await refreshPlayer();
+                    var postMedCheck = getSpiritInfo();
+                    if (postMedCheck.spirit < postMedCheck.cost) {
+                        await switchToMonitor('冥想后神识仍不足');
+                        return;
+                    }
                     await sleep(state.delayMs);
                     continue;
                 }
@@ -4376,6 +4383,12 @@
                         if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
                             if (!await meditateThenWait()) {
                                 await switchToMonitor('探索后神识不足且无法恢复');
+                                return;
+                            }
+                            await refreshPlayer();
+                            var postMedCheck2 = getSpiritInfo();
+                            if (postMedCheck2.spirit < postMedCheck2.cost) {
+                                await switchToMonitor('冥想后神识仍不足');
                                 return;
                             }
                             await sleep(state.delayMs);
