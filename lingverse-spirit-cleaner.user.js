@@ -4058,6 +4058,16 @@
                     if (state.exploreMode === 'system') { await systemExploreLoop(); }
                     else { await runLoop(); }
                     return;
+                } else if (state.autoMeditate && info.spirit < info.maxSpirit) {
+                    // 没有在冥想，主动开始
+                    setStatus('监测中：开始冥想...', 'run');
+                    var startRes = await gameApi().post('/api/game/meditate/start', {});
+                    if (startRes && startRes.code === 200) {
+                        if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} }
+                        monitorStartedAt = Date.now();
+                    } else {
+                        setStatus('监测中：冥想启动失败，等待重试', 'warn');
+                    }
                 } else {
                     setStatus('监测中：神识 ' + info.spirit + '/' + target, 'run');
                 }
