@@ -4037,6 +4037,7 @@
         updateMeter();
         var monitorStartedAt = Date.now();
         var monitorSpiritPerMinute = Number(window.meditationSpiritRate || 0);
+        var MIN_MONITOR_MS = 30000; // 最短监测30秒，防止秒级反复横跳
 
         while (monitoringSpirit && !running) {
             await refreshPlayer();
@@ -4054,7 +4055,7 @@
                     monitorSpiritPerMinute = Number(statusRes.data.spiritPerMinute || monitorSpiritPerMinute || 0);
                     var progress = estimateMeditateProgress(statusRes.data, info, monitorSpiritPerMinute, monitorStartedAt);
                     setStatus('监测冥想：' + progress.current + ' + ' + progress.gained + ' = ' + progress.total + '/' + target, 'run');
-                    if (progress.total >= target) {
+                    if (progress.total >= target && Date.now() - monitorStartedAt > MIN_MONITOR_MS) {
                         monitoringSpirit = false;
                         updateMeter();
                         setStatus('预计神识已到，收功后开始清理', 'run');
@@ -4064,7 +4065,7 @@
                         else { await runLoop(); }
                         return;
                     }
-                } else if (info.spirit >= target) {
+                } else if (info.spirit >= target && Date.now() - monitorStartedAt > MIN_MONITOR_MS) {
                     monitoringSpirit = false;
                     updateMeter();
                     setStatus('神识已到 ' + info.spirit + '/' + target + '，开始清理', 'run');
