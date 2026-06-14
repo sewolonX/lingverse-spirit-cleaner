@@ -4065,7 +4065,7 @@
                         setStatus('预计神识已到，收功后开始清理', 'run');
                         await stopMeditationAndRefresh();
                         await sleep(300);
-                        if (state.exploreMode === 'system') { await systemExploreLoop(true); }
+                        if (state.exploreMode === 'system') { await systemExploreLoop(); }
                         else { await runLoop(); }
                         return;
                     }
@@ -4074,7 +4074,7 @@
                     updateMeter();
                     setStatus('神识已到 ' + info.spirit + '/' + target + '，开始清理', 'run');
                     await sleep(300);
-                    if (state.exploreMode === 'system') { await systemExploreLoop(true); }
+                    if (state.exploreMode === 'system') { await systemExploreLoop(); }
                     else { await runLoop(); }
                     return;
                 } else if (state.autoMeditate && info.spirit < info.maxSpirit) {
@@ -4171,7 +4171,7 @@
         persistRunning(false);
         updateMeter();
         setStatus(reason + '，自动转入神识监测', 'run');
-        // 自动流转不发通知，避免反复刷屏
+        wecomEnqueue('转入监测', reason);
         // 直接在这里启动冥想，不等 monitorSpiritLoop
         if (state.autoMeditate && gameApi()) {
             var info = getSpiritInfo();
@@ -4190,7 +4190,7 @@
     }
 
     // --- 系统自带探索 + 脚本特性监控 ---
-    async function systemExploreLoop(silent) {
+    async function systemExploreLoop() {
         if (running || autoInscriptionRunning) { console.log('[SysExplore] blocked: running=' + running + ' insc=' + autoInscriptionRunning); return; }
         if (monitoringSpirit) { monitoringSpirit = false; updateMeter(); }
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
@@ -4216,11 +4216,8 @@
         persistRunning(true);
         updateMeter();
         setStatus('系统自动探索启动（脚本监控中）', 'run');
-        // 只在手动启动时发通知，自动恢复不发
-        if (!silent) {
-            var pName = (getPlayer() || {}).name || '';
-            wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
-        }
+        var pName = (getPlayer() || {}).name || '';
+        wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
         while (running) {
             // 每次循环第一件事：检查神识
             await refreshPlayer();
@@ -5699,12 +5696,12 @@
         document.getElementById('lvscHiddenCharmRetryMs').value = String(state.hiddenCharmRetryMs);
         document.getElementById('lvscRunBtn').onclick = function () {
             if (running) { stop('手动停止'); return; }
-            if (state.exploreMode === 'system') { systemExploreLoop(false); return; }
+            if (state.exploreMode === 'system') { systemExploreLoop(); return; }
             runLoop();
         };
         document.getElementById('lvscCompactRunBtn').onclick = function () {
             if (running) { stop('手动停止'); return; }
-            if (state.exploreMode === 'system') { systemExploreLoop(false); return; }
+            if (state.exploreMode === 'system') { systemExploreLoop(); return; }
             runLoop();
         };
         // 停止时同步停止系统自动探索
@@ -6487,7 +6484,7 @@
                         monitorSpiritLoop();
                         return;
                     }
-                    if (state.exploreMode === 'system') { systemExploreLoop(true); }
+                    if (state.exploreMode === 'system') { systemExploreLoop(); }
                     else { runLoop(); }
                 }, 2000);
             }
