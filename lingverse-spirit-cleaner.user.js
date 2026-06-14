@@ -5574,11 +5574,16 @@
                 var text = document.getElementById('lvscFeedbackText').value.trim();
                 if (!text) return;
                 var player = getPlayer() || {};
-                var payload = { text: text,  playerName: player.name || player.playerName || '', version: SCRIPT_VERSION, timestamp: Date.now() };
-                var url = (state.onlineStatsEndpoint || DEFAULT_ONLINE_STATS_ENDPOINT).replace('/api/heartbeat', '/api/feedback');
-                window.dispatchEvent(new CustomEvent('lvsc:feedback', { detail: JSON.stringify({ endpoint: url, payload: payload }) }));
+                var name = player.name || player.playerName || '?';
+                var realm = player.realm || player.realmName || '';
+                var msg = '反馈 from ' + name + (realm ? ' [' + realm + ']' : '') + ' v' + SCRIPT_VERSION + '\n' + text;
+                if (state.wecomNotify && state.wecomNotifyWebhook) {
+                    wecomEnqueue('意见反馈', msg, state.wecomNotifyWebhook);
+                    setStatus('反馈已发送到企业微信', 'run');
+                } else {
+                    setStatus('请先在更新tab配置企业微信通知Webhook', 'warn');
+                }
                 modal.remove();
-                setStatus('感谢反馈！', 'run');
             };
         };
         document.getElementById('lvscCompactMonitorBtn').onclick = toggleSpiritMonitor;
