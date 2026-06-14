@@ -4245,7 +4245,7 @@
             console.log('[SysExplore] stopped. dead=' + (p.isDead || window.playerDead) + ' spirit=' + ci.spirit + ' cost=' + ci.cost);
             if (p.isDead || window.playerDead) {
                 setStatus('系统探索因死亡停止，尝试复活', 'warn');
-                if (state.autoReviveDeath && isDeathActive()) { await revivePlayer(); await sleep(2000); continue; }
+                if (state.autoReviveDeath && isDeathActive()) { await handleDeathReviveEvent(false); await sleep(2000); continue; }
                 setStatus('死亡，停止', 'warn'); break;
             }
             if (ci.spirit < ci.cost) {
