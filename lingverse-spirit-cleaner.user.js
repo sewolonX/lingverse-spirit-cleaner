@@ -1764,7 +1764,9 @@
         }
 
         var spiritPerMinute = Number(window.meditationSpiritRate || 0);
-        var estMin = info.maxSpirit > 0 && spiritPerMinute > 0 ? Math.ceil((targetSpirit - info.spirit) / spiritPerMinute) : '?';
+        // 兜底：如果没获取到速率，每5秒查一次
+        if (!spiritPerMinute) spiritPerMinute = (info.maxSpirit - info.spirit) / 60; // 粗糙估计1分钟满
+        var estMin = info.maxSpirit > 0 && spiritPerMinute > 0 ? Math.ceil((targetSpirit - info.spirit) / spiritPerMinute) : 5;
         wecomEnqueue('🧘 开始冥想', '当前神识：' + info.spirit + '/' + info.maxSpirit + '\n目标神识：' + targetSpirit + '\n预计恢复：约 ' + estMin + '分钟后\n预计下一轮清理：' + new Date(Date.now() + (Number(estMin) || 0) * 60000).toLocaleTimeString());
         _lastMeditateReport = Date.now();
         var startedAt = Date.now();
@@ -4383,14 +4385,6 @@
             // ################################################################
             // 每次循环第一件事：检查神识。不够就直接转监测，不依赖任何分支。
             // ################################################################
-            var _ci = getSpiritInfo();
-            if (_ci.player && _ci.spirit < _ci.cost) {
-                // 先试冥想（含高级冥想），失败再转监测
-                if (state.autoMeditate && await meditateThenWait()) { await sleep(state.delayMs); continue; }
-                await switchToMonitor('神识不足');
-                return;
-            }
-
             // 每10分钟清理中通知
             if (Date.now() - _lastCleanReport > 600000) {
                 _lastCleanReport = Date.now();
@@ -4472,9 +4466,23 @@
             applyExploreMultiplier();
             if (state.autoMasterRequests) await handleMasterRequests();
 
-            // 其他停止原因（死亡、遭遇等）
+            // 神识检查 + 冥想
             var stopReason = shouldStopBeforeAction();
-            if (stopReason && stopReason !== 'need_meditate') {
+            if (stopReason) {
+                if (stopReason === 'need_meditate') {
+                    if (!await meditateThenWait()) {
+                        await switchToMonitor('神识不足且无法恢复');
+                        return;
+                    }
+                    await refreshPlayer();
+                    var _pmc = getSpiritInfo();
+                    if (_pmc.spirit < _pmc.cost) {
+                        await switchToMonitor('冥想后神识仍不足');
+                        return;
+                    }
+                    await sleep(state.delayMs);
+                    continue;
+                }
                 setStatus(stopReason + '，等待重试', 'warn');
                 await sleep(state.delayMs);
                 continue;
