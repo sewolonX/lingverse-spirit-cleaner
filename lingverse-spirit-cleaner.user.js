@@ -516,6 +516,13 @@
                 if (ok) await sleep(200);
             }
             if (!autoDisposeRunning) break;
+            // 自动凝聚碎片
+            if (state.autoSynthesize) {
+                try {
+                    var synRes = await gameApi().post('/api/game/items/synthesize-batch');
+                    if (synRes && synRes.code === 200) disposeLog('  凝聚完成');
+                } catch (_) {}
+            }
             disposeLog('── 本轮完成，' + state.autoDisposeInterval + '秒后再次检测 ──');
             var waited = 0;
             while (autoDisposeRunning && waited < state.autoDisposeInterval * 1000) {
@@ -898,6 +905,7 @@
         autoDisposeRules: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeRules') || '[]'); } catch(_) { return []; } })(),
         autoDisposeInterval: readNumber('lvSpiritCleaner.autoDisposeInterval', 300),
         autoDisposeProtected: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeProtected') || '[]'); } catch(_) { return []; } })(),
+        autoSynthesize: localStorage.getItem('lvSpiritCleaner.autoSynthesize') === '1',
         farmAutoHarvest: localStorage.getItem('lvSpiritCleaner.farmAutoHarvest') !== '0',
         farmAutoPlant: localStorage.getItem('lvSpiritCleaner.farmAutoPlant') !== '0',
         farmSeedId: localStorage.getItem('lvSpiritCleaner.farmSeedId') || '',
@@ -6197,7 +6205,7 @@
                 s.appendChild(addRow);
                 // 启用 + 间隔
                 var cfgRow = el('div'); cfgRow.style.cssText = 'display:flex;gap:6px;align-items:center';
-                cfgRow.innerHTML = '<label class="lvsc-check" style="font-size:11px"><input id="lvscAutoDisposeEnabled" type="checkbox">启用监控</label><label style="font-size:11px">间隔(秒)<input id="lvscAutoDisposeInterval" type="number" min="60" value="' + state.autoDisposeInterval + '" style="width:70px;height:24px"></label>';
+                cfgRow.innerHTML = '<label class="lvsc-check" style="font-size:11px"><input id="lvscAutoDisposeEnabled" type="checkbox">启用监控</label><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoSynthesize" type="checkbox">自动凝聚碎片</label><label style="font-size:11px">间隔(秒)<input id="lvscAutoDisposeInterval" type="number" min="60" value="' + state.autoDisposeInterval + '" style="width:70px;height:24px"></label>';
                 s.appendChild(cfgRow);
                 // 开始/停止
                 var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
@@ -6629,6 +6637,8 @@
                 // 出售 & 分解
                 var deCb = document.getElementById('lvscAutoDisposeEnabled');
                 if (deCb) { deCb.checked = state.autoDisposeEnabled; deCb.onchange = function() { state.autoDisposeEnabled = this.checked; persistSetting('lvSpiritCleaner.autoDisposeEnabled', this.checked); }; }
+                var synCb = document.getElementById('lvscAutoSynthesize');
+                if (synCb) { synCb.checked = state.autoSynthesize; synCb.onchange = function() { state.autoSynthesize = this.checked; persistSetting('lvSpiritCleaner.autoSynthesize', this.checked); }; }
                 var deIntv = document.getElementById('lvscAutoDisposeInterval'); if (deIntv) { deIntv.value = state.autoDisposeInterval || 300; deIntv.onchange = function() { state.autoDisposeInterval = Math.max(60, Number(this.value)||300); persistSetting('lvSpiritCleaner.autoDisposeInterval', String(state.autoDisposeInterval)); }; }
                 var dsStart = document.getElementById('lvscDisposeStartBtn');
                 if (dsStart) dsStart.onclick = function() { this.style.display = 'none'; document.getElementById('lvscDisposeStopBtn').style.display = ''; autoDisposeLoop(); };
