@@ -155,13 +155,15 @@
             }
         }
         var qualTarget = state.craftQualityTarget || 0;
+        var qualNeed = state.craftQualityCount || 0;
         var QUAL_NAMES = ['','普通','优良','稀有','史诗','传说'];
-        craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (qualTarget > 0 ? ' | 至少' + QUAL_NAMES[qualTarget]+'品质' : '') + (autoBuy ? ' | 自动买材料' : ''));
+        craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (qualTarget > 0 && qualNeed > 0 ? ' | 达标' + QUAL_NAMES[qualTarget] + '×' + qualNeed : '') + (autoBuy ? ' | 自动买材料' : ''));
         setStatus('开始炼制: ' + name + ' 目标' + target, 'run');
         var gameCap = type === 'alchemy' ? 100 : 50;
         var batchCap = state.craftBatchSize > 0 ? Math.min(state.craftBatchSize, gameCap) : gameCap;
         var crafted = 0;
-        while (autoCraftRunning && crafted < target) {
+        var qualMet = 0;
+        while (autoCraftRunning && (crafted < target || (qualNeed > 0 && qualMet < qualNeed))) {
             if (autoBuy && recipe.materials && recipe.materials.length) {
                 for (var mi = 0; mi < recipe.materials.length; mi++) {
                     var mat = recipe.materials[mi];
@@ -200,26 +202,26 @@
             var parts = [];
             for (var qk in qualityTally) { if (qualityTally.hasOwnProperty(qk)) parts.push(qk + '×' + qualityTally[qk]); }
             // 品质检查：数背包里符合品质要求的有几个
-            var qualCount = 0;
-            if (qualTarget > 0) {
+            if (qualTarget > 0 && qualNeed > 0) {
                 try {
+                    qualMet = 0;
                     var chkRes = await gameApi().get('/api/game/inventory');
                     if (chkRes && chkRes.code === 200 && Array.isArray(chkRes.data)) {
                         for (var ci = 0; ci < chkRes.data.length; ci++) {
                             var cit = chkRes.data[ci];
                             var cid = String(cit.templateId || cit.id || '');
                             if (cid === recipeId || (cit.name || cit.itemName || '').indexOf(name) >= 0) {
-                                if ((cit.rarity || 0) >= qualTarget) qualCount += Number(cit.quantity || cit.count || 1);
+                                if ((cit.rarity || 0) >= qualTarget) qualMet += Number(cit.quantity || cit.count || 1);
                             }
                         }
                     }
                 } catch (_) {}
             }
             var statusText = '炼制: ' + name + ' ' + crafted + '/' + target;
-            if (qualTarget > 0) statusText += ' [' + QUAL_NAMES[qualTarget] + '+' + qualCount + ']';
-            craftLog('炼+' + actualCount + ' | ' + Math.min(crafted, target) + '/' + target + (qualTarget > 0 ? ' | 达标' + qualCount : '') + (parts.length ? ' | ' + parts.join(' ') : ''));
+            if (qualNeed > 0) statusText += ' [' + QUAL_NAMES[qualTarget] + '+' + qualMet + '/' + qualNeed + ']';
+            craftLog('炼+' + actualCount + ' | ' + Math.min(crafted, target) + '/' + target + (qualNeed > 0 ? ' | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed : '') + (parts.length ? ' | ' + parts.join(' ') : ''));
             setStatus(statusText, 'run');
-            if (qualTarget > 0 && qualCount >= target) { craftLog('品质达标! ' + QUAL_NAMES[qualTarget] + '已' + qualCount + '件'); break; }
+            if (qualNeed > 0 && qualMet >= qualNeed) { craftLog('品质达标! ' + QUAL_NAMES[qualTarget] + '已' + qualMet + '件'); if (crafted >= target) break; }
             await sleep(600);
         }
         autoCraftRunning = false;
@@ -961,6 +963,7 @@
         craftRecipeId: localStorage.getItem('lvSpiritCleaner.craftRecipeId') || '',
         craftTargetCount: readNumber('lvSpiritCleaner.craftTargetCount', 10),
         craftQualityTarget: readNumber('lvSpiritCleaner.craftQualityTarget', 0),
+        craftQualityCount: readNumber('lvSpiritCleaner.craftQualityCount', 0),
         craftBatchSize: readNumber('lvSpiritCleaner.craftBatchSize', 0),
         craftAutoBuyMats: localStorage.getItem('lvSpiritCleaner.craftAutoBuyMats') === '1',
 
@@ -6471,7 +6474,7 @@
                 if (!prt) return;
                 var lbl = document.createElement('label');
                 lbl.style.cssText = 'font-size:11px';
-                lbl.innerHTML = '达到品质<select id="lvscCraftQualityTarget"><option value="0">不限</option><option value="1">普通及以上</option><option value="2">优良及以上</option><option value="3">稀有及以上</option><option value="4">史诗及以上</option><option value="5">传说</option></select>';
+                lbl.innerHTML = '品质达标<select id="lvscCraftQualityTarget"><option value="0">不限</option><option value="1">普通及以上</option><option value="2">优良及以上</option><option value="3">稀有及以上</option><option value="4">史诗及以上</option><option value="5">传说</option></select><input id="lvscCraftQualityCount" type="number" min="0" value="' + state.craftQualityCount + '" style="width:50px;height:24px;margin-left:4px">个';
                 prt.parentElement.insertBefore(lbl, prt.nextSibling);
             })();
 
@@ -6727,6 +6730,8 @@
                 // 品质目标
                 var cQual = document.getElementById('lvscCraftQualityTarget');
                 if (cQual) { cQual.value = String(state.craftQualityTarget || 0); cQual.onchange = function() { state.craftQualityTarget = Number(this.value); persistSetting('lvSpiritCleaner.craftQualityTarget', String(state.craftQualityTarget)); }; }
+                var cQualCnt = document.getElementById('lvscCraftQualityCount');
+                if (cQualCnt) { cQualCnt.value = state.craftQualityCount || 0; cQualCnt.onchange = function() { state.craftQualityCount = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.craftQualityCount', String(state.craftQualityCount)); }; }
                 var emApi = document.getElementById('lvscExploreModeApi');
                 var emSys = document.getElementById('lvscExploreModeSystem');
                 if (emApi) { emApi.checked = state.exploreMode === 'api'; emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
