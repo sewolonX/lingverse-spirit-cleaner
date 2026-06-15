@@ -486,6 +486,11 @@
                             var _pid = typeof protItems[_pi] === 'string' ? protItems[_pi] : protItems[_pi].id;
                             if (_pid && excludedIds.indexOf(_pid) < 0) excludedIds.push(_pid);
                         }
+                        // 游戏默认排除名单（对话框里默认不勾的）
+                        var DEFAULT_EXCLUDED = ['blank_scroll_1','blank_scroll_2','blank_scroll_3','blank_scroll_4','blank_scroll_5'];
+                        for (var _di = 0; _di < DEFAULT_EXCLUDED.length; _di++) {
+                            if (excludedIds.indexOf(DEFAULT_EXCLUDED[_di]) < 0) excludedIds.push(DEFAULT_EXCLUDED[_di]);
+                        }
                         if (excludedIds.length) p.excludedTemplateIds = excludedIds;
                         var preview = await gameApi().post('/api/game/sell-batch/preview', p);
                         if (preview && preview.code === 200 && preview.data && preview.data.count) {
