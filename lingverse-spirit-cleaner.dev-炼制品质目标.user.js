@@ -17,9 +17,9 @@
 
 (function injectIntoPage() {
     'use strict';
-    // 防止重复注入
-    if (window.__lvSpiritCleanerInjected) return;
-    window.__lvSpiritCleanerInjected = true;
+    // 防止 Tampermonkey 重复运行整个脚本
+    if (injectIntoPage.__done) return;
+    injectIntoPage.__done = true;
 
     var GM_FETCH_EVENT = 'lvsc:gm-fetch';
     var ONLINE_BRIDGE_EVENT = 'lvsc:online-heartbeat';
@@ -6866,8 +6866,10 @@
     waitForGame();
 })();`;
 
-    var script = document.createElement('script');
-    script.textContent = source;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove();
+    if (!document.getElementById('lvsc-main-script')) {
+        var script = document.createElement('script');
+        script.id = 'lvsc-main-script';
+        script.textContent = source;
+        (document.head || document.documentElement).appendChild(script);
+    }
 })();
