@@ -4371,6 +4371,8 @@
             // ################################################################
             var _ci = getSpiritInfo();
             if (_ci.player && _ci.spirit < _ci.cost) {
+                // 先试冥想（含高级冥想），失败再转监测
+                if (state.autoMeditate && await meditateThenWait()) { await sleep(state.delayMs); continue; }
                 await switchToMonitor('神识不足');
                 return;
             }
