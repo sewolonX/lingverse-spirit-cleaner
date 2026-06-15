@@ -3594,16 +3594,6 @@
         var res = await gameApi().post('/api/game/inscription/apply', { itemId: _inscItemId, pendingIndex: pendingIndex, slotIndex: slotIndex });
         return !!(res && res.code === 200);
     }
-    async function inscriptionApiDiscardAll() {
-        if (!_inscItemId || !gameApi()) return false;
-        var res = await gameApi().post('/api/game/inscription/discard-all', { itemId: _inscItemId });
-        return !!(res && res.code === 200);
-    }
-    async function inscriptionApiApply(pendingIndex, slotIndex) {
-        if (!_inscItemId || !gameApi()) return false;
-        var res = await gameApi().post('/api/game/inscription/apply', { itemId: _inscItemId, pendingIndex: pendingIndex, slotIndex: slotIndex });
-        return !!(res && res.code === 200);
-    }
     function parseDrawResults(data) {
         if (!data) return [];
         var items = data.inscriptions || data.results || data.pendingInscriptions || [];
