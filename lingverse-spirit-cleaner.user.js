@@ -4066,6 +4066,9 @@
 
         while (monitoringSpirit && !running) {
             await refreshPlayer();
+            if (state.autoBreakthrough) await autoBreakthroughCheck();
+            if (state.autoOriginRepair) await autoOriginRepairCheck();
+            if (state.autoMasterRequests) await handleMasterRequests();
             var info = getSpiritInfo();
             var target = getMonitorTargetSpirit(info);
             if (!info.player || target <= 0) {
@@ -4242,8 +4245,11 @@
         var pName = (getPlayer() || {}).name || '';
         wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
         while (running) {
-            // 每次循环第一件事：检查神识
             await refreshPlayer();
+            // === 全局检测 ===
+            if (state.autoBreakthrough) await autoBreakthroughCheck();
+            if (state.autoOriginRepair) await autoOriginRepairCheck();
+            if (state.autoMasterRequests) await handleMasterRequests();
             var _sci = getSpiritInfo();
             if (_sci.player && _sci.spirit < _sci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
@@ -4382,9 +4388,10 @@
 
         while (running) {
             await refreshPlayer();
-            // ################################################################
-            // 每次循环第一件事：检查神识。不够就直接转监测，不依赖任何分支。
-            // ################################################################
+            // === 全局检测 ===
+            if (state.autoBreakthrough) await autoBreakthroughCheck();
+            if (state.autoOriginRepair) await autoOriginRepairCheck();
+            if (state.autoMasterRequests) await handleMasterRequests();
             // 每10分钟清理中通知
             if (Date.now() - _lastCleanReport > 600000) {
                 _lastCleanReport = Date.now();
@@ -4461,10 +4468,7 @@
             if (state.sectQuickRecovery) await activeRecover();
             if (state.autoRepair) await triggerAutoRepair(false);
             if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
-            if (state.autoBreakthrough) await autoBreakthroughCheck();
-            if (state.autoOriginRepair) await autoOriginRepairCheck();
             applyExploreMultiplier();
-            if (state.autoMasterRequests) await handleMasterRequests();
 
             // 神识检查 + 冥想
             var stopReason = shouldStopBeforeAction();
