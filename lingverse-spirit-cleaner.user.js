@@ -6330,39 +6330,44 @@
                                 allRow.addEventListener('mouseover', function() { this.style.background = 'rgba(219,185,112,.22)'; });
                                 allRow.addEventListener('mouseout', function() { this.style.background = 'rgba(219,185,112,.1)'; });
                                 allRow.innerHTML = '<span style="flex:1;color:#dbb970;font-weight:700">' + (g[0].name || baseId) + '</span><span style="color:#dbb970;font-size:10px">[不论品质]</span>';
-                                allRow.addEventListener('click', function() {
-                                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
-                                    for (var ri = 1; ri <= 5; ri++) {
-                                        var fid = baseId + '_' + ri;
-                                        if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === fid; })) {
-                                            items.push({ id: fid, name: g[0].name });
+                                (function(bid, gname) {
+                                    allRow.addEventListener('click', function() {
+                                        var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                        for (var ri = 1; ri <= 5; ri++) {
+                                            var fid = bid + '_' + ri;
+                                            if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === fid; })) {
+                                                items.push({ id: fid, name: gname });
+                                            }
                                         }
-                                    }
-                                    state.autoDisposeProtected = items;
-                                    persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
-                                    window._renderProtectedList();
-                                });
+                                        state.autoDisposeProtected = items;
+                                        persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
+                                        window._renderProtectedList();
+                                    });
+                                })(baseId, g[0].name);
                                 searchResults.appendChild(allRow);
                             }
                             // 各品质明细
                             g.forEach(function(gi) {
+                                var _id = gi.id, _nm = gi.name;
                                 var quality = '';
-                                var m2 = gi.id.match(/_(\d+)$/);
+                                var m2 = _id.match(/_(\d+)$/);
                                 if (m2 && RAR[parseInt(m2[1])]) quality = ' [' + RAR[parseInt(m2[1])] + ']';
                                 var row = document.createElement('div');
                                 row.style.cssText = 'display:flex;align-items:center;padding:2px 6px;cursor:pointer;border-radius:3px;margin-left:12px';
                                 row.addEventListener('mouseover', function() { this.style.background = 'rgba(107,201,160,.12)'; });
                                 row.addEventListener('mouseout', function() { this.style.background = 'transparent'; });
-                                row.innerHTML = '<span style="flex:1;color:#6bc9a0;font-size:11px">' + gi.name + quality + '</span><span style="color:#6a6560;font-size:9px;margin-right:6px">' + gi.id + '</span><span style="color:#6bc9a0;font-size:9px">+保护</span>';
-                                row.addEventListener('click', function() {
-                                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
-                                    if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === gi.id; })) {
-                                        items.push({ id: gi.id, name: gi.name });
-                                        state.autoDisposeProtected = items;
-                                        persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
-                                        window._renderProtectedList();
-                                    }
-                                });
+                                row.innerHTML = '<span style="flex:1;color:#6bc9a0;font-size:11px">' + _nm + quality + '</span><span style="color:#6a6560;font-size:9px;margin-right:6px">' + _id + '</span><span style="color:#6bc9a0;font-size:9px">+保护</span>';
+                                (function(id, nm) {
+                                    row.addEventListener('click', function() {
+                                        var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                        if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === id; })) {
+                                            items.push({ id: id, name: nm });
+                                            state.autoDisposeProtected = items;
+                                            persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
+                                            window._renderProtectedList();
+                                        }
+                                    });
+                                })(_id, _nm);
                                 searchResults.appendChild(row);
                             });
                         });
