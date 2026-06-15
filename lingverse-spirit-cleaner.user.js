@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.8
+// @version      1.5.9
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -221,7 +221,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.8';
+    var SCRIPT_VERSION = '1.5.9';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -725,6 +725,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.5.9',
+            title: '冥想模拟点击 + 高级冥想夏季选项',
+            notes: ['冥想改为模拟点击游戏冥想按钮，不再直调API，进度条正常显示。', '高级冥想新增「只在夏季」选项。', '修复API探索模式下高级冥想被跳过的问题。']
+        },
         {
             version: '1.5.8',
             title: '系统模式完善 + 激进模式 + 在线公告',
