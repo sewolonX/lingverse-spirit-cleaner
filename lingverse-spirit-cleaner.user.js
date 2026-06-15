@@ -6308,24 +6308,31 @@
                             row.style.cssText = 'display:flex;align-items:center;padding:2px 6px;border-radius:3px';
                             row.addEventListener('mouseover', function() { this.style.background = 'rgba(219,185,112,.1)'; });
                             row.addEventListener('mouseout', function() { this.style.background = 'transparent'; });
+                            var tid = String(item.templateId || '');
+                            var tname = (item.name || item.itemName || item.pillName || item.recipeName || '');
                             var nameSpan = document.createElement('span');
-                            nameSpan.textContent = (item.name || item.itemName || '?');
+                            nameSpan.textContent = tname;
                             nameSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
                             row.appendChild(nameSpan);
+                            var idSpan = document.createElement('span');
+                            idSpan.textContent = tid;
+                            idSpan.style.cssText = 'color:#6a6560;margin:0 6px;font-size:9px';
+                            row.appendChild(idSpan);
                             var addBtn = document.createElement('button');
                             addBtn.textContent = '+保护';
-                            var tid = String(item.templateId || '');
-                            addBtn.style.cssText = 'height:18px;padding:0 6px;margin-left:6px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:3px;cursor:pointer;font-size:9px;white-space:nowrap';
-                            addBtn.addEventListener('click', function(e) {
-                                e.stopPropagation();
-                                var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
-                                if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === tid; })) {
-                                    items.push({ id: tid, name: (item.name || item.itemName || '') });
-                                    state.autoDisposeProtected = items;
-                                    persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
-                                    window._renderProtectedList();
-                                }
-                            });
+                            addBtn.style.cssText = 'height:18px;padding:0 6px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:3px;cursor:pointer;font-size:9px;white-space:nowrap';
+                            (function(_tid, _nm) {
+                                addBtn.addEventListener('click', function(e) {
+                                    e.stopPropagation();
+                                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                    if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === _tid; })) {
+                                        items.push({ id: _tid, name: _nm });
+                                        state.autoDisposeProtected = items;
+                                        persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
+                                        window._renderProtectedList();
+                                    }
+                                });
+                            })(tid, tname);
                             row.appendChild(addBtn);
                             searchResults.appendChild(row);
                         }
