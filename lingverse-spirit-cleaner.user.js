@@ -6336,7 +6336,22 @@
                             row.appendChild(addBtn);
                             searchResults.appendChild(row);
                         }
-                        if (!found) searchResults.innerHTML = '<div style="color:var(--text-muted);padding:2px 6px">无结果</div>';
+                        if (!found) {
+                            searchResults.innerHTML = '<div style="color:var(--text-muted);padding:2px 6px">无结果，点此直接添加ID</div>';
+                            searchResults.style.cursor = 'pointer';
+                            searchResults.onclick = function() {
+                                var rawId = (searchInput.value || '').trim();
+                                if (!rawId) return;
+                                var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === rawId; })) {
+                                    items.push({ id: rawId, name: '' });
+                                    state.autoDisposeProtected = items;
+                                    persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
+                                    window._renderProtectedList();
+                                }
+                                searchResults.style.display = 'none';
+                            };
+                        } else { searchResults.style.cursor = ''; searchResults.onclick = null; }
                     } catch (_) { searchResults.innerHTML = '搜索失败'; }
                 });
                 searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') searchBtn.click(); });
