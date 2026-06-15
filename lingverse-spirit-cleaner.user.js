@@ -5695,8 +5695,6 @@
         document.getElementById('lvscAutoReviveDeath').checked = state.autoReviveDeath;
         document.getElementById('lvscCheckDaoyunBoost').checked = state.checkDaoyunBoost;
         document.getElementById('lvscUseAdvancedMeditate').checked = state.useAdvancedMeditate;
-        var sumCb = document.getElementById('lvscSummerOnlyAdvancedMeditate');
-        if (sumCb) { sumCb.checked = state.summerOnlyAdvancedMeditate; sumCb.onchange = function() { state.summerOnlyAdvancedMeditate = this.checked; persistSetting('lvSpiritCleaner.summerOnlyAdvancedMeditate', this.checked); }; }
         // 铭文装备下拉：从法相穿搭（已装备）读取
         function refreshEquipmentSelect() {
             var sel = document.getElementById('lvscInscriptionEquipment');
@@ -6682,6 +6680,8 @@
                 if (emSys) { emSys.checked = state.exploreMode === 'system'; emSys.onchange = function() { if (this.checked) { state.exploreMode = 'system'; persistSetting('lvSpiritCleaner.exploreMode', 'system'); } }; }
                 var ag = document.getElementById('lvscAggressiveMode');
                 if (ag) { ag.checked = state.aggressiveMode; ag.onchange = function() { state.aggressiveMode = this.checked; persistSetting('lvSpiritCleaner.aggressiveMode', this.checked); }; }
+                var sumCb = document.getElementById('lvscSummerOnlyAdvancedMeditate');
+                if (sumCb) { sumCb.checked = state.summerOnlyAdvancedMeditate; sumCb.onchange = function() { state.summerOnlyAdvancedMeditate = this.checked; persistSetting('lvSpiritCleaner.summerOnlyAdvancedMeditate', this.checked); }; }
                 var bt = document.getElementById('lvscAutoBreakthrough'); if (bt) { bt.checked = state.autoBreakthrough; bt.onchange = function() { state.autoBreakthrough = this.checked; persistSetting('lvSpiritCleaner.autoBreakthrough', this.checked); }; }
                 var or = document.getElementById('lvscAutoOriginRepair'); if (or) { or.checked = state.autoOriginRepair; or.onchange = function() { state.autoOriginRepair = this.checked; persistSetting('lvSpiritCleaner.autoOriginRepair', this.checked); }; }
                 // 出售 & 分解
