@@ -6293,77 +6293,66 @@
                             } catch (_) {}
                         }
                         searchResults.innerHTML = '';
-                        var seen = {}; var found = false;
+                        var seen = {}; var RAR = ['','普通','优良','稀有','史诗','传说'];
+                        var groups = {}; var groupOrder = [];
                         for (var _si = 0; _si < _searchCache.length; _si++) {
                             var item = _searchCache[_si];
                             var nm = (item.name || item.itemName || '').toLowerCase();
-                            if (!nm || nm.indexOf(q) < 0 || seen[item.templateId]) continue;
-                            seen[item.templateId] = true; found = true;
-                            var row = document.createElement('div');
-                            row.style.cssText = 'display:flex;align-items:center;padding:2px 6px;border-radius:3px';
-                            row.addEventListener('mouseover', function() { this.style.background = 'rgba(219,185,112,.1)'; });
-                            row.addEventListener('mouseout', function() { this.style.background = 'transparent'; });
+                            if (!nm || nm.indexOf(q) < 0) continue;
                             var tid = String(item.templateId || item.id || '');
+                            if (seen[tid]) continue;
+                            seen[tid] = true;
                             var tname = (item.name || item.itemName || '');
-                            var nameSpan = document.createElement('span');
-                            var m2 = tid.match(/_(\d+)$/); var RAR = ['','普通','优良','稀有','史诗','传说'];
-                            nameSpan.textContent = tname + (m2 && RAR[parseInt(m2[1])] ? ' [' + RAR[parseInt(m2[1])] + ']' : '');
-                            nameSpan.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-                            row.appendChild(nameSpan);
-                            var idSpan = document.createElement('span');
-                            idSpan.textContent = tid;
-                            idSpan.style.cssText = 'color:#6a6560;margin:0 6px;font-size:9px';
-                            row.appendChild(idSpan);
-                            var addBtn = document.createElement('button');
-                            addBtn.textContent = '+保护';
-                            addBtn.style.cssText = 'height:18px;padding:0 6px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:3px;cursor:pointer;font-size:9px;white-space:nowrap';
-                            // 全部品质匹配：找到所有同前缀的ID
-                            var matchAllBtn = document.createElement('button');
-                            matchAllBtn.textContent = '+保护全部品质';
-                            matchAllBtn.style.cssText = 'height:18px;padding:0 6px;margin-left:4px;background:rgba(219,185,112,.16);color:#dbb970;border:1px solid rgba(219,185,112,.3);border-radius:3px;cursor:pointer;font-size:9px;white-space:nowrap';
-                            (function(_tid, _nm) {
-                                // 只保护当前品质
-                                addBtn.addEventListener('click', function(e) {
-                                    e.stopPropagation();
+                            var baseId = tid.replace(/_\d+$/, '');
+                            if (!groups[baseId]) { groups[baseId] = []; groupOrder.push(baseId); }
+                            groups[baseId].push({ id: tid, name: tname });
+                        }
+                        var found = groupOrder.length > 0;
+                        groupOrder.forEach(function(baseId) {
+                            var g = groups[baseId];
+                            // [不论品质] 入口
+                            if (g.length >= 1) {
+                                var allRow = document.createElement('div');
+                                allRow.style.cssText = 'display:flex;align-items:center;padding:3px 8px;cursor:pointer;border-radius:3px;background:rgba(219,185,112,.1);margin-bottom:2px';
+                                allRow.addEventListener('mouseover', function() { this.style.background = 'rgba(219,185,112,.22)'; });
+                                allRow.addEventListener('mouseout', function() { this.style.background = 'rgba(219,185,112,.1)'; });
+                                allRow.innerHTML = '<span style="flex:1;color:#dbb970;font-weight:700">' + (g[0].name || baseId) + '</span><span style="color:#dbb970;font-size:10px">[不论品质]</span>';
+                                allRow.addEventListener('click', function() {
                                     var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
-                                    if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === _tid; })) {
-                                        items.push({ id: _tid, name: _nm });
-                                        state.autoDisposeProtected = items;
-                                        persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
-                                        window._renderProtectedList();
-                                    }
-                                });
-                                // 保护全部品质：匹配同前缀ID
-                                matchAllBtn.addEventListener('click', function(e) {
-                                    e.stopPropagation();
-                                    var baseId = _tid.replace(/_\d+$/, ''); // 去尾号 blank_scroll_3 → blank_scroll
-                                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
-                                    // 从搜索结果缓存里找所有匹配的
-                                    for (var _ci = 0; _ci < _searchCache.length; _ci++) {
-                                        var ci = _searchCache[_ci];
-                                        var cid = String(ci.templateId || ci.id || '');
-                                        var cbase = cid.replace(/_\d+$/, '');
-                                        if (cbase === baseId && !items.some(function(x) { return (typeof x === 'string' ? x : x.id) === cid; })) {
-                                            items.push({ id: cid, name: (ci.name || ci.itemName || '') });
-                                        }
-                                    }
-                                    // 兜底：百科可能没传说级，强制覆盖1-5档
                                     for (var ri = 1; ri <= 5; ri++) {
                                         var fid = baseId + '_' + ri;
                                         if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === fid; })) {
-                                            items.push({ id: fid, name: _nm });
+                                            items.push({ id: fid, name: g[0].name });
                                         }
                                     }
                                     state.autoDisposeProtected = items;
                                     persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
                                     window._renderProtectedList();
                                 });
-                            })(tid, tname);
-                            row.appendChild(addBtn);
-                            row.appendChild(matchAllBtn);
-                            row.appendChild(addBtn);
-                            searchResults.appendChild(row);
-                        }
+                                searchResults.appendChild(allRow);
+                            }
+                            // 各品质明细
+                            g.forEach(function(gi) {
+                                var quality = '';
+                                var m2 = gi.id.match(/_(\d+)$/);
+                                if (m2 && RAR[parseInt(m2[1])]) quality = ' [' + RAR[parseInt(m2[1])] + ']';
+                                var row = document.createElement('div');
+                                row.style.cssText = 'display:flex;align-items:center;padding:2px 6px;cursor:pointer;border-radius:3px;margin-left:12px';
+                                row.addEventListener('mouseover', function() { this.style.background = 'rgba(107,201,160,.12)'; });
+                                row.addEventListener('mouseout', function() { this.style.background = 'transparent'; });
+                                row.innerHTML = '<span style="flex:1;color:#6bc9a0;font-size:11px">' + gi.name + quality + '</span><span style="color:#6a6560;font-size:9px;margin-right:6px">' + gi.id + '</span><span style="color:#6bc9a0;font-size:9px">+保护</span>';
+                                row.addEventListener('click', function() {
+                                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                    if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === gi.id; })) {
+                                        items.push({ id: gi.id, name: gi.name });
+                                        state.autoDisposeProtected = items;
+                                        persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
+                                        window._renderProtectedList();
+                                    }
+                                });
+                                searchResults.appendChild(row);
+                            });
+                        });
                         if (!found) {
                             searchResults.innerHTML = '<div style="color:var(--text-muted);padding:2px 6px">无结果，点此直接添加ID</div>';
                             searchResults.style.cursor = 'pointer';
