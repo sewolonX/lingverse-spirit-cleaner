@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.5.9
+// @version      1.6.0
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -221,7 +221,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.5.9';
+    var SCRIPT_VERSION = '1.6.0';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -754,6 +754,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.6.0',
+            title: '出售保护 + 自动凝聚 + 物品搜索 + 双模式修复',
+            notes: ['一键出售增强：物品搜索（图鉴API）→保护列表（锁品质/全品质），锁定物品模板自动排除。', '自动凝聚碎片：勾选后每轮出售前自动合成碎片。', 'API模式回退原始逻辑，双模式完全独立不再互相干扰。', '突破/本源/师门请求提升为全局检测。', '冥想改为模拟点击按钮，进度条正常显示。', '高级冥想新增「只在夏季」选项。', '修复「只在夏季」复选框刷新取消勾选。', '修复高级冥想被跳过、修复探索后遭遇不处理等问题。', '空白卷轴默认排除，不再被出售。']
+        },
         {
             version: '1.5.9',
             title: '冥想模拟点击 + 高级冥想夏季选项',
