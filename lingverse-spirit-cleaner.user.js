@@ -6394,7 +6394,7 @@
                     for (var _i = 0; _i < items.length; _i++) {
                         var it = items[_i];
                         var tid = typeof it === 'string' ? it : it.id;
-                        var tname = typeof it === 'string' ? '' : (it.name || tid);
+                        var tname = typeof it === 'string' ? tid : (it.name || tid);
                         html += '<span style="padding:1px 5px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:3px;margin:1px 2px;font-size:10px;display:inline-block" title="' + tid + '">' + tname + '<span data-delidx="' + _i + '" style="color:#ff6b6b;cursor:pointer;margin-left:3px">✕</span></span>';
                     }
                     html += ' <span style="color:#ff6b6b;cursor:pointer;font-size:10px" id="lvscClearProtect">清空</span>';
