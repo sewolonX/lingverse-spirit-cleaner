@@ -481,9 +481,10 @@
                                 }
                             }
                         } catch (_) {}
-                        var protIds = Array.isArray(state.autoDisposeProtectedIds) ? state.autoDisposeProtectedIds : [];
-                        for (var _pi = 0; _pi < protIds.length; _pi++) {
-                            if (excludedIds.indexOf(protIds[_pi]) < 0) excludedIds.push(protIds[_pi]);
+                        var protItems = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected : [];
+                        for (var _pi = 0; _pi < protItems.length; _pi++) {
+                            var _pid = typeof protItems[_pi] === 'string' ? protItems[_pi] : protItems[_pi].id;
+                            if (_pid && excludedIds.indexOf(_pid) < 0) excludedIds.push(_pid);
                         }
                         if (excludedIds.length) p.excludedTemplateIds = excludedIds;
                         var preview = await gameApi().post('/api/game/sell-batch/preview', p);
@@ -896,7 +897,7 @@
         autoDisposeEnabled: localStorage.getItem('lvSpiritCleaner.autoDisposeEnabled') === '1',
         autoDisposeRules: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeRules') || '[]'); } catch(_) { return []; } })(),
         autoDisposeInterval: readNumber('lvSpiritCleaner.autoDisposeInterval', 300),
-        autoDisposeProtectedIds: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeProtectedIds') || '[]'); } catch(_) { return []; } })(),
+        autoDisposeProtected: (function() { try { return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoDisposeProtected') || '[]'); } catch(_) { return []; } })(),
         farmAutoHarvest: localStorage.getItem('lvSpiritCleaner.farmAutoHarvest') !== '0',
         farmAutoPlant: localStorage.getItem('lvSpiritCleaner.farmAutoPlant') !== '0',
         farmSeedId: localStorage.getItem('lvSpiritCleaner.farmSeedId') || '',
@@ -6309,11 +6310,11 @@
                             addBtn.style.cssText = 'height:18px;padding:0 6px;margin-left:6px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:3px;cursor:pointer;font-size:9px;white-space:nowrap';
                             addBtn.addEventListener('click', function(e) {
                                 e.stopPropagation();
-                                var pids = Array.isArray(state.autoDisposeProtectedIds) ? state.autoDisposeProtectedIds.slice() : [];
-                                if (pids.indexOf(tid) < 0) {
-                                    pids.push(tid);
-                                    state.autoDisposeProtectedIds = pids;
-                                    persistSetting('lvSpiritCleaner.autoDisposeProtectedIds', JSON.stringify(pids));
+                                var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                                if (!items.some(function(x) { return (typeof x === 'string' ? x : x.id) === tid; })) {
+                                    items.push({ id: tid, name: (item.name || item.itemName || '') });
+                                    state.autoDisposeProtected = items;
+                                    persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(items));
                                     window._renderProtectedList();
                                 }
                             });
@@ -6327,13 +6328,27 @@
                 // 渲染保护列表
                 window._renderProtectedList = function() {
                     var el = document.getElementById('lvscDisposeProtectedList'); if (!el) return;
-                    var ids = Array.isArray(state.autoDisposeProtectedIds) ? state.autoDisposeProtectedIds : [];
-                    if (!ids.length) { el.innerHTML = '保护列表：空'; return; }
+                    var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected : [];
+                    if (!items.length) { el.innerHTML = '保护列表：空'; return; }
                     var html = '保护：';
-                    for (var _i = 0; _i < ids.length; _i++) {
-                        html += '<span style="padding:0 4px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:3px;margin:0 2px">' + ids[_i] + '<span onclick="var p=state.autoDisposeProtectedIds||[];var s2=new Set(p);s2.delete(\'' + ids[_i] + '\');state.autoDisposeProtectedIds=Array.from(s2);persistSetting(\'lvSpiritCleaner.autoDisposeProtectedIds\',JSON.stringify(state.autoDisposeProtectedIds));window._renderProtectedList();" style="color:#ff6b6b;cursor:pointer;margin-left:2px">✕</span></span>';
+                    for (var _i = 0; _i < items.length; _i++) {
+                        var it = items[_i];
+                        var tid = typeof it === 'string' ? it : it.id;
+                        var tname = typeof it === 'string' ? '' : (it.name || '');
+                        html += '<span style="padding:0 4px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:3px;margin:0 2px;font-size:10px">' + (tname || tid) + ' <span style="color:#6a6560">' + tid + '</span><span data-delidx="' + _i + '" style="color:#ff6b6b;cursor:pointer;margin-left:2px">✕</span></span>';
                     }
                     el.innerHTML = html;
+                    // 用事件委托处理删除
+                    el.querySelectorAll('[data-delidx]').forEach(function(sp) {
+                        sp.addEventListener('click', function() {
+                            var idx = parseInt(this.getAttribute('data-delidx'));
+                            var arr = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                            arr.splice(idx, 1);
+                            state.autoDisposeProtected = arr;
+                            persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(arr));
+                            window._renderProtectedList();
+                        });
+                    });
                 };
                 window._renderProtectedList();
             })();
