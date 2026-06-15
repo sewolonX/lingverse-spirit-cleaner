@@ -4474,12 +4474,6 @@
                         await switchToMonitor('神识不足且无法恢复');
                         return;
                     }
-                    await refreshPlayer();
-                    var _pmc = getSpiritInfo();
-                    if (_pmc.spirit < _pmc.cost) {
-                        await switchToMonitor('冥想后神识仍不足');
-                        return;
-                    }
                     await sleep(state.delayMs);
                     continue;
                 }
@@ -4494,6 +4488,19 @@
                 updateMeter();
                 if (result === 'stop') {
                     await sleep(500);
+                    if (!await checkEventBlockers()) {
+                        await refreshPlayer();
+                        var afterExplore = getSpiritInfo();
+                        if (state.autoMeditate && afterExplore.player && afterExplore.spirit < afterExplore.cost) {
+                            if (!await meditateThenWait()) {
+                                await switchToMonitor('探索后神识不足且无法恢复');
+                                return;
+                            }
+                            await sleep(state.delayMs);
+                            continue;
+                        }
+                        setStatus('游戏事件触发，等待处理后重试', 'warn');
+                    }
                     await sleep(state.delayMs);
                     continue;
                 }
