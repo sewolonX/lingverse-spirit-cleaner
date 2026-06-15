@@ -17,6 +17,9 @@
 
 (function injectIntoPage() {
     'use strict';
+    // 防止重复注入
+    if (window.__lvSpiritCleanerInjected) return;
+    window.__lvSpiritCleanerInjected = true;
 
     var GM_FETCH_EVENT = 'lvsc:gm-fetch';
     var ONLINE_BRIDGE_EVENT = 'lvsc:online-heartbeat';
