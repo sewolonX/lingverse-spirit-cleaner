@@ -1742,16 +1742,23 @@
             if (info.spirit >= info.cost && info.spirit > state.reserve) return true;
             if (info.spirit >= targetSpirit) return true;
         }
-        var startRes = await gameApi().post('/api/game/meditate/start', {});
-        if (!startRes || (startRes.code !== 200 && String(startRes.message || '').indexOf('冥想') < 0)) {
-            toast('自动冥想启动失败：' + ((startRes && startRes.message) || '未知错误'));
-            return false;
+        // 模拟点击冥想按钮，让游戏自己处理 API + UI
+        var medBtn = document.getElementById('meditateBtn');
+        if (medBtn && !medBtn.classList.contains('meditating')) {
+            await humanClick(medBtn);
+            await sleep(2000);
+        } else {
+            // 兜底：按钮不存在或已在冥想中，用 API
+            var startRes = await gameApi().post('/api/game/meditate/start', {});
+            if (!startRes || (startRes.code !== 200 && String(startRes.message || '').indexOf('冥想') < 0)) {
+                toast('自动冥想启动失败：' + ((startRes && startRes.message) || '未知错误'));
+                return false;
+            }
+            if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} }
+            if (startRes.data && typeof startRes.data.spiritPerMinute === 'number') { window.meditationSpiritRate = startRes.data.spiritPerMinute; }
         }
-        // API成功后手动初始化游戏进度条
-        if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} }
-        if (startRes.data && typeof startRes.data.spiritPerMinute === 'number') { window.meditationSpiritRate = startRes.data.spiritPerMinute; }
 
-        var spiritPerMinute = Number(startRes.data && startRes.data.spiritPerMinute || window.meditationSpiritRate || 0);
+        var spiritPerMinute = Number(window.meditationSpiritRate || 0);
         var estMin = info.maxSpirit > 0 && spiritPerMinute > 0 ? Math.ceil((targetSpirit - info.spirit) / spiritPerMinute) : '?';
         wecomEnqueue('🧘 开始冥想', '当前神识：' + info.spirit + '/' + info.maxSpirit + '\n目标神识：' + targetSpirit + '\n预计恢复：约 ' + estMin + '分钟后\n预计下一轮清理：' + new Date(Date.now() + (Number(estMin) || 0) * 60000).toLocaleTimeString());
         _lastMeditateReport = Date.now();
@@ -4085,11 +4092,12 @@
                     else { await runLoop(); }
                     return;
                 } else if (state.autoMeditate && info.spirit < info.maxSpirit) {
-                    // 没有在冥想，主动开始
+                    // 没有在冥想，点按钮开始
                     setStatus('监测中：开始冥想...', 'run');
-                    var startRes = await gameApi().post('/api/game/meditate/start', {});
-                    if (startRes && startRes.code === 200) {
-                        if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} }
+                    var medBtn2 = document.getElementById('meditateBtn');
+                    if (medBtn2 && !medBtn2.classList.contains('meditating')) {
+                        await humanClick(medBtn2);
+                        await sleep(1000);
                         monitorStartedAt = Date.now();
                     } else {
                         setStatus('监测中：冥想启动失败，等待重试', 'warn');
@@ -4179,15 +4187,16 @@
         updateMeter();
         setStatus(reason + '，自动转入神识监测', 'run');
         wecomEnqueue('转入监测', reason);
-        // 直接在这里启动冥想，不等 monitorSpiritLoop
-        if (state.autoMeditate && gameApi()) {
-            var info = getSpiritInfo();
-            if (info.player && info.spirit < info.maxSpirit) {
+        // 点击冥想按钮，让游戏自己处理
+        if (state.autoMeditate) {
+            var _info = getSpiritInfo();
+            if (_info.player && _info.spirit < _info.maxSpirit) {
                 setStatus('开始冥想...', 'run');
                 try {
-                    var startRes = await gameApi().post('/api/game/meditate/start', {});
-                    if (startRes && startRes.code === 200 && typeof window.startMeditationUI === 'function') {
-                        try { window.startMeditationUI(); } catch (_) {}
+                    var _medBtn = document.getElementById('meditateBtn');
+                    if (_medBtn && !_medBtn.classList.contains('meditating')) {
+                        await humanClick(_medBtn);
+                        await sleep(1500);
                     }
                 } catch (_) {}
             }
