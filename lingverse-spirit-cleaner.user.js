@@ -470,6 +470,18 @@
                     if (rule.action === 'sell') {
                         var p = { maxRarity: rule.maxRarity };
                         if (rule.scope !== 'all') p.scope = rule.scope;
+                        // 排除有锁定物品的 templateId，避免卖掉刚获得的同款
+                        try {
+                            var invRes = await gameApi().get('/api/game/inventory');
+                            if (invRes && invRes.code === 200 && Array.isArray(invRes.data)) {
+                                var lockedIds = [];
+                                for (var ii = 0; ii < invRes.data.length; ii++) {
+                                    var it = invRes.data[ii];
+                                    if (it && it.isLocked && it.templateId) lockedIds.push(String(it.templateId));
+                                }
+                                if (lockedIds.length) p.excludedTemplateIds = lockedIds;
+                            }
+                        } catch (_) {}
                         var preview = await gameApi().post('/api/game/sell-batch/preview', p);
                         if (preview && preview.code === 200 && preview.data && preview.data.count) {
                             var batch = await gameApi().post('/api/game/sell-batch', p);
