@@ -858,6 +858,7 @@
         autoExploreAfterMeditate: localStorage.getItem('lvSpiritCleaner.autoExploreAfterMeditate') !== '0',
         checkDaoyunBoost: localStorage.getItem('lvSpiritCleaner.checkDaoyunBoost') !== '0',
         useAdvancedMeditate: localStorage.getItem('lvSpiritCleaner.useAdvancedMeditate') === '1',
+        summerOnlyAdvancedMeditate: localStorage.getItem('lvSpiritCleaner.summerOnlyAdvancedMeditate') === '1',
         meditateStopSpirit: readNumber('lvSpiritCleaner.meditateStopSpirit', 0),
         autoNatalDevour: localStorage.getItem('lvSpiritCleaner.autoNatalDevour') === '1',
         autoRecruit: localStorage.getItem('lvSpiritCleaner.autoRecruit') === '1',
@@ -1686,6 +1687,11 @@
 
     async function tryAdvancedMeditateOnce() {
         if (!state.useAdvancedMeditate || !gameApi()) return false;
+        // 只在夏季高级冥想 选项
+        if (state.summerOnlyAdvancedMeditate) {
+            var seasonEl = document.getElementById('envSeasonTitle');
+            if (!seasonEl || (seasonEl.textContent || '').indexOf('夏') < 0) return false;
+        }
         try {
             setStatus('尝试仙缘高级冥想', 'run');
             var adBefore = Number((getPlayer() || {}).adPoints || 0);
@@ -5623,6 +5629,8 @@
         document.getElementById('lvscAutoReviveDeath').checked = state.autoReviveDeath;
         document.getElementById('lvscCheckDaoyunBoost').checked = state.checkDaoyunBoost;
         document.getElementById('lvscUseAdvancedMeditate').checked = state.useAdvancedMeditate;
+        var sumCb = document.getElementById('lvscSummerOnlyAdvancedMeditate');
+        if (sumCb) { sumCb.checked = state.summerOnlyAdvancedMeditate; sumCb.onchange = function() { state.summerOnlyAdvancedMeditate = this.checked; persistSetting('lvSpiritCleaner.summerOnlyAdvancedMeditate', this.checked); }; }
         // 铭文装备下拉：从法相穿搭（已装备）读取
         function refreshEquipmentSelect() {
             var sel = document.getElementById('lvscInscriptionEquipment');
@@ -6265,6 +6273,19 @@
                 var s = sec('探索模式');
                 s.innerHTML = '<div style="display:flex;gap:6px;align-items:center"><label style="font-size:11px"><input id="lvscExploreModeApi" type="radio" name="lvscExploreMode" value="api"> 脚本API（自定义倍率/事件处理）</label><label style="font-size:11px"><input id="lvscExploreModeSystem" type="radio" name="lvscExploreMode" value="system"> 系统自带（游戏内置自动探索）</label></div>';
                 ep.insertBefore(s, ep.firstChild);
+            })();
+
+            // 高级冥想夏季选项
+            (function() {
+                var advCb = document.getElementById('lvscUseAdvancedMeditate');
+                if (!advCb) return;
+                var prt = advCb.parentElement;
+                if (!prt) return;
+                var lbl = document.createElement('label');
+                lbl.className = 'lvsc-check';
+                lbl.style.cssText = 'font-size:11px;margin-left:8px';
+                lbl.innerHTML = '<input id="lvscSummerOnlyAdvancedMeditate" type="checkbox">只在夏季';
+                prt.parentElement.appendChild(lbl);
             })();
 
             // ---------- 激进模式 → explore tab ----------
