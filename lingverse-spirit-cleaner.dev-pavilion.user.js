@@ -751,6 +751,20 @@
         };
         window.gamePrompt.__lvHooked = true;
     }
+    // 自动关闭"操作异常"弹窗
+    function autoCloseErrorModals() {
+        try {
+            // 找游戏弹窗里的关闭按钮：.modal-btn--outline, .modal-btn, .btn-close, [onclick*=closeModal]
+            var btns = document.querySelectorAll('.modal-btn--outline, .modal-btn--cancel, .modal-btn-close, [onclick*="closeModal"]');
+            for (var _bi = 0; _bi < btns.length; _bi++) {
+                var _btn = btns[_bi];
+                var _modal = _btn.closest('.modal,.modal-overlay,.modal-container,[class*=modal]');
+                if (_modal && (_modal.textContent || '').indexOf('操作异常') >= 0) {
+                    _btn.click(); return;
+                }
+            }
+        } catch (_) {}
+    }
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
@@ -4287,6 +4301,7 @@
         wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
         while (running) {
             await refreshPlayer();
+            autoCloseErrorModals();
             // === 全局检测 ===
             if (state.autoBreakthrough) await autoBreakthroughCheck();
             if (state.autoOriginRepair) await autoOriginRepairCheck();
@@ -4429,6 +4444,7 @@
 
         while (running) {
             await refreshPlayer();
+            autoCloseErrorModals();
             // === 全局检测 ===
             if (state.autoBreakthrough) await autoBreakthroughCheck();
             if (state.autoOriginRepair) await autoOriginRepairCheck();
