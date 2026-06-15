@@ -6310,7 +6310,7 @@
                 ep.insertBefore(s, ep.firstChild);
             })();
 
-            // 高级冥想夏季选项
+            // 高级冥想夏季选项——紧跟在后面
             (function() {
                 var advCb = document.getElementById('lvscUseAdvancedMeditate');
                 if (!advCb) return;
@@ -6318,9 +6318,9 @@
                 if (!prt) return;
                 var lbl = document.createElement('label');
                 lbl.className = 'lvsc-check';
-                lbl.style.cssText = 'font-size:11px;margin-left:8px';
+                lbl.style.cssText = 'font-size:11px';
                 lbl.innerHTML = '<input id="lvscSummerOnlyAdvancedMeditate" type="checkbox">只在夏季';
-                prt.parentElement.appendChild(lbl);
+                prt.parentElement.insertBefore(lbl, prt.nextSibling);
             })();
 
             // ---------- 激进模式 → explore tab ----------
