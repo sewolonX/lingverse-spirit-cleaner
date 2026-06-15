@@ -154,16 +154,12 @@
                 }
             }
         }
-        var qualTarget = state.craftQualityTarget || 0;
-        var qualNeed = state.craftQualityCount || 0;
-        var QUAL_NAMES = ['','普通','优良','稀有','史诗','传说'];
-        craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (qualTarget > 0 && qualNeed > 0 ? ' | 达标' + QUAL_NAMES[qualTarget] + '×' + qualNeed : '') + (autoBuy ? ' | 自动买材料' : ''));
+        craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (autoBuy ? ' | 自动买材料' : ''));
         setStatus('开始炼制: ' + name + ' 目标' + target, 'run');
         var gameCap = type === 'alchemy' ? 100 : 50;
         var batchCap = state.craftBatchSize > 0 ? Math.min(state.craftBatchSize, gameCap) : gameCap;
         var crafted = 0;
-        var qualMet = 0;
-        while (autoCraftRunning && (crafted < target || (qualNeed > 0 && qualMet < qualNeed))) {
+        while (autoCraftRunning && crafted < target) {
             if (autoBuy && recipe.materials && recipe.materials.length) {
                 for (var mi = 0; mi < recipe.materials.length; mi++) {
                     var mat = recipe.materials[mi];
@@ -229,6 +225,64 @@
         craftLog(crafted >= target ? '完成! 共炼' + crafted + '次' : '停止 | ' + crafted + '/' + target);
         setStatus('炼制完成: ' + name + ' ' + crafted + '/' + target, 'run');
     }
+    // --- 品质炼制 ---
+    async function autoQualityCraftLoop() {
+        if (autoCraftRunning || running || autoInscriptionRunning) return;
+        syncSettingsFromUi();
+        if (!state.craftRecipeId || !gameApi()) { setStatus('请先选择配方', 'warn'); return; }
+        var qualTarget = state.craftQualityTarget || 0;
+        var qualNeed = state.craftQualityCount || 0;
+        if (!qualTarget || !qualNeed) { setStatus('请设置品质目标和个数', 'warn'); return; }
+        autoCraftRunning = true;
+        var type = state.craftType; var recipeId = state.craftRecipeId; var autoBuy = state.craftAutoBuyMats;
+        var QUAL_NAMES = ['','普通','优良','稀有','史诗','传说'];
+        updateMeter();
+        var recipes = await fetchRecipes(type);
+        var recipe = null;
+        for (var ri = 0; ri < recipes.length; ri++) { if (getCraftItemId(recipes[ri], type) === recipeId) { recipe = recipes[ri]; break; } }
+        if (!recipe) { setStatus('未找到配方', 'warn'); autoCraftRunning = false; return; }
+        var name = getCraftItemName(recipe, type);
+        var gameCap = type === 'alchemy' ? 100 : 50;
+        var batchCap = state.craftBatchSize > 0 ? Math.min(state.craftBatchSize, gameCap) : gameCap;
+        var totalCrafted = 0, qualMet = 0;
+        craftLog('品质炼制: ' + name + ' | 目标' + QUAL_NAMES[qualTarget] + '×' + qualNeed + (autoBuy ? ' | 自动买材料' : ''));
+        setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + '×' + qualNeed, 'run');
+        while (autoCraftRunning && qualMet < qualNeed) {
+            if (autoBuy && recipe.materials && recipe.materials.length) {
+                for (var mi = 0; mi < recipe.materials.length; mi++) {
+                    var mat = recipe.materials[mi];
+                    var needed = Math.max(0, (mat.required || mat.amount || 1) * batchCap);
+                    if (needed > 0) { try { await gameApi().post('/api/game/craft/quick-buy-mats', { type: type, id: recipeId, amount: needed }); } catch (_) {} await sleep(300); }
+                }
+            }
+            var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : '/api/game/forge/batch-craft';
+            var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
+            var payload = {}; payload[craftKey] = recipeId; payload.count = batchCap;
+            var craftRes = await gameApi().post(craftEp, payload);
+            if (!craftRes || craftRes.code !== 200) { await sleep(2000); continue; }
+            totalCrafted += batchCap;
+            try {
+                qualMet = 0;
+                var chkRes = await gameApi().get('/api/game/inventory');
+                if (chkRes && chkRes.code === 200 && Array.isArray(chkRes.data)) {
+                    for (var qi = 0; qi < chkRes.data.length; qi++) {
+                        var qit = chkRes.data[qi];
+                        if (String(qit.templateId || qit.id || '') === recipeId || (qit.name || qit.itemName || '').indexOf(name) >= 0) {
+                            if ((qit.rarity || 0) >= qualTarget) qualMet += Number(qit.quantity || qit.count || 1);
+                        }
+                    }
+                }
+            } catch (_) {}
+            craftLog('炼+' + batchCap + ' | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed + ' | 总' + totalCrafted + '次');
+            setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed, 'run');
+            await sleep(600);
+        }
+        autoCraftRunning = false;
+        updateMeter();
+        if (qualMet >= qualNeed) { craftLog('完成! ' + QUAL_NAMES[qualTarget] + qualMet + '件 共炼' + totalCrafted + '次'); setStatus('品质炼制完成', 'run'); }
+        else { craftLog('停止 | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed); setStatus('品质炼制已停止', 'idle'); }
+    }
+
     function stopCraft() {
         autoCraftRunning = false;
         updateMeter();
@@ -6476,6 +6530,15 @@
                 lbl.style.cssText = 'font-size:11px';
                 lbl.innerHTML = '品质达标<select id="lvscCraftQualityTarget"><option value="0">不限</option><option value="1">普通及以上</option><option value="2">优良及以上</option><option value="3">稀有及以上</option><option value="4">史诗及以上</option><option value="5">传说</option></select><input id="lvscCraftQualityCount" type="number" min="0" value="' + state.craftQualityCount + '" style="width:50px;height:24px;margin-left:4px">个';
                 prt.parentElement.insertBefore(lbl, prt.nextSibling);
+                // 加品质炼制按钮
+                var craftBtnRow = document.querySelector('#lvscAutoCraftBtn')?.parentElement;
+                if (craftBtnRow) {
+                    var qBtn = document.createElement('button');
+                    qBtn.id = 'lvscQualityCraftBtn';
+                    qBtn.style.cssText = 'flex:1;height:34px;background:#c08060;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px';
+                    qBtn.textContent = '品质炼制';
+                    craftBtnRow.appendChild(qBtn);
+                }
             })();
 
             // ---------- 珍宝阁 → craft ----------
@@ -6732,6 +6795,8 @@
                 if (cQual) { cQual.value = String(state.craftQualityTarget || 0); cQual.onchange = function() { state.craftQualityTarget = Number(this.value); persistSetting('lvSpiritCleaner.craftQualityTarget', String(state.craftQualityTarget)); }; }
                 var cQualCnt = document.getElementById('lvscCraftQualityCount');
                 if (cQualCnt) { cQualCnt.value = state.craftQualityCount || 0; cQualCnt.onchange = function() { state.craftQualityCount = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.craftQualityCount', String(state.craftQualityCount)); }; }
+                var qCraftBtn = document.getElementById('lvscQualityCraftBtn');
+                if (qCraftBtn) qCraftBtn.onclick = autoQualityCraftLoop;
                 var emApi = document.getElementById('lvscExploreModeApi');
                 var emSys = document.getElementById('lvscExploreModeSystem');
                 if (emApi) { emApi.checked = state.exploreMode === 'api'; emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
