@@ -1736,7 +1736,10 @@
         // 只在夏季高级冥想 选项
         if (state.summerOnlyAdvancedMeditate) {
             var seasonEl = document.getElementById('envSeasonTitle');
-            if (!seasonEl || (seasonEl.textContent || '').indexOf('夏') < 0) return false;
+            var seasonOk = false;
+            if (seasonEl && (seasonEl.textContent || '').indexOf('夏') >= 0) seasonOk = true;
+            else if (typeof calcGameTime === 'function') { try { var gt = calcGameTime(); if (gt && gt.seasonIdx === 1) seasonOk = true; } catch (_) {} }
+            if (!seasonOk) return false;
         }
         try {
             setStatus('尝试仙缘高级冥想', 'run');
@@ -6394,15 +6397,15 @@
                 window._renderProtectedList = function() {
                     var el = document.getElementById('lvscDisposeProtectedList'); if (!el) return;
                     var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected : [];
-                    if (!items.length) { el.innerHTML = ''; return; }
-                    var html = '<span style="font-size:10px;color:var(--text-muted)">保护 ' + items.length + ' 种：</span>';
+                    if (!items.length) { el.innerHTML = '<span style=\"font-size:10px;color:var(--text-muted)\">未保护额外物品（锁定物品和空白卷轴自动排除）</span>'; return; }
+                    var html = '<div style=\"font-size:10px;color:#6bc9a0;margin-bottom:4px\">🛡 额外保护 ' + items.length + ' 种：</div>';
                     for (var _i = 0; _i < items.length; _i++) {
                         var it = items[_i];
                         var tid = typeof it === 'string' ? it : it.id;
                         var tname = typeof it === 'string' ? tid : (it.name || tid);
-                        html += '<span style="padding:1px 5px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:3px;margin:1px 2px;font-size:10px;display:inline-block" title="' + tid + '">' + tname + '<span data-delidx="' + _i + '" style="color:#ff6b6b;cursor:pointer;margin-left:3px">✕</span></span>';
+                        html += '<div style=\"display:flex;align-items:center;padding:2px 4px;margin:1px 0;background:rgba(107,201,160,.06);border-radius:3px;font-size:10px\"><span style=\"flex:1;color:#cfc6b2\">' + (tname || tid) + '</span><span style=\"color:#6a6560;margin:0 6px;font-size:9px\">' + tid + '</span><span data-delidx=\"' + _i + '\" style=\"color:#ff6b6b;cursor:pointer\">✕</span></div>';
                     }
-                    html += ' <span style="color:#ff6b6b;cursor:pointer;font-size:10px" id="lvscClearProtect">清空</span>';
+                    html += '<div style=\"margin-top:4px\"><span style=\"color:#ff6b6b;cursor:pointer;font-size:10px\" id=\"lvscClearProtect\">清空全部</span></div>';
                     el.innerHTML = html;
                     el.querySelectorAll('[data-delidx]').forEach(function(sp) {
                         sp.addEventListener('click', function() {
