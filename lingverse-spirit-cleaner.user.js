@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.6.0
+// @version      1.6.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -100,7 +100,7 @@
 
     async function fetchRecipes(type) {
         if (!gameApi()) return [];
-        var ep = type === 'alchemy' ? '/api/game/alchemy/recipes' : '/api/game/forge/recipes';
+        var ep = type === 'alchemy' ? '/api/game/alchemy/recipes' : type === 'talisman' ? '/api/game/talisman/recipes' : '/api/game/forge/recipes';
         try {
             var res = await gameApi().get(ep);
             if (res && res.code === 200) {
@@ -127,6 +127,8 @@
     var _craftStats = { total: 0, startCount: 0 };
     async function autoCraftLoop() {
         if (autoCraftRunning) { setStatus('炼制已在运行', 'warn'); return; }
+        if (running) { setStatus('清理运行中，停止后再炼制', 'warn'); return; }
+        if (autoInscriptionRunning) { setStatus('铭文洗练中，停止后再炼制', 'warn'); return; }
         syncSettingsFromUi();
         if (!state.craftRecipeId || !gameApi()) { setStatus('请先选择配方', 'warn'); return; }
         autoCraftRunning = true;
@@ -171,7 +173,7 @@
             }
             // 每次炼上限或剩余数量
             var batchCount = Math.min(batchCap, target - crafted);
-            var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : '/api/game/forge/batch-craft';
+            var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : type === 'talisman' ? '/api/game/talisman/batch-craft' : '/api/game/forge/batch-craft';
             var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
             var payload = {}; payload[craftKey] = recipeId; payload.count = batchCount;
             var craftRes = await gameApi().post(craftEp, payload);
@@ -210,6 +212,160 @@
         updateMeter();
         setStatus('炼制已停止', 'idle');
     }
+    // --- 品质炼制 ---
+    async function autoQualityCraftLoop() {
+        if (autoCraftRunning || running || autoInscriptionRunning) return;
+        syncSettingsFromUi();
+        if (!state.craftRecipeId || !gameApi()) { setStatus('请先选择配方', 'warn'); return; }
+        var qualTarget = state.craftQualityTarget || 0;
+        var qualNeed = state.craftQualityCount || 0;
+        if (!qualTarget || !qualNeed) { setStatus('请设置品质目标和个数', 'warn'); return; }
+        autoCraftRunning = true;
+        var type = state.craftType; var recipeId = state.craftRecipeId; var autoBuy = state.craftAutoBuyMats;
+        var QUAL_NAMES = ['','普通','优良','稀有','史诗','传说'];
+        updateMeter();
+        var recipes = await fetchRecipes(type);
+        var recipe = null;
+        for (var ri = 0; ri < recipes.length; ri++) { if (getCraftItemId(recipes[ri], type) === recipeId) { recipe = recipes[ri]; break; } }
+        if (!recipe) { setStatus('未找到配方', 'warn'); autoCraftRunning = false; return; }
+        var name = getCraftItemName(recipe, type);
+        var gameCap = type === 'alchemy' ? 100 : 50;
+        var batchCap = state.craftBatchSize > 0 ? Math.min(state.craftBatchSize, gameCap) : gameCap;
+        var totalCrafted = 0, qualMet = 0;
+        craftLog('品质炼制: ' + name + ' | 目标' + QUAL_NAMES[qualTarget] + '×' + qualNeed + (autoBuy ? ' | 自动买材料' : ''));
+        setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + '×' + qualNeed, 'run');
+        while (autoCraftRunning && qualMet < qualNeed) {
+            if (autoBuy && recipe.materials && recipe.materials.length) {
+                for (var mi = 0; mi < recipe.materials.length; mi++) {
+                    var mat = recipe.materials[mi];
+                    var needed = Math.max(0, (mat.required || mat.amount || 1) * batchCap);
+                    if (needed > 0) { try { await gameApi().post('/api/game/craft/quick-buy-mats', { type: type, id: recipeId, amount: needed }); } catch (_) {} await sleep(300); }
+                }
+            }
+            var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : type === 'talisman' ? '/api/game/talisman/batch-craft' : '/api/game/forge/batch-craft';
+            var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
+            var payload = {}; payload[craftKey] = recipeId; payload.count = batchCap;
+            var craftRes = await gameApi().post(craftEp, payload);
+            if (!craftRes || craftRes.code !== 200) { await sleep(2000); continue; }
+            totalCrafted += batchCap;
+            try {
+                qualMet = 0;
+                var chkRes = await gameApi().get('/api/game/inventory');
+                if (chkRes && chkRes.code === 200 && Array.isArray(chkRes.data)) {
+                    for (var qi = 0; qi < chkRes.data.length; qi++) {
+                        var qit = chkRes.data[qi];
+                        if (String(qit.templateId || qit.id || '') === recipeId || (qit.name || qit.itemName || '').indexOf(name) >= 0) {
+                            if ((qit.rarity || 0) >= qualTarget) qualMet += Number(qit.quantity || qit.count || 1);
+                        }
+                    }
+                }
+            } catch (_) {}
+            craftLog('炼+' + batchCap + ' | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed + ' | 总' + totalCrafted + '次');
+            setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed, 'run');
+            await sleep(600 + Math.floor(Math.random() * 400));
+        }
+        autoCraftRunning = false;
+        updateMeter();
+        if (qualMet >= qualNeed) { craftLog('完成! ' + QUAL_NAMES[qualTarget] + qualMet + '件'); setStatus('品质炼制完成', 'run'); }
+        else { setStatus('品质炼制停止', 'idle'); }
+    }
+
+    // --- 功法洗练 ---
+    var autoSkillWashRunning = false;
+    async function fetchSkillList(scope) {
+        if (!gameApi()) return [];
+        try { var r = await gameApi().get('/api/custom-skill/list?scope=' + (scope || 'body')); return (r && r.code === 200 && r.data && Array.isArray(r.data.skills)) ? r.data.skills : []; } catch (_) { return []; }
+    }
+    async function autoSkillWashLoop() {
+        if (autoSkillWashRunning || !gameApi()) return;
+        syncSettingsFromUi();
+        if (!state.skillWashSkillId || !state.skillWashSlot) { setStatus('请选择功法和槽位', 'warn'); return; }
+        if (!state.skillWashTargetType) { setStatus('请填写目标词条', 'warn'); return; }
+        autoSkillWashRunning = true;
+        var scope = state.skillWashScope || 'body';
+        var skillId = state.skillWashSkillId;
+        var slotIdx = state.skillWashSlot;
+        var stoneQ = state.skillWashStoneQuality || 1;
+        var targetType = (state.skillWashTargetType || '').trim();
+        var targetMin = (state.skillWashTargetMin || '').trim();
+        // 支持多词条：空格/逗号分隔
+        var targetTypes = targetType ? targetType.split(/[\s,]+/).filter(Boolean) : [];
+        var targetMins = targetMin ? targetMin.split(/[\s,]+/).filter(Boolean).map(function(v) { return parseFloat(v.replace('%', '')) || 0; }) : [];
+        var count = 0, lastAffix = '';
+        // 构建目标描述：燃血≥22%  攻击≥2.7
+        var targetDesc = '';
+        if (targetTypes.length > 0) {
+            var parts = [];
+            for (var tdi = 0; tdi < targetTypes.length; tdi++) {
+                var p = targetTypes[tdi];
+                if (tdi < targetMins.length) p += '≥' + targetMins[tdi];
+                parts.push(p);
+            }
+            targetDesc = parts.join('  ');
+        }
+        skillWashLog('开始洗练 槽位' + slotIdx + ' 品质' + stoneQ + ' 目标:' + targetDesc);
+        setStatus('功法洗练中...', 'run');
+        var startBtn = document.getElementById('lvscSkillWashStartBtn');
+        var stopBtn = document.getElementById('lvscSkillWashStopBtn');
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = '';
+        while (autoSkillWashRunning) {
+            try {
+                // 找合适的洗炼石
+                var invRes = await gameApi().get('/api/game/inventory');
+                var stoneItem = null;
+                if (invRes && invRes.code === 200 && Array.isArray(invRes.data)) {
+                    for (var si = 0; si < invRes.data.length; si++) {
+                        var it = invRes.data[si];
+                        var tid = String(it.templateId || '');
+                        if (tid.indexOf('wash_stone_') >= 0 && (it.rarity || 0) >= stoneQ) {
+                            stoneItem = it; break;
+                        }
+                    }
+                }
+                if (!stoneItem) { skillWashLog('没有符合品质' + stoneQ + '的洗炼石，停止'); break; }
+                // 调洗练API
+                var r = await gameApi().post('/api/custom-skill/wash', {
+                    skillId: parseInt(skillId), slotIndex: parseInt(slotIdx),
+                    stoneItemId: parseInt(stoneItem.id || stoneItem.itemId),
+                    scope: scope, category: state.skillWashCategory || 'ATTACK'
+                });
+                count++;
+                if (r && r.code === 200 && r.data) {
+                    var d = r.data;
+                    var newType = d.newAffixType || '';
+                    var newAffix = d.newAffix || '';
+                    var haystack = newType + ' ' + newAffix;
+                    // 1:1 映射匹配：targetTypes[i] → targetMins[i]
+                    var met = targetTypes.length === 0;
+                    if (!met) {
+                        var numMatch = newAffix.match(/([\d.]+)/);
+                        var affixVal = numMatch ? parseFloat(numMatch[1]) : NaN;
+                        for (var ti = 0; ti < targetTypes.length; ti++) {
+                            if (haystack.indexOf(targetTypes[ti]) >= 0) {
+                                if (ti < targetMins.length) {
+                                    if (!isNaN(affixVal) && affixVal >= targetMins[ti]) { met = true; break; }
+                                } else { met = true; break; }
+                            }
+                        }
+                    }
+                    lastAffix = newAffix;
+                    skillWashLog((met ? '✓' : '  ') + ' 第' + count + '次: ' + newAffix + ' (' + (d.oldAffix||'?') + '→' + newType + ')');
+                    if (met) { skillWashLog('达标! ' + newAffix); break; }
+                } else {
+                    skillWashLog('✗ 失败: ' + ((r && r.message) || '未知'));
+                    break;
+                }
+            } catch (e) { skillWashLog('✗ 异常: ' + (e.message || '')); break; }
+            await sleep(500 + Math.floor(Math.random() * 800));
+        }
+        autoSkillWashRunning = false;
+        if (startBtn) startBtn.style.display = '';
+        if (stopBtn) stopBtn.style.display = 'none';
+        setStatus('功法洗练' + (lastAffix ? '完成' : '停止'), 'run');
+    }
+    function stopSkillWash() { autoSkillWashRunning = false; }
+    function skillWashLog(msg) { var l = document.getElementById('lvscSkillWashLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
     var loopTimer = null;
     var busyEvent = false;
     var checkingCloudUpdate = false;
@@ -221,7 +377,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.6.0';
+    var SCRIPT_VERSION = '1.6.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -624,8 +780,8 @@
     }
 
     // --- 珍宝阁 ---
-    async function fetchPavilionShop() { if (!gameApi()) return []; try { var res = await gameApi().get('/api/game/player-sect/builtin-shop'); return (res && res.code === 200 && Array.isArray(res.data)) ? res.data : []; } catch (_) { return []; } }
-    async function autoPavilionLoop() { if (autoPavilionRunning || running) return; syncSettingsFromUi(); if (!state.pavilionItemId || !gameApi()) { setStatus('请先选择珍宝阁商品', 'warn'); return; } autoPavilionRunning = true; var done = 0, succ = 0; updateMeter(); pavilionLog('开始兑换: ' + state.pavilionItemName + ' 每次' + state.pavilionQty + ' 循环' + state.pavilionLoop); while (autoPavilionRunning && done < state.pavilionLoop) { try { var r = await gameApi().post('/api/game/player-sect/buy-builtin-item', { itemId: state.pavilionItemId, quantity: state.pavilionQty }); if (r && r.code === 200) { succ++; pavilionLog('✓ ' + (done + 1) + '/' + state.pavilionLoop); } else { pavilionLog('✗ ' + (done + 1) + ': ' + ((r && r.message) || '')); } } catch (e) { pavilionLog('✗ 异常: ' + (e.message || '')); } done++; if (done < state.pavilionLoop) await sleep(state.pavilionDelay); } autoPavilionRunning = false; updateMeter(); pavilionLog('完成: ' + succ + '/' + done); setStatus('珍宝阁完成', 'run'); }
+    async function fetchPavilionShop() { if (!gameApi()) return []; try { var res = await gameApi().get('/api/game/player-sect/builtin-shop'); if (res && res.code === 200 && Array.isArray(res.data) && res.data.length > 0) return res.data; } catch (_) {} try { var res2 = await gameApi().get('/api/game/sect/shop'); if (res2 && res2.code === 200 && Array.isArray(res2.data)) return res2.data; } catch (_) {} return []; }
+    async function autoPavilionLoop() { if (autoPavilionRunning || running) return; syncSettingsFromUi(); if (!state.pavilionItemId || !gameApi()) { setStatus('请先选择珍宝阁商品', 'warn'); return; } autoPavilionRunning = true; var done = 0, succ = 0; updateMeter(); pavilionLog('开始兑换: ' + state.pavilionItemName + ' 每次' + state.pavilionQty + ' 循环' + state.pavilionLoop); while (autoPavilionRunning && done < state.pavilionLoop) { try { var r = await gameApi().post('/api/game/player-sect/buy-builtin-item', { itemId: state.pavilionItemId, quantity: state.pavilionQty }); if (!r || r.code !== 200) { r = await gameApi().post('/api/game/sect/shop/buy', { itemId: state.pavilionItemId, quantity: state.pavilionQty }); } if (r && r.code === 200) { succ++; pavilionLog('✓ ' + (done + 1) + '/' + state.pavilionLoop); } else { pavilionLog('✗ ' + (done + 1) + ': ' + ((r && r.message) || '')); } } catch (e) { pavilionLog('✗ 异常: ' + (e.message || '')); } done++; if (done < state.pavilionLoop) await sleep(state.pavilionDelay + Math.floor(Math.random() * 500)); } autoPavilionRunning = false; updateMeter(); pavilionLog('完成: ' + succ + '/' + done); setStatus('珍宝阁完成', 'run'); }
     function stopPavilion() { autoPavilionRunning = false; updateMeter(); }
     function pavilionLog(msg) { var log = document.getElementById('lvscPavilionLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
 
@@ -700,6 +856,8 @@
         }
     }
 
+    function autoVerifySolver() { try { var inp=document.getElementById("gamePromptInput"); var btn=document.getElementById("gamePromptConfirmBtn"); if(!inp||!btn||inp.offsetHeight===0)return; var card=document.querySelector(".modal-content"); var txt=(card&&card.textContent)||""; var numRe=/([\d.]+|[一二三四五六七八九十百千万零壹贰叁肆伍陆柒捌玖拾]+)/g; var nums=[],m; while((m=numRe.exec(txt))!==null){var v=m[1]; nums.push(isNaN(Number(v))?(typeof parseChineseNum==="function"?parseChineseNum(v):NaN):Number(v))} if(nums.length<2)return; var a=nums[nums.length-2],b=nums[nums.length-1],ans; if(txt.indexOf("加")>=0||txt.indexOf("+")>=0)ans=a+b;else if(txt.indexOf("减")>=0||txt.indexOf("-")>=0)ans=a-b;else if(txt.indexOf("乘")>=0||txt.indexOf("×")>=0)ans=a*b;else ans=a/b; if(!isNaN(ans)&&isFinite(ans)){inp.value=ans===Math.floor(ans)?String(Math.floor(ans)):String(Math.round(ans*100)/100);setTimeout(function(){btn.click()},200)} }catch(_){} } setInterval(autoVerifySolver,2000);
+
     // 自动解决反脚本验证（算术题）- 支持中文数字
     var ANTI_CHEAT_AUTO_SOLVE = true;
     var CHINESE_NUMS = { '零':0,'〇':0,'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'百':100,'千':1000,'万':10000,'壹':1,'贰':2,'叁':3,'肆':4,'伍':5,'陆':6,'柒':7,'捌':8,'玖':9,'拾':10 };
@@ -754,6 +912,11 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
+        {
+            version: '1.6.1',
+            title: '功法洗练 + 品质炼制 + 珍宝阁九霄宗 + 多项修复',
+            notes: ['新增功法自动洗练：选功法→槽位→分类(攻击/防御/辅助)→石头品质→目标词条(多关键词+1:1数值映射)→自动循环洗到命中。', '新增品质炼制：独立按钮+循环，设目标品质×个数，炼到达标自动停。', '珍宝阁支持九霄宗：API兜底自动切换sect/shop端点。', '高级冥想夏季检测：DOM取不到时兜底calcGameTime判断季节。', '保护列表品质分组：同名物品5品质全有时合并显示[全部品质]，可一键删除整个baseId。', '炼制阻塞提示：清理/铭文运行时点炼制明确提示原因。', '清理完成通知显示修为进度差值（32.1% → 45.2%（+13.1%））。', '炼制配方/批量炼制API支持制符（talisman）。', '珍宝阁购买间隔加随机抖动。', '反验证新增DOM轮询兜底（autoVerifySolver每2秒检测弹窗）。']
+        },
         {
             version: '1.6.0',
             title: '出售保护 + 自动凝聚 + 物品搜索 + 双模式修复',
@@ -939,6 +1102,15 @@
         craftRecipeId: localStorage.getItem('lvSpiritCleaner.craftRecipeId') || '',
         craftTargetCount: readNumber('lvSpiritCleaner.craftTargetCount', 10),
         craftBatchSize: readNumber('lvSpiritCleaner.craftBatchSize', 0),
+        craftQualityTarget: readNumber('lvSpiritCleaner.craftQualityTarget', 0),
+        craftQualityCount: readNumber('lvSpiritCleaner.craftQualityCount', 0),
+        skillWashScope: localStorage.getItem('lvSpiritCleaner.skillWashScope') || 'body',
+        skillWashSkillId: localStorage.getItem('lvSpiritCleaner.skillWashSkillId') || '',
+        skillWashSlot: readNumber('lvSpiritCleaner.skillWashSlot', 0),
+        skillWashStoneQuality: readNumber('lvSpiritCleaner.skillWashStoneQuality', 1),
+        skillWashCategory: localStorage.getItem('lvSpiritCleaner.skillWashCategory') || 'ATTACK',
+        skillWashTargetType: localStorage.getItem('lvSpiritCleaner.skillWashTargetType') || '',
+        skillWashTargetMin: localStorage.getItem('lvSpiritCleaner.skillWashTargetMin') || '',
         craftAutoBuyMats: localStorage.getItem('lvSpiritCleaner.craftAutoBuyMats') === '1',
 
         // === 铭文 ===
@@ -1027,6 +1199,8 @@
             version: SCRIPT_VERSION,
             page: location.origin + location.pathname,
             playerName: player.name || player.playerName || localStorage.getItem('playerName') || '',
+            realm: getPlayerRealmStr(),
+            location: getCurrentAreaName(),
             running: !!running,
             monitoringSpirit: !!monitoringSpirit,
             autoTrialRunning: !!autoTrialRunning,
@@ -1736,7 +1910,10 @@
         // 只在夏季高级冥想 选项
         if (state.summerOnlyAdvancedMeditate) {
             var seasonEl = document.getElementById('envSeasonTitle');
-            if (!seasonEl || (seasonEl.textContent || '').indexOf('夏') < 0) return false;
+            var seasonOk = false;
+            if (seasonEl && (seasonEl.textContent || '').indexOf('夏') >= 0) seasonOk = true;
+            else if (typeof calcGameTime === 'function') { try { var gt = calcGameTime(); if (gt && gt.seasonIdx === 1) seasonOk = true; } catch (_) {} }
+            if (!seasonOk) return false;
         }
         try {
             setStatus('尝试仙缘高级冥想', 'run');
@@ -4391,9 +4568,12 @@
         if (_cleanStats.explores > 0) {
             var _elapsed = Math.floor((Date.now() - _cleanStats.startTime) / 60000);
             var _realmNow = getPlayerRealmStr();
-            var _lines = ['运行时长：' + _elapsed + '分钟', '探索次数：' + _cleanStats.explores, '遭遇妖兽：' + _cleanStats.combats + '次'];
+            var _endPct = 0; var _p = getPlayer() || {}; if (_p.cultivationNeeded > 0) _endPct = Math.min(100, (_p.cultivation || 0) / _p.cultivationNeeded * 100);
+            var _diffPct = (_endPct - (_cleanStats.startRealmPct || 0));
+            var _progressLine = '修为进度：' + (_cleanStats.startRealmPct || 0).toFixed(1) + '% → ' + _endPct.toFixed(1) + '%';
+            if (_diffPct > 0.01 || _diffPct < -0.01) _progressLine += '（' + (_diffPct > 0 ? '+' : '') + _diffPct.toFixed(1) + '%）';
+            var _lines = ['运行时长：' + _elapsed + '分钟', '探索次数：' + _cleanStats.explores, '遭遇妖兽：' + _cleanStats.combats + '次', _progressLine];
             if (_cleanStats.deaths > 0) _lines.push('死亡次数：' + _cleanStats.deaths);
-            if (_cleanStats.startRealm) _lines.push('修为变化：' + _cleanStats.startRealm + ' → ' + _realmNow);
             wecomEnqueue('✅ 清理结束', _lines.join('\n'));
         }
         updateMeter();
@@ -4568,13 +4748,17 @@
         if (_cleanStats.explores > 0) {
             var elapsed = Math.floor((Date.now() - _cleanStats.startTime) / 60000);
             var realmNow = getPlayerRealmStr();
+            var endPct = 0; var _pp = getPlayer() || {}; if (_pp.cultivationNeeded > 0) endPct = Math.min(100, (_pp.cultivation || 0) / _pp.cultivationNeeded * 100);
+            var diffPct = (endPct - (_cleanStats.startRealmPct || 0));
+            var progressLine = '修为进度：' + (_cleanStats.startRealmPct || 0).toFixed(1) + '% → ' + endPct.toFixed(1) + '%';
+            if (diffPct > 0.01 || diffPct < -0.01) progressLine += '（' + (diffPct > 0 ? '+' : '') + diffPct.toFixed(1) + '%）';
             var lines = [
                 '运行时长：' + elapsed + '分钟',
                 '探索次数：' + _cleanStats.explores,
                 '遭遇妖兽：' + _cleanStats.combats + '次',
+                progressLine,
             ];
             if (_cleanStats.deaths > 0) lines.push('死亡次数：' + _cleanStats.deaths);
-            if (_cleanStats.startRealm) lines.push('修为变化：' + _cleanStats.startRealm + ' → ' + realmNow);
             wecomEnqueue('✅ 清理结束', lines.join('\n'));
         }
         wecomEnqueue('脚本停止', reason || '手动停止');
@@ -5521,6 +5705,7 @@
             '<label>目标数量<input id="lvscCraftTargetCount" type="number" min="1" step="1"></label>' +
             '<label>每次炼制<input id="lvscCraftBatchSize" type="number" min="1" max="50" step="1" placeholder="上限"></label>' +
             '<label class="lvsc-check"><input id="lvscCraftAutoBuyMats" type="checkbox">自动购买材料</label>' +
+            '<label style="font-size:11px">品质达标<select id="lvscCraftQualityTarget"><option value="0">不限</option><option value="1">普通及以上</option><option value="2">优良及以上</option><option value="3">稀有及以上</option><option value="4">史诗及以上</option><option value="5">传说</option></select><input id="lvscCraftQualityCount" type="number" min="0" value="0" style="width:50px;height:24px;margin-left:4px">个</label>' +
             '</div>' +
             '<div style="display:flex;gap:6px;"><button id="lvscAutoCraftBtn" style="flex:1;height:34px;background:#dbb970;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;">开始炼制</button><button id="lvscStopCraftBtn" style="flex:1;height:34px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28)!important;border-radius:6px;cursor:pointer;font-weight:700;display:none;">停止</button></div>' +
             '<div id="lvscCraftLog" style="min-height:80px;max-height:150px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px;font-family:Consolas,monospace;">待命</div>' +
@@ -5889,6 +6074,19 @@
         document.getElementById('lvscCraftTargetCount').onchange = function () { state.craftTargetCount = Math.max(1, Number(this.value) || 10); persistSetting('lvSpiritCleaner.craftTargetCount', String(state.craftTargetCount)); };
         document.getElementById('lvscCraftBatchSize').value = String(state.craftBatchSize || '');
         document.getElementById('lvscCraftBatchSize').onchange = function () { state.craftBatchSize = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.craftBatchSize', String(state.craftBatchSize)); };
+        var cQual = document.getElementById('lvscCraftQualityTarget');
+        if (cQual) { cQual.value = String(state.craftQualityTarget || 0); cQual.onchange = function() { state.craftQualityTarget = Number(this.value); persistSetting('lvSpiritCleaner.craftQualityTarget', String(state.craftQualityTarget)); }; }
+        var cQualCnt = document.getElementById('lvscCraftQualityCount');
+        if (cQualCnt) { cQualCnt.value = state.craftQualityCount || 0; cQualCnt.onchange = function() { state.craftQualityCount = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.craftQualityCount', String(state.craftQualityCount)); }; }
+        var craftBtnRow = document.querySelector('#lvscAutoCraftBtn')?.parentElement;
+        if (craftBtnRow) {
+            var qBtn = document.createElement('button');
+            qBtn.id = 'lvscQualityCraftBtn';
+            qBtn.style.cssText = 'flex:1;height:34px;background:#c08060;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px';
+            qBtn.textContent = '品质炼制';
+            craftBtnRow.appendChild(qBtn);
+            qBtn.onclick = autoQualityCraftLoop;
+        }
         document.getElementById('lvscCraftAutoBuyMats').checked = state.craftAutoBuyMats;
         document.getElementById('lvscCraftAutoBuyMats').onchange = function () { state.craftAutoBuyMats = this.checked; persistSetting('lvSpiritCleaner.craftAutoBuyMats', this.checked); };
         async function refreshCraftRecipes() {
@@ -6390,25 +6588,64 @@
                     } catch (_) { searchResults.innerHTML = '搜索失败'; }
                 });
                 searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') searchBtn.click(); });
-                // 渲染保护列表
+                // 渲染保护列表（品质分组）
                 window._renderProtectedList = function() {
                     var el = document.getElementById('lvscDisposeProtectedList'); if (!el) return;
                     var items = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected : [];
-                    if (!items.length) { el.innerHTML = ''; return; }
-                    var html = '<span style="font-size:10px;color:var(--text-muted)">保护 ' + items.length + ' 种：</span>';
+                    if (!items.length) { el.innerHTML = '<span style=\"font-size:10px;color:var(--text-muted)\">未保护额外物品（锁定物品和空白卷轴自动排除）</span>'; return; }
+                    var RAR = ['','普通','优良','稀有','史诗','传说'];
+                    // 分组：同 baseId 的放一起
+                    var groups = {};
                     for (var _i = 0; _i < items.length; _i++) {
                         var it = items[_i];
                         var tid = typeof it === 'string' ? it : it.id;
                         var tname = typeof it === 'string' ? tid : (it.name || tid);
-                        html += '<span style="padding:1px 5px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:3px;margin:1px 2px;font-size:10px;display:inline-block" title="' + tid + '">' + tname + '<span data-delidx="' + _i + '" style="color:#ff6b6b;cursor:pointer;margin-left:3px">✕</span></span>';
+                        var baseId = tid.replace(/_\d+$/, '');
+                        if (!groups[baseId]) groups[baseId] = { name: tname, ids: {} };
+                        groups[baseId].ids[tid] = _i;
                     }
-                    html += ' <span style="color:#ff6b6b;cursor:pointer;font-size:10px" id="lvscClearProtect">清空</span>';
+                    var html = '<div style=\"font-size:10px;color:#6bc9a0;margin-bottom:4px\">🛡 额外保护：</div>';
+                    Object.keys(groups).forEach(function(baseId) {
+                        var g = groups[baseId];
+                        var idKeys = Object.keys(g.ids);
+                        // 5个品质全有 → 合并成一条
+                        if (idKeys.length === 5 && idKeys.every(function(k) { return /_\d$/.test(k); })) {
+                            html += '<div style=\"display:flex;align-items:center;padding:2px 4px;margin:1px 0;background:rgba(107,201,160,.06);border-radius:3px;font-size:10px\"><span style=\"flex:1;color:#cfc6b2\">' + (g.name || baseId) + ' <span style=\"color:#dbb970\">[全部品质]</span></span><span data-delbase=\"' + baseId + '\" style=\"color:#ff6b6b;cursor:pointer\">✕</span></div>';
+                        } else {
+                            // 单个或部分品质 → 逐条显示
+                            idKeys.forEach(function(tid) {
+                                var origIdx = g.ids[tid];
+                                var origIt = items[origIdx];
+                                var nm = typeof origIt === 'string' ? tid : (origIt.name || tid);
+                                var quality = '';
+                                var m2 = tid.match(/_(\d+)$/);
+                                if (m2 && RAR[parseInt(m2[1])]) quality = ' [' + RAR[parseInt(m2[1])] + ']';
+                                html += '<div style=\"display:flex;align-items:center;padding:2px 4px;margin:1px 0;background:rgba(107,201,160,.06);border-radius:3px;font-size:10px\"><span style=\"flex:1;color:#cfc6b2\">' + (nm || tid) + quality + '</span><span style=\"color:#6a6560;margin:0 6px;font-size:9px\">' + tid + '</span><span data-delidx=\"' + origIdx + '\" style=\"color:#ff6b6b;cursor:pointer\">✕</span></div>';
+                            });
+                        }
+                    });
+                    html += '<div style=\"margin-top:4px\"><span style=\"color:#ff6b6b;cursor:pointer;font-size:10px\" id=\"lvscClearProtect\">清空全部</span></div>';
                     el.innerHTML = html;
+                    // 单个删除
                     el.querySelectorAll('[data-delidx]').forEach(function(sp) {
                         sp.addEventListener('click', function() {
                             var idx = parseInt(this.getAttribute('data-delidx'));
                             var arr = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
                             arr.splice(idx, 1);
+                            state.autoDisposeProtected = arr;
+                            persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(arr));
+                            window._renderProtectedList();
+                        });
+                    });
+                    // 全部品质删除
+                    el.querySelectorAll('[data-delbase]').forEach(function(sp) {
+                        sp.addEventListener('click', function() {
+                            var baseId = this.getAttribute('data-delbase');
+                            var arr = Array.isArray(state.autoDisposeProtected) ? state.autoDisposeProtected.slice() : [];
+                            arr = arr.filter(function(x) {
+                                var xid = typeof x === 'string' ? x : x.id;
+                                return xid.replace(/_\d+$/, '') !== baseId;
+                            });
                             state.autoDisposeProtected = arr;
                             persistSetting('lvSpiritCleaner.autoDisposeProtected', JSON.stringify(arr));
                             window._renderProtectedList();
@@ -6437,6 +6674,24 @@
                 btnRow.appendChild(actBtn('lvscFarmStartBtn', '开始监控'));
                 btnRow.appendChild(stopBtn('lvscFarmStopBtn'));
                 s.appendChild(btnRow); s.appendChild(logDiv('lvscFarmLog'));
+                p.insertBefore(s, p.firstChild);
+            })();
+
+            // ---------- 功法洗练 → craft ----------
+            (function() {
+                var p = document.querySelector('[data-tab-panel="craft"]'); if (!p) return;
+                var s = sec('功法洗练', 'manual'), g = el('div', 'lvsc-grid2');
+                g.innerHTML = '<label>范围<select id="lvscSkillWashScope"><option value="body">本体</option><option value="incarnation">化身</option></select></label><label>功法<select id="lvscSkillWashSkill"><option value="">点击刷新</option></select></label><label>槽位<select id="lvscSkillWashSlot"><option value="0">点击刷新</option></select></label>' +
+                    '<label>分类<select id="lvscSkillWashCategory"><option value="ATTACK">攻击</option><option value="DEFENSE">防御</option><option value="SUPPORT">辅助</option></select></label>' +
+                    '<label>石头品质<select id="lvscSkillWashStoneQ"><option value="1">普通</option><option value="2">优良</option><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label>' +
+                    '<label>目标词条<input id="lvscSkillWashTarget" type="text" placeholder="如: 暴击 燃血 攻击"></label>' +
+                    '<label>最低数值<input id="lvscSkillWashMin" type="text" placeholder="如: 22 或 22% 2.7"></label>';
+                g.querySelector('label').appendChild(rfrBtn('lvscRefreshSkillWash'));
+                s.appendChild(g);
+                var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
+                btnRow.appendChild(actBtn('lvscSkillWashStartBtn', '开始洗练'));
+                btnRow.appendChild(stopBtn('lvscSkillWashStopBtn'));
+                s.appendChild(btnRow); s.appendChild(logDiv('lvscSkillWashLog'));
                 p.insertBefore(s, p.firstChild);
             })();
 
@@ -6689,6 +6944,40 @@
                 var lrStop = document.getElementById('lvscLuckRefreshStopBtn'); if (lrStop) lrStop.onclick = stopLuckRefresh;
                 updateLuckDisplay();
                 // 探索模式
+                // 功法洗练
+                var swScope = document.getElementById('lvscSkillWashScope');
+                if (swScope) { swScope.value = state.skillWashScope; swScope.onchange = function() { state.skillWashScope = this.value; persistSetting('lvSpiritCleaner.skillWashScope', this.value); }; }
+                var swSkill = document.getElementById('lvscSkillWashSkill');
+                if (swSkill) { swSkill.value = state.skillWashSkillId; }
+                var swSlot = document.getElementById('lvscSkillWashSlot');
+                if (swSlot) { swSlot.value = String(state.skillWashSlot); swSlot.onchange = function() { state.skillWashSlot = Number(this.value); persistSetting('lvSpiritCleaner.skillWashSlot', String(this.value)); }; }
+                var swCat = document.getElementById('lvscSkillWashCategory');
+                if (swCat) { swCat.value = state.skillWashCategory || 'ATTACK'; swCat.onchange = function() { state.skillWashCategory = this.value; persistSetting('lvSpiritCleaner.skillWashCategory', this.value); }; }
+                var swStone = document.getElementById('lvscSkillWashStoneQ');
+                if (swStone) { swStone.value = String(state.skillWashStoneQuality); swStone.onchange = function() { state.skillWashStoneQuality = Number(this.value); persistSetting('lvSpiritCleaner.skillWashStoneQuality', String(this.value)); }; }
+                var swTarget = document.getElementById('lvscSkillWashTarget');
+                if (swTarget) { swTarget.value = state.skillWashTargetType; swTarget.onchange = function() { state.skillWashTargetType = this.value; persistSetting('lvSpiritCleaner.skillWashTargetType', this.value); }; }
+                var swMin = document.getElementById('lvscSkillWashMin');
+                if (swMin) { swMin.value = state.skillWashTargetMin; swMin.onchange = function() { state.skillWashTargetMin = this.value; persistSetting('lvSpiritCleaner.skillWashTargetMin', this.value); }; }
+                var swRefresh = document.getElementById('lvscRefreshSkillWash');
+                if (swRefresh) swRefresh.onclick = async function() {
+                    var skills = await fetchSkillList(state.skillWashScope);
+                    var sel = document.getElementById('lvscSkillWashSkill');
+                    if (sel) { sel.innerHTML = '<option value="">选择功法</option>'; skills.forEach(function(sk) { sel.innerHTML += '<option value="' + sk.id + '">' + (sk.name||'功法#'+sk.id) + '</option>'; }); }
+                };
+                // 选择功法后：更新状态 + 刷新槽位列表
+                if (swSkill) swSkill.onchange = async function() {
+                    state.skillWashSkillId = this.value;
+                    persistSetting('lvSpiritCleaner.skillWashSkillId', this.value);
+                    var skills = await fetchSkillList(state.skillWashScope);
+                    var sk = null; for (var _si = 0; _si < skills.length; _si++) { if (String(skills[_si].id) === this.value) { sk = skills[_si]; break; } }
+                    var ssel = document.getElementById('lvscSkillWashSlot');
+                    if (ssel && sk) { ssel.innerHTML = ''; (sk.slots||[]).forEach(function(sl,i) { ssel.innerHTML += '<option value="' + (i + 1) + '">槽' + (i + 1) + ': ' + (sl.desc || sl.type || '空') + '</option>'; }); }
+                };
+                var swStart = document.getElementById('lvscSkillWashStartBtn');
+                if (swStart) swStart.onclick = autoSkillWashLoop;
+                var swStop = document.getElementById('lvscSkillWashStopBtn');
+                if (swStop) swStop.onclick = stopSkillWash;
                 var emApi = document.getElementById('lvscExploreModeApi');
                 var emSys = document.getElementById('lvscExploreModeSystem');
                 if (emApi) { emApi.checked = state.exploreMode === 'api'; emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
