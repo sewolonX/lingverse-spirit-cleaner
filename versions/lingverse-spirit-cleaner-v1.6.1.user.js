@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.6.2
+// @version      1.6.1
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/game.html*
 // @match        http://ling.muge.info/game.html*
@@ -366,65 +366,6 @@
     }
     function stopSkillWash() { autoSkillWashRunning = false; }
     function skillWashLog(msg) { var l = document.getElementById('lvscSkillWashLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
-
-    // --- 洗炼石一键升品（独立监控循环） ---
-    var autoWashStoneUpgradeRunning = false;
-    async function autoUpgradeWashStonesLoop() {
-        if (autoWashStoneUpgradeRunning) return;
-        if (!gameApi()) { setStatus('API不可用', 'warn'); return; }
-        autoWashStoneUpgradeRunning = true;
-        updateMeter();
-        var startBtn = document.getElementById('lvscWashStoneUpgradeStartBtn');
-        var stopBtn = document.getElementById('lvscWashStoneUpgradeStopBtn');
-        if (startBtn) startBtn.style.display = 'none';
-        if (stopBtn) stopBtn.style.display = '';
-        skillWashLog('洗炼石升品监控启动');
-        while (autoWashStoneUpgradeRunning) {
-            try {
-                var invRes = await gameApi().get('/api/game/inventory');
-                if (!invRes || invRes.code !== 200 || !Array.isArray(invRes.data)) { await sleep(3000); continue; }
-                var stones = [];
-                for (var si = 0; si < invRes.data.length; si++) {
-                    var it = invRes.data[si];
-                    var tid = String(it.templateId || '');
-                    if (tid.indexOf('wash_stone_') >= 0 && (it.rarity || 0) < 5) {
-                        stones.push({ id: it.id || it.itemId, rarity: it.rarity || 0, name: it.name || tid, quantity: it.quantity || 1 });
-                    }
-                }
-                if (!stones.length) { skillWashLog('✓ 所有洗炼石已达传说！'); break; }
-                stones.sort(function(a,b){ return a.rarity - b.rarity; });
-                var upgraded = false;
-                for (var si = 0; si < stones.length; si++) {
-                    if (upgraded) break;
-                    var s = stones[si];
-                    if (s.quantity >= 5) {
-                        var times = Math.floor(s.quantity / 5);
-                        skillWashLog('🔃 升品: ' + s.name + ' ×' + s.quantity + '颗 → 升' + times + '次');
-                        var r = await gameApi().post('/api/custom-skill/upgrade-wash-stone', { washStoneItemId: parseInt(s.id), times: times });
-                        if (r && r.code === 200) {
-                            skillWashLog('✅ 升品成功: ' + (r.data||''));
-                            upgraded = true;
-                        } else {
-                            skillWashLog('❌ 接口返回: ' + JSON.stringify(r));
-                        }
-                    }
-                }
-                if (!upgraded) {
-                    var total = 0; for (var si = 0; si < stones.length; si++) total += stones[si].quantity;
-                    skillWashLog('⏳ 所有品质洗炼石均不足5颗(共' + total + '颗)，无法继续升品');
-                    break;
-                }
-            } catch (e) { skillWashLog('❌ 错误: ' + (e.message || '异常')); }
-            await sleep(2000);
-        }
-        autoWashStoneUpgradeRunning = false;
-        if (startBtn) startBtn.style.display = '';
-        if (stopBtn) stopBtn.style.display = 'none';
-        updateMeter();
-        skillWashLog('洗炼石升品监控停止');
-    }
-    function stopWashStoneUpgrade() { autoWashStoneUpgradeRunning = false; }
-
     var loopTimer = null;
     var busyEvent = false;
     var checkingCloudUpdate = false;
@@ -436,7 +377,7 @@
     var HIGH_FEE_CONFIRM_THRESHOLD = 500000;
     var PANEL_Z_INDEX = 2147483000;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.6.2';
+    var SCRIPT_VERSION = '1.6.1';
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -852,48 +793,32 @@
     async function autoTalismanLoop() { if (autoTalismanRunning || !gameApi()) return; autoTalismanRunning = true; var batchSize = Math.max(1, Number(document.getElementById('lvscTalismanBatch').value) || 10); var loops = Math.max(1, Number(document.getElementById('lvscTalismanLoops').value) || 5); var delay = Math.max(500, Number(document.getElementById('lvscTalismanDelay').value) || 1500); var type = document.getElementById('lvscTalismanType').value; document.getElementById('lvscStartTalismanBtn').style.display = 'none'; document.getElementById('lvscStopTalismanBtn').style.display = ''; updateMeter(); talismanLog('开始: 每次' + batchSize + ' 循环' + loops); var used = 0; for (var i = 0; i < loops && autoTalismanRunning; i++) { try { var invRes = await gameApi().get('/api/game/inventory'); if (!invRes || invRes.code !== 200 || !Array.isArray(invRes.data)) { talismanLog('获取背包失败'); break; } var items = invRes.data.filter(function(item) { var tid = (item.templateId || '').toLowerCase(); if (!tid || tid.indexOf('talisman_') < 0) return false; if (item.isLocked || item.isEquipped) return false; if (type === 'stealth' && tid.indexOf('stealth') < 0) return false; if (type === 'combat' && tid.indexOf('stealth') >= 0) return false; return Number(item.quantity || item.count || 0) >= 1; }); if (!items.length) { talismanLog('没有可用符篆'); break; } var item = items[0]; var itemId = item.id || item.itemId || item.instanceId; var count = Math.min(batchSize, Number(item.quantity || item.count || 1)); var useRes = await gameApi().post('/api/game/use-item', { itemId: itemId, quantity: count }); if (useRes && useRes.code === 200) { used += count; talismanLog('✓ ' + (i + 1) + '/' + loops + ' ×' + count + ' (' + used + ')'); } else { talismanLog('✗ 失败: ' + ((useRes && useRes.message) || '')); } } catch (e) { talismanLog('✗ ' + (e.message || '')); } if (i < loops - 1) await sleep(delay); } autoTalismanRunning = false; document.getElementById('lvscStartTalismanBtn').style.display = ''; document.getElementById('lvscStopTalismanBtn').style.display = 'none'; updateMeter(); talismanLog('完成: ' + used + '张'); }
     function stopTalisman() { autoTalismanRunning = false; }
 
-    // 装备套装切换（使用游戏内置换装方案 API）
-    async function equipLoadoutApply(slot) {
-        if (!gameApi() || !slot) return;
+    // 装备套装切换
+    async function captureEquipSet(setKey) {
+        if (!gameApi()) { setStatus('API不可用', 'warn'); return; }
+        var ids = [];
         try {
-            var res = await gameApi().post('/api/equip-loadout/apply', { slot: slot, target: 'body' });
-            if (res && res.code === 200 && res.data && res.data.success) {
-                await sleep(300);
-                await refreshPlayer();
-            }
-        } catch (_) {}
-    }
-
-    // 读取游戏内装备方案名
-    // 读取游戏内装备方案名
-    function getGameLoadoutNames() {
-        var saved = localStorage.getItem('lvscLoadoutNames');
-        if (saved) {
-            try { return JSON.parse(saved); } catch(_) {}
-        }
-        return ['方案1', '方案2'];
-    }
-        // 自动监听装备弹窗，同步方案名到localStorage
-    (function autoSyncEquipNames() {
-        var check = function() {
-            var els = document.querySelectorAll('.equip-loadout-card__name');
-            if (els && els.length >= 2) {
-                var names = [els[0].textContent.trim(), els[1].textContent.trim()];
-                try { localStorage.setItem('lvscLoadoutNames', JSON.stringify(names)); } catch(_) {}
-                var spiritSel = document.getElementById('lvscEquipSpiritSlot');
-                var combatSel = document.getElementById('lvscEquipCombatSlot');
-                if (spiritSel && combatSel) {
-                    spiritSel.options[0].text = names[0];
-                    spiritSel.options[1].text = names[1];
-                    combatSel.options[0].text = names[0];
-                    combatSel.options[1].text = names[1];
+            var res = await gameApi().get('/api/game/equipment/current');
+            if (res && res.code === 200 && Array.isArray(res.data)) {
+                for (var ei = 0; ei < res.data.length; ei++) {
+                    var id = res.data[ei].playerItemId || res.data[ei].id || res.data[ei].itemId;
+                    if (id) ids.push(String(id));
                 }
             }
-        };
-        // 立即执行一次，然后每3秒检查
-        setTimeout(check, 500);
-        setInterval(check, 3000);
-    })();
+        } catch (_) {}
+        state[setKey] = ids;
+        localStorage.setItem('lvSpiritCleaner.' + setKey, JSON.stringify(ids));
+        var label = setKey === 'spiritEquipIds' ? '神识套' : '战斗套';
+        setStatus(label + '已记录 ' + ids.length + ' 件', 'run');
+    }
+    async function equipSet(ids) {
+        if (!gameApi() || !ids || !ids.length) return;
+        for (var ei = 0; ei < ids.length; ei++) {
+            try { await gameApi().post('/api/player/equip', { itemId: ids[ei] }); } catch (_) {}
+            await sleep(200);
+        }
+        await refreshPlayer();
+    }
 
     // 自动出狱：检测并保释
     async function checkAndAutoBail(manual) {
@@ -990,11 +915,6 @@
     var wecomBusy = false;
     var wecomQueue = [];
     var BUILTIN_CHANGELOG = [
-        {
-            version: '1.6.2',
-            title: '洗炼石升品 + 换装方案同步 + 多项修复',
-            notes: ['新增洗炼石一键升品：功法洗练区独立监控，按数量批量升品，不足5颗自动提示停止。', '换装改用游戏原生一键换装API，方案名自动同步游戏弹窗。', '启动清理自动切战斗套。', '恢复优先级双重持久化，刷新不丢失。', '铭文装备名从页面自动抓取。', '排序列表按启用顺序排列。']
-        },
         {
             version: '1.6.1',
             title: '功法洗练 + 品质炼制 + 珍宝阁九霄宗 + 多项修复',
@@ -1179,8 +1099,8 @@
         pavilionLoop: readNumber('lvSpiritCleaner.pavilionLoop', 10),
         pavilionDelay: readNumber('lvSpiritCleaner.pavilionDelay', 500),
         equipSwapEnabled: localStorage.getItem('lvSpiritCleaner.equipSwapEnabled') === '1',
-        equipSpiritSlot: readNumber('lvSpiritCleaner.equipSpiritSlot', 1),
-        equipCombatSlot: readNumber('lvSpiritCleaner.equipCombatSlot', 2),
+        spiritEquipIds: JSON.parse(localStorage.getItem('lvSpiritCleaner.spiritEquipIds') || '[]'),
+        combatEquipIds: JSON.parse(localStorage.getItem('lvSpiritCleaner.combatEquipIds') || '[]'),
         craftType: localStorage.getItem('lvSpiritCleaner.craftType') || 'alchemy',
         craftRecipeId: localStorage.getItem('lvSpiritCleaner.craftRecipeId') || '',
         craftTargetCount: readNumber('lvSpiritCleaner.craftTargetCount', 10),
@@ -1512,8 +1432,8 @@
         state.sectQuickRecovery = chk('lvscSectQuickRecovery');
         state.autoRecoveryThreshold = Math.max(0, Math.min(100, num('lvscAutoRecoveryThreshold', 0, 80)));
         state.autoRecoveryTarget = Math.max(0, Math.min(100, num('lvscAutoRecoveryTarget', 0, 100)));
-        state.autoHpPriority = localStorage.getItem('lvSpiritCleaner.autoHpPriority') || str('lvscAutoHpPriority', '灵力,丹药,宗门');
-        state.autoMpPriority = localStorage.getItem('lvSpiritCleaner.autoMpPriority') || str('lvscAutoMpPriority', '灵石,丹药,宗门');
+        state.autoHpPriority = str('lvscAutoHpPriority', '灵力,丹药,宗门');
+        state.autoMpPriority = str('lvscAutoMpPriority', '灵石,丹药,宗门');
         state.updateManifestUrl = str('lvscUpdateManifestUrl', '');
         state.autoVoidBody = chk('lvscAutoVoidBody');
         state.voidBodyRarity = Math.max(1, Math.min(5, num('lvscVoidRarity', 1, 5)));
@@ -2039,9 +1959,9 @@
 
         setStatus('神识不足，开始冥想到 ' + targetSpirit, 'run');
         // 切换神识套
-        if (state.equipSwapEnabled && state.equipSpiritSlot) {
+        if (state.equipSwapEnabled && state.spiritEquipIds.length) {
             setStatus('切换神识套...', 'run');
-            await equipLoadoutApply(state.equipSpiritSlot);
+            await equipSet(state.spiritEquipIds);
         }
         if (await tryAdvancedMeditateOnce()) {
             info = getSpiritInfo();
@@ -2103,9 +2023,9 @@
         setStatus('神识已到阈值，收功', 'run');
         await stopMeditationAndRefresh();
         // 切换回战斗套
-        if (state.equipSwapEnabled && state.equipCombatSlot) {
+        if (state.equipSwapEnabled && state.combatEquipIds.length) {
             setStatus('切回战斗套...', 'run');
-            await equipLoadoutApply(state.equipCombatSlot);
+            await equipSet(state.combatEquipIds);
         }
         return true;
     }
@@ -2812,24 +2732,8 @@
     }
 
     async function applyAutoRecoverySettings() {
+        // 所有恢复由脚本 activeRecover() 主动完成，不依赖游戏内置自动恢复设置。
         syncSettingsFromUi();
-        ['hp', 'mp'].forEach(function(id) {
-            var rows = document.querySelectorAll('#sortList_' + id + ' .sort-row');
-            var enabled = [];
-            rows.forEach(function(row) {
-                var cb = row.querySelector('.sort-cb');
-                if (cb && cb.checked) {
-                    var key = row.getAttribute('data-key');
-                    var map = { 'mp':'灵力', 'pill':'丹药', 'sect':'宗门', 'adpoint':'仙缘', 'stone':'灵石' };
-                    enabled.push(map[key] || key);
-                }
-            });
-            var val = enabled.join(',');
-            var key = 'lvSpiritCleaner.auto' + (id === 'hp' ? 'H' : 'M') + 'pPriority';
-            localStorage.setItem(key, val);
-            if (id === 'hp') state.autoHpPriority = val;
-            else state.autoMpPriority = val;
-        });
         setStatus('已保存恢复配置（脚本主动恢复）', 'run');
     }
 
@@ -4215,7 +4119,7 @@
             var foundId = getCurrentInscItemId();
             if (foundId) {
                 _inscItemId = String(foundId);
-                _inscItemName = getCurrentInscItemName() || '当前装备';
+                _inscItemName = '当前装备';
             } else {
                 setStatus('请先在游戏里打开装备的铭文页面', 'warn');
                 return;
@@ -4700,12 +4604,6 @@
             return;
         }
         await stopMeditationBeforeRun();
-                // 启动时切战斗套
-        if (state.equipSwapEnabled && state.equipCombatSlot) {
-            setStatus('切换战斗套...', 'run');
-            await equipLoadoutApply(state.equipCombatSlot);
-        }
-
         if (!running) return;
         setStatus('运行中', 'run');
         resetCleanStats();
@@ -5412,20 +5310,15 @@
     var SORT_CN_MAP = { 'mp': '灵力', 'pill': '丹药', 'sect': '宗门', 'adpoint': '仙缘', 'stone': '灵石' };
     var SORT_EN_MAP = { '灵力': 'mp', '丹药': 'pill', '宗门': 'sect', '仙缘': 'adpoint', '灵石': 'stone' };
 
-      function buildSortList(id, items) {
+    function buildSortList(id, items) {
         var current = (id === 'hp' ? state.autoHpPriority : state.autoMpPriority) || '';
         var enabled = current.split(',').map(function(s){return SORT_EN_MAP[s.trim()] || s.trim();}).filter(Boolean);
         var order = {};
         for (var i = 0; i < enabled.length; i++) order[enabled[i]] = i;
         var nextOrder = enabled.length;
-        var sortedItems = items.slice().sort(function(a,b){
-            var oa = order[a.key] !== undefined ? order[a.key] : 999;
-            var ob = order[b.key] !== undefined ? order[b.key] : 999;
-            return oa - ob;
-        });
         var html = '<div class="sort-list" id="sortList_' + id + '">';
-        for (var i = 0; i < sortedItems.length; i++) {
-            var it = sortedItems[i];
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i];
             var checked = order[it.key] !== undefined;
             var pos = checked ? order[it.key] : nextOrder++;
             html += '<div class="sort-row" data-key="' + it.key + '" data-order="' + pos + '">';
@@ -5710,7 +5603,6 @@
 
         var panel = document.createElement('div');
         panel.id = 'lvscPanel';
-                var loadoutNames = getGameLoadoutNames();
         panel.innerHTML =
             '<header><span id="lvscTitle"><span id="lvscTitleText">神识清理</span></span><span id="lvscHeaderActions"><button id="lvscCollapseBtn" title="收起成横幅">收起</button><button id="lvscClose" title="隐藏">×</button></span></header>' +
             '<div id="lvscStatus" data-tone="idle">待命</div>' +
@@ -5852,8 +5744,8 @@
             '<label class="lvsc-check"><input id="lvscCheckDaoyunBoost" type="checkbox">启动前检查道韵加成</label>' +
             '<label class="lvsc-check"><input id="lvscUseAdvancedMeditate" type="checkbox">优先仙缘高级冥想</label>' +
             '<div class="lvsc-section-title-row"><span>装备套装</span><label class="lvsc-check"><input id="lvscEquipSwapEnabled" type="checkbox">冥想前后自动切换</label></div>' +
-            '<div class="lvsc-grid2"><label>神识套方案<select id="lvscEquipSpiritSlot"><option value="1">' + loadoutNames[0] + '</option><option value="2">' + loadoutNames[1] + '</option></select></label><label>战斗套方案<select id="lvscEquipCombatSlot"><option value="1">' + loadoutNames[0] + '</option><option value="2">' + loadoutNames[1] + '</option></select></label></div>' +
-            '<div class="lvsc-help">勾上后冥想自动切神识套，收功切回战斗套。</div>' +
+            '<div class="lvsc-grid2"><button id="lvscCaptureSpiritSet">记录为神识套</button><button id="lvscCaptureCombatSet">记录为战斗套</button></div>' +
+            '<div class="lvsc-help">先穿好神识装点"记录为神识套"，再穿好战斗装点"记录为战斗套"。勾上后冥想前自动切神识套，收功后切回战斗套。</div>' +
             '</div>' +
             '<div class="lvsc-section">' +
             '<div class="lvsc-section-title">藏宝图</div>' +
@@ -6011,11 +5903,10 @@
             gameApi().get('/api/game/equipment/current').then(function (res) {
                 if (!res || res.code !== 200 || !Array.isArray(res.data)) return;
                 var items = res.data;
-                                window._lvscEquipItems = items;
                 // 追加"当前装备"选项（读取游戏打开的铭文界面）
                 var curOpt = document.createElement('option');
                 curOpt.value = '__current__';
-                curOpt.textContent = (getCurrentInscItemName() || '当前装备') + '（需打开铭文页）';
+                curOpt.textContent = '当前装备（需打开铭文页）';
                 if (saved === '__current__') curOpt.selected = true;
                 sel.appendChild(curOpt);
                 for (var ei = 0; ei < items.length; ei++) {
@@ -6036,7 +5927,7 @@
                 if (sel.value) {
                     if (sel.value === '__current__') {
                         _inscItemId = getCurrentInscItemId();
-                        _inscItemName = getCurrentInscItemName() || '当前装备';
+                        _inscItemName = '当前装备';
                     } else {
                         _inscItemId = sel.value;
                         _inscItemName = sel.options[sel.selectedIndex].textContent || '';
@@ -6044,21 +5935,26 @@
                 }
             }).catch(function () {});
         }
-                function getCurrentInscItemId() {
+        document.getElementById('lvscRefreshEquipment').onclick = refreshEquipmentSelect;
+        function getCurrentInscItemId() {
             var id = window._lastInscItemId || '';
             if (!id) {
-                var btns = document.querySelectorAll('[onclick*="drawTenInscription"], [onclick*="drawInscription"], [onclick*="showInscriptionPanel"]');
+                var btns = document.querySelectorAll('[onclick*="drawTenInscription"],[onclick*="drawInscription"],[onclick*="showInscriptionPanel"]');
                 for (var bi = 0; bi < btns.length; bi++) { var m = String(btns[bi].getAttribute('onclick') || '').match(/(\d+)/); if (m) { id = m[1]; break; } }
             }
             return id;
         }
-        function getCurrentInscItemName() {
-            var el = document.querySelector('.inscription-header-title');
-            if (el) return el.textContent.trim();
-            return '';
-        }
-        setTimeout(refreshEquipmentSelect, 1500);
-        document.getElementById('lvscRefreshEquipment').onclick = refreshEquipmentSelect;
+        document.getElementById('lvscInscriptionEquipment').onchange = function () {
+            if (this.value === '__current__') {
+                _inscItemId = getCurrentInscItemId();
+                _inscItemName = '当前装备';
+            } else {
+                _inscItemId = this.value;
+                _inscItemName = this.options[this.selectedIndex].textContent || '';
+            }
+            localStorage.setItem('lvSpiritCleaner.inscriptionEquipmentId', _inscItemId);
+            state.inscriptionQuality = 'any';
+        };
         setTimeout(refreshEquipmentSelect, 1500);
         document.getElementById('lvscInscriptionQuality').value = String(state.inscriptionQuality);
         document.getElementById('lvscInscriptionStat').value = String(state.inscriptionStat);
@@ -6353,10 +6249,8 @@
         // 装备套装
         document.getElementById('lvscEquipSwapEnabled').checked = state.equipSwapEnabled;
         document.getElementById('lvscEquipSwapEnabled').onchange = function () { state.equipSwapEnabled = this.checked; persistSetting('lvSpiritCleaner.equipSwapEnabled', this.checked); };
-        var eqSpirit = document.getElementById('lvscEquipSpiritSlot');
-        if (eqSpirit) { eqSpirit.value = String(state.equipSpiritSlot); eqSpirit.onchange = function() { state.equipSpiritSlot = Number(this.value); persistSetting('lvSpiritCleaner.equipSpiritSlot', String(this.value)); }; }
-        var eqCombat = document.getElementById('lvscEquipCombatSlot');
-        if (eqCombat) { eqCombat.value = String(state.equipCombatSlot); eqCombat.onchange = function() { state.equipCombatSlot = Number(this.value); persistSetting('lvSpiritCleaner.equipCombatSlot', String(this.value)); }; }
+        document.getElementById('lvscCaptureSpiritSet').onclick = function () { captureEquipSet('spiritEquipIds'); };
+        document.getElementById('lvscCaptureCombatSet').onclick = function () { captureEquipSet('combatEquipIds'); };
         onSel('lvscInscriptionQuality', 'inscriptionQuality', ['any', '凡纹', '灵纹', '宝纹', '仙纹', '神纹', '圣纹', '天纹']);
         // 铭文属性和最小值变化时需要同步 targets
         document.getElementById('lvscInscriptionStat').onchange = function () {
@@ -6800,11 +6694,6 @@
                 var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px';
                 btnRow.appendChild(actBtn('lvscSkillWashStartBtn', '开始洗练'));
                 btnRow.appendChild(stopBtn('lvscSkillWashStopBtn'));
-                // 洗炼石一键升品
-                var upgRow = el('div'); upgRow.style.cssText = 'display:flex;gap:6px;margin-top:4px';
-                upgRow.appendChild(actBtn('lvscWashStoneUpgradeStartBtn', '开始升品'));
-                upgRow.appendChild(stopBtn('lvscWashStoneUpgradeStopBtn'));
-                s.appendChild(upgRow);
                 s.appendChild(btnRow); s.appendChild(logDiv('lvscSkillWashLog'));
                 p.insertBefore(s, p.firstChild);
             })();
@@ -6933,7 +6822,6 @@
                     if (typeof autoTalismanRunning !== 'undefined' && autoTalismanRunning) items.push('批量用符');
                     if (typeof autoInscriptionRunning !== 'undefined' && autoInscriptionRunning) items.push('铭文洗练');
                     if (typeof autoCraftRunning !== 'undefined' && autoCraftRunning) items.push('炼制');
-                    if (typeof autoWashStoneUpgradeRunning !== 'undefined' && autoWashStoneUpgradeRunning) items.push('洗炼石升品');
                     if (typeof autoTreasureRunning !== 'undefined' && autoTreasureRunning) items.push('藏宝图');
                     if (typeof autoDisposeRunning !== 'undefined' && autoDisposeRunning) items.push('出售&分解');
                     if (typeof autoRefreshLuckRunning !== 'undefined' && autoRefreshLuckRunning) items.push('刷气运');
@@ -7093,10 +6981,6 @@
                 if (swStart) swStart.onclick = autoSkillWashLoop;
                 var swStop = document.getElementById('lvscSkillWashStopBtn');
                 if (swStop) swStop.onclick = stopSkillWash;
-                var upgStart = document.getElementById('lvscWashStoneUpgradeStartBtn');
-                if (upgStart) upgStart.onclick = autoUpgradeWashStonesLoop;
-                var upgStop = document.getElementById('lvscWashStoneUpgradeStopBtn');
-                if (upgStop) upgStop.onclick = stopWashStoneUpgrade;
                 var emApi = document.getElementById('lvscExploreModeApi');
                 var emSys = document.getElementById('lvscExploreModeSystem');
                 if (emApi) { emApi.checked = state.exploreMode === 'api'; emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
