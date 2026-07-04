@@ -4807,6 +4807,11 @@ function stopAutoPetHealTimer() {
             }
             var nightCheck = checkNightRestriction();
             if (nightCheck === 'meditate_until_night') {
+                // 等待入夜前，先切到神识套（方便冥想）
+                if (state.equipSwapEnabled && state.equipSpiritSlot) {
+                    setStatus('等待入夜，切换神识套...', 'run');
+                    await equipLoadoutApply(state.equipSpiritSlot);
+                }
                 var nightMedStarted = false, nightMedRetries = 0, lastIsNight = isGameNight();
                 while (running && !isGameNight()) {
                     var ni = getSpiritInfo();
@@ -4830,11 +4835,69 @@ function stopAutoPetHealTimer() {
                     }
                     await sleep(10000);
                 }
-                if (nightMedStarted) { setStatus('已入夜，收功', 'run'); await stopMeditationAndRefresh(); }
+                if (nightMedStarted) { setStatus('已入夜，收功', 'run'); await stopMeditationAndRefresh(); await sleep(500); }
+                // 入夜了，切到战斗套开始探索
+                if (state.equipSwapEnabled && state.equipCombatSlot) {
+                    setStatus('已入夜，切换战斗套...', 'run');
+                    await equipLoadoutApply(state.equipCombatSlot);
+                }
                 setStatus('入夜了，继续探索', 'run');
                 continue;
             }
             if (nightCheck) {
+                // 天亮了，从夜晚切换到了白天，切回神识套
+                if (state.equipSwapEnabled && state.equipSpiritSlot) {
+                    setStatus('天亮了，切换神识套...', 'run');
+                    await equipLoadoutApply(state.equipSpiritSlot);
+                }
+                await sleep(Math.max(30000, state.delayMs));
+                continue;
+            }
+            var nightCheck = checkNightRestriction();
+            if (nightCheck === 'meditate_until_night') {
+                // 等待入夜前，先切到神识套（方便冥想）
+                if (state.equipSwapEnabled && state.equipSpiritSlot) {
+                    setStatus('等待入夜，切换神识套...', 'run');
+                    await equipLoadoutApply(state.equipSpiritSlot);
+                }
+                var nightMedStarted = false, nightMedRetries = 0, lastIsNight = isGameNight();
+                while (running && !isGameNight()) {
+                    var ni = getSpiritInfo();
+                    if (ni.spirit < ni.maxSpirit && gameApi()) {
+                        if (!nightMedStarted) {
+                            setStatus('白天挂机冥想等入夜', 'run');
+                            var startNRes = await gameApi().post('/api/game/meditate/start', {});
+                            if (startNRes && startNRes.code === 200) {
+                                if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} }
+                                nightMedStarted = true; nightMedRetries = 0;
+                            } else {
+                                nightMedRetries++;
+                                if (nightMedRetries <= 3) { setStatus('冥想启动失败，重试(' + nightMedRetries + '/3)', 'warn'); await sleep(3000); continue; }
+                                setStatus('冥想启动失败超限，直接等待入夜', 'warn');
+                            }
+                        }
+                    } else if (nightMedStarted) {
+                        // 神识满了，停止冥想干等
+                        await stopMeditationAndRefresh();
+                        nightMedStarted = false;
+                    }
+                    await sleep(10000);
+                }
+                if (nightMedStarted) { setStatus('已入夜，收功', 'run'); await stopMeditationAndRefresh(); await sleep(500); }
+                // 入夜了，切到战斗套开始探索
+                if (state.equipSwapEnabled && state.equipCombatSlot) {
+                    setStatus('已入夜，切换战斗套...', 'run');
+                    await equipLoadoutApply(state.equipCombatSlot);
+                }
+                setStatus('入夜了，继续探索', 'run');
+                continue;
+            }
+            if (nightCheck) {
+                // 天亮了，切回神识套
+                if (state.equipSwapEnabled && state.equipSpiritSlot) {
+                    setStatus('天亮了，切换神识套...', 'run');
+                    await equipLoadoutApply(state.equipSpiritSlot);
+                }
                 await sleep(Math.max(30000, state.delayMs));
                 continue;
             }
