@@ -5671,7 +5671,7 @@ function stop(reason) {
             panel.style.bottom = 'auto';
         }
     }
-
+    function initSectionCollapse(){(document.querySelector('#lvscPanel')||document).addEventListener('click',function(ev){var row=ev.target.closest('.lvsc-section-title,.lvsc-section-title-row');if(!row)return;if(ev.target.closest('label')||ev.target.closest('input')||ev.target.closest('button')||ev.target.closest('select'))return;var sec=row.closest('.lvsc-section');if(!sec)return;var cs=[];sec.querySelectorAll(':scope>.lvsc-section-title,:scope>.lvsc-section-title-row').forEach(function(t){cs.push(t)});var idx=cs.indexOf(row);var nx=cs[idx+1];var els=[];var e=row.nextElementSibling;while(e&&e!==nx){els.push(e);e=e.nextElementSibling}var cp=row.classList.toggle('lvsc-title-collapsed');els.forEach(function(c){c.style.display=cp?'none':''})})}
     function restorePanelSize(panel) {
         var savedWidth = Number(localStorage.getItem('lvSpiritCleaner.panelWidth'));
         var savedHeight = Number(localStorage.getItem('lvSpiritCleaner.panelHeight'));
@@ -6371,7 +6371,13 @@ function stop(reason) {
             '.lvsc-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(238px,100%),1fr));gap:9px;align-items:start}',
             '.lvsc-section{display:grid;align-content:start;gap:8px;min-width:0;padding:9px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(255,255,255,.035)}',
             '.lvsc-section-title,.lvsc-section-title-row>span{font-weight:700;color:#dbb970}',
-            '.lvsc-section-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}',
+            '.lvsc-section-title-row{display:flex;align-items:center;gap:8px;min-width:0}',
+            '.lvsc-section>.lvsc-section-title,.lvsc-section-title-row{cursor:pointer;user-select:none}',
+            '.lvsc-section>.lvsc-section-title::before{content:"▼ ";font-size:10px}',
+            '.lvsc-section-title-row>span::before{content:"▼ ";font-size:10px;color:#dbb970}',
+            '.lvsc-section>.lvsc-section-title.lvsc-title-collapsed::before{content:"▶ "}',
+            '.lvsc-section-title-row.lvsc-title-collapsed>span::before{content:"▶ "}',
+            '.lvsc-section-title-row.lvsc-title-collapsed>:not(:first-child){display:none}',
             '.lvsc-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:8px}',
             '.lvsc-span2{grid-column:1 / -1}',
             '.lvsc-help{font-size:11px;color:#cfc6b2;opacity:.82;line-height:1.45}',
@@ -6760,6 +6766,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         restorePanelSize(panel);
         makePanelDraggable(panel);
         makePanelResizable(panel);
+        initSectionCollapse();
 
         document.getElementById('lvscReserve').value = String(state.reserve);
         document.getElementById('lvscDelay').value = String(state.delayMs);
@@ -7070,7 +7077,6 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
                 var id = getCraftItemId(r, state.craftType);
                 var name = getCraftItemName(r, state.craftType);
                 if (!id || !name) continue;
-                if (name.indexOf('涅槃') < 0 && name.indexOf('重生') < 0) continue;
                 sel.innerHTML += '<option value="' + id + '"' + (state.craftRecipeId === id ? ' selected' : '') + '>' + name + '</option>';
             }
             if (state.craftRecipeId && !sel.value) sel.value = state.craftRecipeId;
