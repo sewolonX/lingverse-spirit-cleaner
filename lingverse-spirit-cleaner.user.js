@@ -637,27 +637,20 @@ async function autoNirvanaLoop() {
 // 获取配方信息
 var recipes = await fetchRecipes('alchemy');
 var recipe = null;
-// 优先精确匹配涅槃重生丹（名称需同时包含"涅槃"和"重生"），避免匹配到九转还魂丹等
-for (var ri = 0; ri < recipes.length; ri++) {
-    var r = recipes[ri];
-    var name = (getCraftItemName(r, 'alchemy') || '').toLowerCase();
-    var id = String(getCraftItemId(r, 'alchemy') || '').toLowerCase();
-    if ((name.indexOf('涅槃') >= 0 && name.indexOf('重生') >= 0) || id.indexOf('nirvana_rebirth') >= 0) {
-        recipe = r;
-        state.nirvanaRecipeId = getCraftItemId(r, 'alchemy');
-        persistSetting('lvSpiritCleaner.nirvanaRecipeId', state.nirvanaRecipeId);
-        break;
+if (state.nirvanaRecipeId) {
+    for (var ri = 0; ri < recipes.length; ri++) {
+        if (getCraftItemId(recipes[ri], 'alchemy') === state.nirvanaRecipeId) {
+            recipe = recipes[ri];
+            break;
+        }
     }
 }
-// 兜底：用之前保存的配方ID
-if (!recipe && state.nirvanaRecipeId) {
-    for (var ri2 = 0; ri2 < recipes.length; ri2++) { 
-        if (getCraftItemId(recipes[ri2], 'alchemy') === state.nirvanaRecipeId) { 
-            recipe = recipes[ri2]; 
-            break; 
-        } 
+    if (!recipe) {
+        setStatus('未找到涅槃丹配方，请在自动tab涅槃面板选择配方', 'warn');
+        autoNirvanaRunning = false;
+        updateMeter();
+        return;
     }
-}
 // 如果还没找到，再放宽条件找包含涅槃/重生的（最后兜底）
 if (!recipe) {
     for (var ri = 0; ri < recipes.length; ri++) {
@@ -802,6 +795,7 @@ if (currentAfterCraft >= targetCount) {
 async function ensureNirvanaPill() {
     if (!gameApi()) return;
     if (autoNirvanaRunning) return;
+    if (!state.autoNirvanaPill && !state.nirvanaAutoTimer) return;
     // 如果定时炼制已开启且倒计时未结束，跳过（让定时器处理）
     if (state.nirvanaAutoTimer && state.nirvanaNextTimerTime > Date.now()) return;
     syncSettingsFromUi();
@@ -7076,6 +7070,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
                 var id = getCraftItemId(r, state.craftType);
                 var name = getCraftItemName(r, state.craftType);
                 if (!id || !name) continue;
+                if (name.indexOf('涅槃') < 0 && name.indexOf('重生') < 0) continue;
                 sel.innerHTML += '<option value="' + id + '"' + (state.craftRecipeId === id ? ' selected' : '') + '>' + name + '</option>';
             }
             if (state.craftRecipeId && !sel.value) sel.value = state.craftRecipeId;
@@ -7821,7 +7816,8 @@ setInterval(function() {
 (function() {
     var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
     var s = sec('涅槃重生丹', 'manual'), g = el('div', 'lvsc-grid2');
-    g.innerHTML = '<label>品质<select id="lvscNirvanaRarity"><option value="1">普通</option><option value="2">优良</option><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label>' +
+    g.innerHTML = '<label>配方<select id="lvscNirvanaRecipeSelect" style="min-width:140px"><option value="">点击刷新</option></select></label>' +
+    '<label>品质<select id="lvscNirvanaRarity"><option value="1">普通</option><option value="2">优良</option><option value="3">稀有</option><option value="4">史诗</option><option value="5">传说</option></select></label>' +
     '<label>目标数量<input id="lvscNirvanaQualityCount" type="number" min="1" max="999" value="' + (state.nirvanaQualityCount || 10) + '" style="width:70px"></label>' +
     '<label>每次炼制<input id="lvscNirvanaBatchSize" type="number" min="1" max="100" value="' + (state.nirvanaBatchSize || 10) + '" style="width:70px"></label>' +
     '<label class="lvsc-check" style="font-size:11px"><input id="lvscNirvanaAutoTimer" type="checkbox">定时炼制</label>' +
@@ -8467,6 +8463,27 @@ setInterval(function() {
                 if (window._renderAutoStatus) window._renderAutoStatus();
                 if (window._renderRunningMonitors) window._renderRunningMonitors();
 // 涅槃重生丹
+    var nirvRecipeSelect = document.getElementById('lvscNirvanaRecipeSelect');
+    if (nirvRecipeSelect) {
+        nirvRecipeSelect.onchange = function() {
+            state.nirvanaRecipeId = this.value;
+            persistSetting('lvSpiritCleaner.nirvanaRecipeId', this.value);
+        };
+        // 自动填充配方列表
+        setTimeout(async function() {
+            var recipes = await fetchRecipes('alchemy');
+            nirvRecipeSelect.innerHTML = '<option value="">选择配方</option>';
+            for (var ri = 0; ri < recipes.length; ri++) {
+                var r = recipes[ri];
+                var id = getCraftItemId(r, 'alchemy');
+                var name = getCraftItemName(r, 'alchemy');
+                if (!id || !name) continue;
+                if (name.indexOf('涅槃') < 0 && name.indexOf('重生') < 0) continue;
+                nirvRecipeSelect.innerHTML += '<option value="' + id + '"' + (state.nirvanaRecipeId === id ? ' selected' : '') + '>' + name + '</option>';
+            }
+            if (state.nirvanaRecipeId && !nirvRecipeSelect.value) nirvRecipeSelect.value = state.nirvanaRecipeId;
+        }, 2000);
+    }
 var nirvRarity = document.getElementById('lvscNirvanaRarity');
 if (nirvRarity) { nirvRarity.value = String(state.nirvanaRarity || 3); nirvRarity.onchange = function() { state.nirvanaRarity = Number(this.value); persistSetting('lvSpiritCleaner.nirvanaRarity', String(state.nirvanaRarity)); }; }
 var nirvBatchSize = document.getElementById('lvscNirvanaBatchSize');
