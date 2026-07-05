@@ -1167,7 +1167,7 @@ async function ensureNirvanaPill() {
         if (!state.autoMonthlyCard || !gameApi()) return;
         try {
             var info = await gameApi().get('/api/player/monthly-card/info?fresh=1&detail=1');
-            if (info && info.code === 200 && info.data && info.data.dailyClaimed === false) {
+                if (info && info.code === 200 && info.data && info.data.dailyClaimed == false) {
                 var r = await gameApi().post('/api/player/monthly-card/claim', {});
                 if (r && r.code === 200) {
                     var today = new Date().toDateString();
