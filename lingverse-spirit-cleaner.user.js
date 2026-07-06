@@ -579,11 +579,11 @@ function startAutoCraftTimer() {
     var autoTalismanRunning = false;
 
 function nirvanaLog(msg) {
-    var l = document.getElementById('lvscNirvanaLog'); 
-    if (!l) return; 
-    var t = new Date().toLocaleTimeString(); 
-    l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); 
-    if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); 
+    var l = document.getElementById('lvscNirvanaLog');
+    if (!l) return;
+    var t = new Date().toLocaleTimeString();
+    l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || '');
+    if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000);
 }
 function updateNextAutoNirvanaTime() {
     var now = Date.now();
@@ -607,8 +607,8 @@ function startAutoNirvanaTimer() {
         }
     }, 1000);
 }
-function stopNirvana() { 
-    autoNirvanaRunning = false; 
+function stopNirvana() {
+    autoNirvanaRunning = false;
     if (autoNirvanaTimerInterval) { clearInterval(autoNirvanaTimerInterval); autoNirvanaTimerInterval = null; }
     updateMeter();
     var btn = document.getElementById('lvscAutoNirvanaBtn');
@@ -621,19 +621,19 @@ async function autoNirvanaLoop() {
     if (autoNirvanaRunning) return;
     autoNirvanaRunning = true;
     syncSettingsFromUi();
-    if (!gameApi()) { 
-        setStatus('API不可用', 'warn'); 
-        autoNirvanaRunning = false; 
+    if (!gameApi()) {
+        setStatus('API不可用', 'warn');
+        autoNirvanaRunning = false;
         updateMeter();
-        return; 
+        return;
     }
-    
+
     var targetQuality = state.nirvanaQualityTarget || 5;
     var targetCount = state.nirvanaQualityCount || 10;
     var batchSize = state.nirvanaBatchSize || 10;
-    
+
     updateMeter();
-    
+
 // 获取配方信息
 var recipes = await fetchRecipes('alchemy');
 var recipe = null;
@@ -665,18 +665,18 @@ if (!recipe) {
         }
     }
 }
-    if (!recipe) { 
-        setStatus('未找到涅槃丹配方', 'warn'); 
-        autoNirvanaRunning = false; 
+    if (!recipe) {
+        setStatus('未找到涅槃丹配方', 'warn');
+        autoNirvanaRunning = false;
         updateMeter();
-        return; 
+        return;
     }
-    
+
     var name = getCraftItemName(recipe, 'alchemy');
     var QUAL_NAMES = ['','普通','优良','稀有','史诗','传说'];
     nirvanaLog('开始炼制: ' + name + ' | 目标' + targetCount + '个' + QUAL_NAMES[targetQuality]);
     setStatus('开始炼制: ' + name + ' 目标' + targetCount, 'run');
-    
+
     // 检查当前背包中达标数量
     var invRes = await gameApi().get('/api/game/inventory');
     var current = 0;
@@ -690,7 +690,7 @@ if (!recipe) {
             }
         }
     }
-    
+
 if (current >= targetCount) {
     nirvanaLog('已有 ' + current + ' 件达标，尝试使用');
     var used = await useNirvanaPills(targetCount);
@@ -733,7 +733,7 @@ var needCraft = targetCount - current;
         }
 
     var actualCount = Number(craftRes.data && craftRes.data.craftCount) || batchCount;
-    
+
     // 从 message 字符串解析品质分布
     var qualityTally = {};
     var msg = (craftRes.data && craftRes.data.message) || '';
@@ -745,12 +745,12 @@ var needCraft = targetCount - current;
             if (pair) qualityTally[pair[1]] = (qualityTally[pair[1]] || 0) + parseInt(pair[2], 10);
         }
     }
-    
+
     var parts = [];
     for (var qk in qualityTally) { if (qualityTally.hasOwnProperty(qk)) parts.push(qk + '×' + qualityTally[qk]); }
     nirvanaLog('炼+' + actualCount + ' | 品质:' + (parts.length ? parts.join(' ') : '未知') + ' | 还需' + needCraft + '个传说');
     setStatus('炼制: ' + name + ' 还需' + needCraft + '个传说', 'run');
-    
+
     // 炼制后重新检查背包达标数量
     var invRes2 = await gameApi().get('/api/game/inventory');
     var currentAfterCraft = 0;
@@ -764,7 +764,7 @@ var needCraft = targetCount - current;
             }
         }
     }
-    
+
 if (currentAfterCraft >= targetCount) {
     nirvanaLog('已达 ' + currentAfterCraft + ' 件传说品质，开始使用...');
     var used = await useNirvanaPills(targetCount);
@@ -776,12 +776,12 @@ if (currentAfterCraft >= targetCount) {
     if (state.nirvanaAutoTimer) updateNextAutoNirvanaTime();
     break;
 }
-    
+
     // 更新还需数量
     needCraft = Math.max(0, targetCount - currentAfterCraft);
     await sleep(600);
 }
-    
+
     autoNirvanaRunning = false;
     updateMeter();
     var btn = document.getElementById('lvscAutoNirvanaBtn');
@@ -1160,7 +1160,7 @@ async function ensureNirvanaPill() {
     async function claimMonthlyCard() {
         if (!state.autoMonthlyCard || !gameApi()) return;
         try {
-            var info = await gameApi().get('/api/player/monthly-card/info?fresh=1&detail=1');
+            var info = await gameApi().post('/api/player/monthly-card/claim', {});
                 if (info && info.code === 200 && info.data && info.data.dailyClaimed == false) {
                 var r = await gameApi().post('/api/player/monthly-card/claim', {});
                 if (r && r.code === 200) {
@@ -4853,28 +4853,59 @@ for (var i = 0; i < invRes.data.length; i++) {
         return [];
     }
 
-    async function autoInscriptionLoop() {
-        if (autoInscriptionRunning) return;
-        if (running || autoTreasureRunning) {
-            setStatus('清理或刷图运行中，不能同时刷铭文', 'warn');
-            return;
-        }
-        syncSettingsFromUi();
-        // 下拉选了"当前装备" → 读游戏铭文弹窗里的 itemId
-        if (_inscItemId === '__current__') {
-            var foundId = getCurrentInscItemId();
-            if (foundId) {
-                _inscItemId = String(foundId);
-                _inscItemName = getCurrentInscItemName() || '当前装备';
-            } else {
-                setStatus('请先在游戏里打开装备的铭文页面', 'warn');
-                return;
+        function getCurrentInscItemId() {
+            var id = window._lastInscItemId || '';
+            if (!id) {
+                var titleEl = document.querySelector('.inscription-header-title');
+                if (titleEl) {
+                    var container = titleEl.closest('[class*="inscription"], [class*="modal"], [class*="dialog"], [class*="panel"], [class*="draw"]');
+                    if (!container && titleEl.parentElement) container = titleEl.parentElement.parentElement;
+                    if (container) {
+                        var insideBtns = container.querySelectorAll('[onclick]');
+                        for (var i = 0; i < insideBtns.length; i++) {
+                            var oc2 = String(insideBtns[i].getAttribute('onclick') || '');
+                            var mm2 = oc2.match(/(\d+)/);
+                            if (mm2) { id = mm2[1]; break; }
+                        }
+                    }
+                }
+                if (!id) {
+                    var btns = document.querySelectorAll('[onclick]');
+                    for (var bi = 0; bi < btns.length; bi++) {
+                        var oc = String(btns[bi].getAttribute('onclick') || '');
+                        if (oc.indexOf('inscri') >= 0 || oc.indexOf('Inscri') >= 0 || oc.indexOf('draw') >= 0) {
+                            var mm = oc.match(/(\d+)/);
+                            if (mm) { id = mm[1]; break; }
+                        }
+                    }
+                }
             }
+            return id;
         }
-        // 兜底：如果 _inscItemId 没设置，直接从 DOM 读
-        if (!_inscItemId) {
-            var selEl = document.getElementById('lvscInscriptionEquipment');
-            if (selEl && selEl.value) {
+
+        function getCurrentInscItemName() {
+            var el = document.querySelector('.inscription-header-title');
+            if (el) return el.textContent.trim();
+            return '';
+        }
+
+    async function autoInscriptionLoop() {
+
+        if (autoInscriptionRunning) return;
+        syncSettingsFromUi();
+        // 每次启动都从下拉框重新读取选中的装备
+        var selEl = document.getElementById('lvscInscriptionEquipment');
+        if (selEl && selEl.value) {
+            if (selEl.value === '__current__') {
+                var foundId = getCurrentInscItemId();
+                if (foundId) {
+                    _inscItemId = String(foundId);
+                    _inscItemName = getCurrentInscItemName() || '当前装备';
+                } else {
+                    setStatus('请先在游戏里打开装备的铭文页面', 'warn');
+                    return;
+                }
+            } else {
                 _inscItemId = selEl.value;
                 _inscItemName = selEl.options[selEl.selectedIndex].textContent || '';
             }
@@ -6849,19 +6880,6 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
                 }
             }).catch(function () {});
         }
-                function getCurrentInscItemId() {
-            var id = window._lastInscItemId || '';
-            if (!id) {
-                var btns = document.querySelectorAll('[onclick*="drawTenInscription"], [onclick*="drawInscription"], [onclick*="showInscriptionPanel"]');
-                for (var bi = 0; bi < btns.length; bi++) { var m = String(btns[bi].getAttribute('onclick') || '').match(/(\d+)/); if (m) { id = m[1]; break; } }
-            }
-            return id;
-        }
-        function getCurrentInscItemName() {
-            var el = document.querySelector('.inscription-header-title');
-            if (el) return el.textContent.trim();
-            return '';
-        }
         // 登录页跳过，防止API 401触发重定向死循环
         if (location.pathname !== '/' && location.pathname !== '') {
             setTimeout(refreshEquipmentSelect, 1500);
@@ -6998,6 +7016,17 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('lvscAutoTrialBtn').onclick = toggleAutoTrial;
         document.getElementById('lvscAutoTreasureBtn').onclick = toggleAutoTreasure;
         document.getElementById('lvscAutoInscriptionBtn').onclick = toggleAutoInscription;
+        document.getElementById('lvscInscriptionEquipment').onchange = function () {
+            if (this.value && this.value !== '__current__') {
+                _inscItemId = this.value;
+                _inscItemName = this.options[this.selectedIndex].textContent || '';
+                localStorage.setItem('lvSpiritCleaner.inscriptionEquipmentId', this.value);
+            } else if (this.value === '__current__') {
+                _inscItemId = '__current__';
+                _inscItemName = '当前装备';
+                localStorage.setItem('lvSpiritCleaner.inscriptionEquipmentId', '__current__');
+            }
+        };
         document.getElementById('lvscSelfFightBtn').onclick = function () {
             syncSettingsFromUi();
             handleSelfFightEvent(true);
@@ -7751,7 +7780,7 @@ setInterval(function() {
         } else {
             reason = '即将执行...';
         }
-        
+
         if (reason !== '即将执行...') {
             cdEl.textContent = reason;
             // 3秒后恢复显示
@@ -7837,7 +7866,7 @@ setInterval(function() {
             (function() {
                 var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
                 var s = sec('气运 & 突破');
-                s.innerHTML = '<div class="lvsc-grid2"><label style="font-size:11px">最低气运<input id="lvscMinLuck" type="number" min="1" max="10" value="' + state.minLuck + '" style="height:24px"></label><label style="font-size:11px">消耗<select id="lvscLuckRefreshMethod"><option value="stone">灵石</option><option value="ad">仙缘</option></select></label><span id="lvscLuckNow" style="font-size:11px;color:#dbb970;line-height:28px">当前: ?</span><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoMaintainLuck" type="checkbox">自动维持气运（低于目标自动刷到达标）</label></div><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoBreakthrough" type="checkbox">自动突破</label><label class="lvsc-check" style="font-size:11px"><input id="lvscAutoOriginRepair" type="checkbox">自动修复本源</label></div>';
+                s.insertAdjacentHTML('beforeend', '<div class=\"lvsc-grid2\"><label style=\"font-size:11px\">最低气运<input id=\"lvscMinLuck\" type=\"number\" min=\"1\" max=\"10\" value=\"' + state.minLuck + '\" style=\"height:24px\"></label><label style=\"font-size:11px\">消耗<select id=\"lvscLuckRefreshMethod\"><option value=\"stone\">灵石</option><option value=\"ad\">仙缘</option></select></label><span id=\"lvscLuckNow\" style=\"font-size:11px;color:#dbb970;line-height:28px\">当前: ?</span><label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAutoMaintainLuck\" type=\"checkbox\">自动维持气运（低于目标自动刷到达标）</label></div><label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAutoBreakthrough\" type=\"checkbox\">自动突破</label><label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAutoOriginRepair\" type=\"checkbox\">自动修复本源</label></div>');
                 p.insertBefore(s, p.firstChild);
             })();
             // ---------- 出售 & 分解 → auto ----------
@@ -8202,7 +8231,7 @@ setInterval(function() {
                 var ep = document.querySelector('[data-tab-panel="explore"]'); if (!ep) return;
                 var s = sec('探索模式');
                 s.innerHTML = '<div style="display:flex;gap:6px;align-items:center"><label style="font-size:11px"><input id="lvscExploreModeApi" type="radio" name="lvscExploreMode" value="api"> 脚本API（自定义倍率/事件处理）</label><label style="font-size:11px"><input id="lvscExploreModeSystem" type="radio" name="lvscExploreMode" value="system"> 系统自带（游戏内置自动探索）</label></div>';
-                ep.insertBefore(s, ep.firstChild);
+                ep.appendChild(s);
             })();
 
             // 高级冥想夏季选项——紧跟在后面
@@ -8224,7 +8253,7 @@ setInterval(function() {
                 var s = sec('已开启', 'auto');
                 var tagsDiv = el('div'); tagsDiv.id = 'lvscAutoStatusTags'; tagsDiv.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;font-size:11px';
                 s.appendChild(tagsDiv);
-                ep.insertBefore(s, ep.firstChild);
+ep.insertBefore(s, ep.firstChild);
                 window._renderAutoStatus = function() {
                     var td = document.getElementById('lvscAutoStatusTags'); if (!td) return;
                     var items = [];
@@ -8571,8 +8600,8 @@ window._lvscAutoLogin = function() {
                 ei.value = e; pi.value = pw;
                 ei.dispatchEvent(new Event('input', {bubbles:true}));
                 pi.dispatchEvent(new Event('input', {bubbles:true}));
-                setTimeout(function() { 
-                    btn.click(); 
+                setTimeout(function() {
+                    btn.click();
                     // 登录成功后重置自动刷新计时，避免立即刷新
                     try { localStorage.setItem('lvSpiritCleaner.lastReloadTime', String(Date.now())); } catch(_) {}
                 }, 500);
@@ -8606,7 +8635,7 @@ window._lvscAutoLogin = function() {
         }
     }
     function waitForGame() {
-        if (document.body && (window.api || window._lastPlayerData || document.getElementById('exploreBtn') || location.pathname === '/' || location.pathname === '')) {
+        if (document.body && (window.api || window._lastPlayerData || document.getElementById('exploreBtn') || location.pathname === '/' || location.pathname === '' || location.pathname === '/game.html')) {
             try { buildPanel(); } catch (err) { console.warn('[LingVerse] 面板加载失败，2秒后重试:', err); setTimeout(waitForGame, 2000); return; }
             // 刷新后自动恢复运行状态（冥想中不打断，转监测等收功）
             var wasRunning = localStorage.getItem('lvSpiritCleaner.wasRunning') === '1';
