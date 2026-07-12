@@ -9154,7 +9154,7 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
             } else {
                 // 清空搜索：清除所有搜索隐藏标记，恢复原活跃tab和折叠状态
                 document.querySelectorAll('.lvsc-search-hidden').forEach(function(el) { el.classList.remove('lvsc-search-hidden'); });
-                var restoreTab = _searchSavedTab || localStorage.getItem('lvSpiritCleaner.activeTab') || 'explore';
+                var restoreTab = localStorage.getItem('lvSpiritCleaner.activeTab') || _searchSavedTab || 'explore';
                 allPanels.forEach(function(p) { p.classList.toggle('lvsc-active', p.getAttribute('data-tab-panel') === restoreTab); });
                 _searchSavedTab = null;
                 document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
