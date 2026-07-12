@@ -9226,15 +9226,8 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
     };
         var _searchInput = document.getElementById('lvscSearchFunc');
     if (_searchInput) {
-        var _searchSavedTab = null;
         _searchInput.addEventListener('input', function() {
             var q = this.value.trim().toLowerCase();
-            var allPanels = document.querySelectorAll('.lvsc-tab-panel');
-            // 首次按键时记住当前tab（此时尚未展开所有tab）
-            if (_searchSavedTab === null) {
-                allPanels.forEach(function(p) { if (p.classList.contains('lvsc-active')) _searchSavedTab = p.getAttribute('data-tab-panel'); });
-                if (!_searchSavedTab) _searchSavedTab = localStorage.getItem('lvSpiritCleaner.activeTab') || 'explore';
-            }
             // 清除上一次搜索的隐藏标记 + 清除折叠class（只动class，不动 inline style）
             document.querySelectorAll('.lvsc-search-hidden').forEach(function(el) { el.classList.remove('lvsc-search-hidden'); });
             document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
@@ -9248,8 +9241,6 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
                 }
             });
             if (q) {
-                // 搜索时展开所有tab面板，跨tab结果都可见
-                allPanels.forEach(function(p) { p.classList.add('lvsc-active'); });
                 // 按区块文字匹配（标题行 + 内容区所有文字，big-cat 也要收内容）
                 document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
                     var blockText = r.textContent || '';
@@ -9282,11 +9273,8 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
                     if (anyVisible) bigCat.classList.remove('lvsc-search-hidden');
                 });
             } else {
-                // 清空搜索：清除所有搜索隐藏标记，恢复原活跃tab和折叠状态
+                // 清空搜索：清除所有搜索隐藏标记，恢复折叠状态
                 document.querySelectorAll('.lvsc-search-hidden').forEach(function(el) { el.classList.remove('lvsc-search-hidden'); });
-                var restoreTab = localStorage.getItem('lvSpiritCleaner.activeTab') || _searchSavedTab || 'explore';
-                allPanels.forEach(function(p) { p.classList.toggle('lvsc-active', p.getAttribute('data-tab-panel') === restoreTab); });
-                _searchSavedTab = null;
                 document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
                     var v = localStorage.getItem('lvscCS_' + r.textContent.trim());
                     if (v !== '0') {
