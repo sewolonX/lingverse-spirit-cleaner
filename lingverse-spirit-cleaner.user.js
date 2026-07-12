@@ -9112,6 +9112,11 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
                 if (_bt) { _bt.checked = state.autoBreakthrough; _bt.onchange = function() { state.autoBreakthrough = this.checked; persistSetting('lvSpiritCleaner.autoBreakthrough', this.checked); }; }
                 var _or = document.getElementById('lvscAutoOriginRepair');
                 if (_or) { _or.checked = state.autoOriginRepair; _or.onchange = function() { state.autoOriginRepair = this.checked; persistSetting('lvSpiritCleaner.autoOriginRepair', this.checked); }; }
+                // 系统自带探索模式
+                var _emApi = document.getElementById('lvscExploreModeApi');
+                var _emSys = document.getElementById('lvscExploreModeSystem');
+                if (_emApi) { _emApi.checked = state.exploreMode === 'api'; _emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
+                if (_emSys) { _emSys.checked = state.exploreMode === 'system'; _emSys.onchange = function() { if (this.checked) { state.exploreMode = 'system'; persistSetting('lvSpiritCleaner.exploreMode', 'system'); } }; }
                 // 珍宝阁
                 var _pi = document.getElementById('lvscPavilionItem');
                 if (_pi) _pi.onchange = function() { state.pavilionItemId = this.value; state.pavilionItemName = this.options[this.selectedIndex].textContent || ''; persistSetting('lvSpiritCleaner.pavilionItemId', state.pavilionItemId); persistSetting('lvSpiritCleaner.pavilionItemName', state.pavilionItemName); };
