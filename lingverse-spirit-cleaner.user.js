@@ -118,6 +118,7 @@
     function persistRunning(v) { try { localStorage.setItem('lvSpiritCleaner.wasRunning', v ? '1' : '0'); } catch(_) {} }
     var autoTrialRunning = false;
     var autoTreasureRunning = false;
+    var autoMysteryBoxRunning = false;
     var autoInscriptionRunning = false;
     var autoCraftRunning = false;
     var autoCraftTimerInterval = null;
@@ -1604,6 +1605,8 @@ async function ensureNirvanaPill() {
         hireMode: localStorage.getItem('lvSpiritCleaner.hireMode') || 'cheapest',
         hireRetryLimit: readNumber('lvSpiritCleaner.hireRetryLimit', 2),
         hireMaxFee: readNumber('lvSpiritCleaner.hireMaxFee', 0),
+        autoMysteryBox: localStorage.getItem('lvSpiritCleaner.autoMysteryBox') === '1',
+        noMasterProtector: localStorage.getItem('lvSpiritCleaner.noMasterProtector') === '1',
 
         // === 战斗恢复 ===
         autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
@@ -1611,6 +1614,8 @@ async function ensureNirvanaPill() {
         autoPetHealInterval: readNumber('lvSpiritCleaner.autoPetHealInterval', 30000),
         aggressiveMode: localStorage.getItem('lvSpiritCleaner.aggressiveMode') === '1',
         selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
+        noCrossRealmFight: localStorage.getItem('lvSpiritCleaner.noCrossRealmFight') === '1',
+        noCrossRealmGap: readNumber('lvSpiritCleaner.noCrossRealmGap', 0),
         autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
         autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
@@ -3395,6 +3400,19 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             };
         }
 
+        if (state.noCrossRealmFight) {
+            var playerRealm = Number(p.realmLevel || 0);
+            var monsterRealm = Number(encounterData.monsterRealmLevel || 0);
+            var gap = Number(state.noCrossRealmGap || 0);
+            if (monsterRealm - playerRealm >= gap) {
+                return {
+                    safe: false,
+                    reason: '妖兽境界过高（不越阶：差距' + (monsterRealm - playerRealm) + ' ≥ 上限' + gap + '）',
+                    summary: '自身境界 ' + playerRealm + '；妖兽境界 ' + monsterRealm + '；允许越阶上限 ' + gap
+                };
+            }
+        }
+
         if (monsterPower > playerPower * margin) {
             return {
                 safe: false,
@@ -3463,6 +3481,10 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             var decision = encounterSelfFightDecision(encounterData);
             if (!decision.safe) {
                 setStatus('不自战：' + decision.reason, manual ? 'warn' : 'run');
+                if (!manual && state.autoHireCheapest) {
+                    busyEvent = false;
+                    return await handleEncounterEvent();
+                }
                 return false;
             }
 
@@ -4246,6 +4268,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         (list || []).forEach(function (p) {
             var isDead = !!p.isDead || Number(p.hp || 0) <= 0;
             if (p.role === 'masterBody' || p.role === 'masterIncarnation') {
+                if (state.noMasterProtector) return;
                 if (isDisabledMasterProtector(p)) return;
                 candidates.push({
                     id: p.playerId,
@@ -5278,6 +5301,127 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             return;
         }
         autoTreasureLoop();
+    }
+    
+    var MYSTERY_BOX_LOG_KEY = 'lvSpiritCleaner.mysteryBoxLog';
+    var MYSTERY_BOX_OPENED_KEY = 'lvSpiritCleaner.mysteryBoxOpenedToday';
+    var MYSTERY_BOX_DATE_KEY = 'lvSpiritCleaner.mysteryBoxLastDate';
+
+    function getMysteryBoxLog() {
+        try { return JSON.parse(localStorage.getItem(MYSTERY_BOX_LOG_KEY) || '[]'); } catch(_) { return []; }
+    }
+    function saveMysteryBoxLog(log) {
+        try { localStorage.setItem(MYSTERY_BOX_LOG_KEY, JSON.stringify(log)); } catch(_) {}
+    }
+    function appendMysteryBoxLog(entry) {
+        var log = getMysteryBoxLog();
+        log.push(entry);
+        saveMysteryBoxLog(log);
+        renderMysteryBoxLog();
+    }
+    function renderMysteryBoxLog() {
+        var el = document.getElementById('lvscMysteryBoxLog');
+        if (!el) return;
+        var log = getMysteryBoxLog();
+        if (!log.length) { el.textContent = '暂无记录'; return; }
+        el.innerHTML = log.map(function(e) {
+            return '<span style=\"color:#8f846f\">' + e.time + '</span> ' + e.text;
+        }).join('\n');
+        el.scrollTop = el.scrollHeight;
+    }
+
+    function mysteryBoxOpenedToday() {
+        var d = localStorage.getItem(MYSTERY_BOX_DATE_KEY);
+        var today = new Date().toLocaleDateString('zh-CN');
+        return d === today && localStorage.getItem(MYSTERY_BOX_OPENED_KEY) === '10';
+    }
+
+    async function openMysteryBoxOnce() {
+        if (!gameApi()) return null;
+        var res = await gameApi().post('/api/game/mystery-box/open', {});
+        return res;
+    }
+
+    async function toggleAutoMysteryBox() {
+        if (autoMysteryBoxRunning) {
+            autoMysteryBoxRunning = false;
+            updateMeter();
+            setStatus('自动秘匣已停止', 'idle');
+            var sb = document.getElementById('lvscMysteryBoxStopBtn'); if (sb) sb.style.display = 'none';
+            var st = document.getElementById('lvscMysteryBoxStartBtn'); if (st) st.style.display = '';
+            var ss = document.getElementById('lvscMysteryBoxStatus'); if (ss) ss.textContent = '';
+            return;
+        }
+        if (!state.autoMysteryBox) {
+            setStatus('请先勾选「每天自动开启10次造化秘匣」', 'warn');
+            return;
+        }
+        autoMysteryBoxLoop();
+    }
+
+    async function autoMysteryBoxLoop() {
+        autoMysteryBoxRunning = true;
+        updateMeter();
+        var st = document.getElementById('lvscMysteryBoxStartBtn'); if (st) st.style.display = 'none';
+        var sb = document.getElementById('lvscMysteryBoxStopBtn'); if (sb) sb.style.display = '';
+        var ss = document.getElementById('lvscMysteryBoxStatus'); if (ss) ss.textContent = '开启中...';
+        setStatus('自动秘匣启动', 'run');
+
+        var today = new Date().toLocaleDateString('zh-CN');
+        var lastDate = localStorage.getItem(MYSTERY_BOX_DATE_KEY);
+        if (lastDate !== today) {
+            localStorage.setItem(MYSTERY_BOX_DATE_KEY, today);
+            localStorage.setItem(MYSTERY_BOX_OPENED_KEY, '0');
+            appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#dbb970\">━━━ ' + today + ' ━━━</span>' });
+        }
+
+        var opened = parseInt(localStorage.getItem(MYSTERY_BOX_OPENED_KEY) || '0', 10);
+        var RAR = ['','普通','优良','稀有','史诗','传说'];
+
+        for (var i = opened; i < 10 && autoMysteryBoxRunning; i++) {
+            setStatus('自动秘匣 ' + (i+1) + '/10', 'run');
+            try {
+                var res = await openMysteryBoxOnce();
+                if (!res || res.code !== 200 || !res.data) {
+                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#ff6b6b\">✗ 第' + (i+1) + '次失败：' + ((res && res.message) || '未知错误') + '</span>' });
+                    if (ss) ss.textContent = '开启失败，已停止';
+                    break;
+                }
+                var d = res.data;
+                if (!d.success) {
+                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#ff6b6b\">✗ 第' + (i+1) + '次：' + (d.reason || '开启失败') + '</span>' });
+                    if (ss) ss.textContent = '已停止（' + (d.reason || '失败') + '）';
+                    break;
+                }
+                var item = d.item;
+                var rName = RAR[item.rarity] || '未知';
+                var colorMap = {1:'#aaa',2:'#6bc9a0',3:'#5b9bd5',4:'#c080e0',5:'#dbb970'};
+                var color = colorMap[item.rarity] || '#cfc6b2';
+                appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:' + color + '\">[' + rName + ']</span> ' + (item.name || '未知物品') });
+
+                var newOpened = parseInt(d.openedToday || (i+1), 10);
+                localStorage.setItem(MYSTERY_BOX_OPENED_KEY, String(newOpened));
+                if (newOpened >= 10) {
+                    if (ss) ss.textContent = '今日秘匣已开启（10/10）';
+                    break;
+                }
+                if (ss) ss.textContent = '已开 ' + newOpened + '/10';
+                await sleep(800);
+            } catch(err) {
+                console.warn('[MysteryBox] error', err);
+                appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#ff6b6b\">✗ 第' + (i+1) + '次异常：' + (err.message || err) + '</span>' });
+                if (ss) ss.textContent = '异常，已停止';
+                break;
+            }
+        }
+
+        autoMysteryBoxRunning = false;
+        updateMeter();
+        if (sb) sb.style.display = 'none';
+        if (st) st.style.display = '';
+        var finalOpened = parseInt(localStorage.getItem(MYSTERY_BOX_OPENED_KEY) || opened, 10);
+        if (finalOpened >= 10 && ss) ss.textContent = '今日秘匣已开启（10/10）';
+        setStatus('自动秘匣完成', 'idle');
     }
 
     function getMonitorTargetSpirit(info) {
@@ -6759,7 +6903,7 @@ function stop(reason) {
 '<label class=\"lvsc-check\"><input id=\"lvscCheckDaoyunBoost\" type=\"checkbox\">启动前检查道韵加成</label>' +
 '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAggressiveMode\" type=\"checkbox\">⚔ 激进模式（遇怪直接打，不找护道，更快但更险）</label>' +
 '<div class=\"lvsc-section-title-row\"><span>模式</span></div>' +
-'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
+'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API(推荐)</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
 '</div>' +
             // ⑶遭遇 → 妖兽/护道/商人
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>遭遇</span></div>' +
@@ -6769,6 +6913,7 @@ function stop(reason) {
             '<button id="lvscSelfFightBtn">检查并自战</button>' +
             '</div>' +
             '<label class="lvsc-check"><input id="lvscAutoSelfFightWeak" type="checkbox">弱怪自战</label>' +
+            '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap"><label class="lvsc-check"><input id="lvscNoCrossRealmFight" type="checkbox">不越阶战斗</label><span style="font-size:11px">允许越阶上限</span><input id="lvscNoCrossRealmGap" type="number" min="0" step="1" style="width:50px;height:22px;font-size:11px;background:rgba(0,0,0,.3);color:#cfc6b2;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:0 4px"><span style="font-size:11px">个小境界（0=同境也不打）</span></div>' +
             '<label class="lvsc-check"><input id="lvscAutoHire" type="checkbox">无法自战时自动雇最低价护道</label>' +
             '<div class="lvsc-help">只按战力数值判断：妖兽战力 ≤ 自身战力 × 战力倍率时自战。</div>' +
             '<div class="lvsc-section-title-row" style="font-size:12px;color:#dbb970;margin-top:8px"><span>护道</span></div>' +
@@ -6777,6 +6922,7 @@ function stop(reason) {
             '<label>灵石上限<input id="lvscHireMaxFee" type="number" min="0" step="1"></label>' +
             '<label>护道重试上限<input id="lvscHireRetryLimit" type="number" min="1" max="10" step="1"></label>' +
             '</div>' +
+            '<label class="lvsc-check"><input id="lvscNoMasterProtector" type="checkbox">不使用师父护道</label>' +
             '<div class="lvsc-section-title-row" style="font-size:12px;color:#dbb970;margin-top:8px"><span>商人</span></div>' +
             '<div class="lvsc-grid2">' +
             '<label>商人策略<select id="lvscMerchantMode"><option value="legend">传说才买</option><option value="custom">按条件购买</option><option value="leave">直接离去</option></select></label>' +
@@ -7003,6 +7149,14 @@ function stop(reason) {
             '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAutoLoginEnabled\" type=\"checkbox\"' + (localStorage.getItem('lvSpiritCleaner.autoLoginEnabled') === '1' ? ' checked' : '') + '>启用自动登录</label>' +
             '</div>' +
             '<div style=\"font-size:10px;color:#8f846f;margin-top:4px\">密码仅保存在浏览器本地，不会上传到任何服务器。</div>' +
+            '<div class=\"lvsc-section-title-row\" style=\"margin-top:6px\"><span>自动秘匣</span></div>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscAutoMysteryBox\" type=\"checkbox\">每天自动开启10次造化秘匣</label>' +
+            '<div style=\"display:flex;gap:6px;align-items:center\">' +
+            '<button id=\"lvscMysteryBoxStartBtn\" style=\"height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;border-radius:6px;cursor:pointer;font-weight:700\">开始秘匣</button>' +
+            '<button id=\"lvscMysteryBoxStopBtn\" class=\"lvsc-stop-btn\" style=\"height:32px;display:none\">停止</button>' +
+            '<span id=\"lvscMysteryBoxStatus\" style=\"font-size:11px;color:#dbb970;margin-left:4px\"></span>' +
+            '</div>' +
+            '<div id=\"lvscMysteryBoxLog\" style=\"min-height:40px;max-height:160px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px;font-family:Consolas,monospace\">等待执行...</div>' +
             '</div>' +
             '</div>' +
             // ===== 其他 tab =====
@@ -7080,6 +7234,9 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('lvscHireRetryLimit').value = String(state.hireRetryLimit);
         document.getElementById('lvscHireMode').value = String(state.hireMode);
         document.getElementById('lvscHireMaxFee').value = String(state.hireMaxFee);
+        document.getElementById('lvscNoMasterProtector').checked = state.noMasterProtector;
+        document.getElementById('lvscAutoMysteryBox').checked = state.autoMysteryBox;
+        renderMysteryBoxLog();
         document.getElementById('lvscKeepMultiplier').checked = state.keepCurrentMultiplier;
         document.getElementById('lvscMerchantMode').value = String(state.merchantMode);
         document.getElementById('lvscMerchantKeyword').value = String(state.merchantKeyword);
@@ -7091,6 +7248,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('autoPetHeal').checked = state.autoPetHeal;
         document.getElementById('autoPetHealInterval').value = String(state.autoPetHealInterval);
         document.getElementById('lvscSelfFightMargin').value = String(state.selfFightMargin);
+        document.getElementById('lvscNoCrossRealmFight').checked = state.noCrossRealmFight;
+        document.getElementById('lvscNoCrossRealmGap').value = String(state.noCrossRealmGap);
         document.getElementById('lvscAutoHire').checked = state.autoHireCheapest;
         document.getElementById('lvscAutoRecoveryMode').value = String(state.autoRecoveryMode);
         document.getElementById('lvscAutoRecoveryThreshold').value = String(state.autoRecoveryThreshold);
@@ -7298,6 +7457,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('lvscRefreshBtn').onclick = refreshPlayer;
         var atb = document.getElementById('lvscAutoTrialBtn'); if (atb) atb.onclick = toggleAutoTrial;
         var atrb = document.getElementById('lvscAutoTreasureBtn'); if (atrb) atrb.onclick = toggleAutoTreasure;
+        var mbStart = document.getElementById('lvscMysteryBoxStartBtn'); if (mbStart) mbStart.onclick = toggleAutoMysteryBox;
+        var mbStop = document.getElementById('lvscMysteryBoxStopBtn'); if (mbStop) mbStop.onclick = toggleAutoMysteryBox;
         var aib = document.getElementById('lvscAutoInscriptionBtn'); if (aib) aib.onclick = toggleAutoInscription;
         var ie = document.getElementById('lvscInscriptionEquipment'); if (ie) ie.onchange = function () {
             if (this.value && this.value !== '__current__') {
@@ -7828,6 +7989,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         onNum('lvscHireRetryLimit', 'hireRetryLimit', 1);
         onSel('lvscHireMode', 'hireMode', ['cheapest', 'together', 'alone']);
         onNum('lvscHireMaxFee', 'hireMaxFee', 0);
+        onChk('lvscNoMasterProtector', 'noMasterProtector');
+        onChk('lvscAutoMysteryBox', 'autoMysteryBox');
         onChkAlt('lvscKeepMultiplier', 'keepCurrentMultiplier', 'lvSpiritCleaner.keepMultiplier');
         document.getElementById('lvscPreferMultiplier').value = state.preferMultiplier;
         document.getElementById('lvscPreferMultiplier').onchange = function () { state.preferMultiplier = this.value; persistSetting('lvSpiritCleaner.preferMultiplier', this.value); };
@@ -7859,6 +8022,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
             };
         })();
         onNum('lvscSelfFightMargin', 'selfFightMargin', 1);
+        onChk('lvscNoCrossRealmFight', 'noCrossRealmFight');
+        onNum('lvscNoCrossRealmGap', 'noCrossRealmGap', 0);
         onChk('lvscAutoHire', 'autoHireCheapest');
         onSel('lvscAutoRecoveryMode', 'autoRecoveryMode', ['none', 'hp', 'mp', 'both']);
         onNum('lvscAutoRecoveryThreshold', 'autoRecoveryThreshold', 0);
@@ -8783,8 +8948,10 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     var add = function(cond, name) { if (cond) items.push(name); };
                     add(state.autoMeditate, '自动冥想');
                     add(state.autoHireCheapest, '自动护道');
+                    add(state.noMasterProtector, '不用师父护道');
                     add(state.autoMerchantLegend, '传奇商人');
                     add(state.autoSelfFightWeak, '自战弱者');
+                    add(state.noCrossRealmFight, '不越阶战斗(≤' + (state.noCrossRealmGap||0) + ')');
                     add(state.autoReviveDeath, '自动复活');
                     add(state.checkDaoyunBoost, '道运检测');
                     add(state.autoVoidBody, '虚空淬体');
@@ -8808,11 +8975,6 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     td.innerHTML = items.map(function(n) { return '<span style="padding:2px 7px;background:rgba(107,201,160,.1);color:#6bc9a0;border-radius:4px;white-space:nowrap">' + n + '</span>'; }).join('');
                 };
                 window._renderAutoStatus();
-                // 正在监控
-                var s2 = sec('正在监控', 'manual');
-                var monDiv = el('div'); monDiv.id = 'lvscRunningMonitors'; monDiv.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;font-size:11px';
-                s2.appendChild(monDiv);
-                ep.insertBefore(s2, ep.firstChild);
                 window._renderRunningMonitors = function() {
                     var md = document.getElementById('lvscRunningMonitors'); if (!md) return;
                     var items = [];
@@ -8828,6 +8990,7 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     if (typeof autoDisposeRunning !== 'undefined' && autoDisposeRunning) items.push('出售&分解');
                     if (state.autoMaintainLuck) items.push('维持气运');
                     if (typeof autoTrialRunning !== 'undefined' && autoTrialRunning) items.push('试练塔');
+                    if (typeof autoMysteryBoxRunning !== 'undefined' && autoMysteryBoxRunning) items.push('秘匣');
                     if (!items.length) { md.innerHTML = '<span style="color:var(--text-muted)">暂无正在运行的监控</span>'; return; }
                     md.innerHTML = items.map(function(n) { return '<span style="padding:2px 7px;background:rgba(224,160,64,.12);color:#e0a040;border-radius:4px;white-space:nowrap">● ' + n + '</span>'; }).join('');
                 };
@@ -8850,6 +9013,7 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     lvscAutoPavilionBtn:'manual', lvscSweepStartBtn:'manual',
                     lvscStartTalismanBtn:'manual', lvscDisposeStartBtn:'manual',
                     lvscAutoTreasureBtn:'manual', lvscAutoTrialBtn:'manual',
+                    lvscMysteryBoxStartBtn:'manual',
                     lvscLuckRefreshStartBtn:'manual'
                 };
                 var sections = document.querySelectorAll('.lvsc-section');
