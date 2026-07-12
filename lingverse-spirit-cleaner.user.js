@@ -3244,7 +3244,42 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                 var buyOk = false;
                 if (typeof window.buyMerchantItem === 'function') {
                     await window.buyMerchantItem(target.index);
-                    buyOk = true;
+                    // 购买确认弹窗：自动点击"确定"按钮，失败重试
+                    var confirmClicked = false;
+                    for (var retry = 0; retry < 12 && !confirmClicked; retry++) {
+                        await sleep(retry === 0 ? 400 : 800);
+                        var confirmBtn = document.getElementById('gameDialogConfirmBtn')
+                            || document.querySelector('.modal-btn--gold')
+                            || document.querySelector('.modal--decorated .modal-btn:last-child');
+                        if (confirmBtn && confirmBtn.offsetParent !== null) {
+                            confirmBtn.click();
+                            confirmClicked = true;
+                            console.log('[Merchant] confirm clicked after ' + (retry + 1) + ' tries');
+                        }
+                    }
+                    if (!confirmClicked) {
+                        // 兜底：尝试点取消，避免卡在弹窗
+                        var cancelBtn = document.getElementById('gameDialogCancelBtn')
+                            || document.querySelector('.modal-btn--outline');
+                        if (cancelBtn && cancelBtn.offsetParent !== null) {
+                            cancelBtn.click();
+                            console.log('[Merchant] confirm not found, clicked cancel');
+                        }
+                    }
+                    // 等待购买完成，多检查几轮
+                    for (var check = 0; check < 6; check++) {
+                        await sleep(1500);
+                        buyOk = !isMerchantActive();
+                        if (buyOk) break;
+                    }
+                    if (!buyOk) {
+                        // 最后一次：用API状态再确认
+                        try {
+                            var checkRes = await gameApi().get('/api/game/merchant');
+                            if (!checkRes || checkRes.code !== 200 || !checkRes.data) buyOk = true;
+                        } catch(_) { buyOk = true; }
+                    }
+                    if (!buyOk) toast('商人购买可能失败，准备离开');
                 } else {
                     var buyRes = await gameApi().post('/api/game/merchant/buy', { index: target.index });
                     buyOk = !!(buyRes && buyRes.code === 200);
@@ -5536,6 +5571,21 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             }
             console.log('[SysExplore] monitor loop exited. running=' + running + ' _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
             if (!running) break;
+            // 立即处理导致探索中断的事件（商人/遭遇），不要等"异常自启"兜底
+            if (typeof _merchantActive !== 'undefined' && _merchantActive) {
+                console.log('[SysExplore] merchant caused stop, handling immediately...');
+                setStatus('处理商人事件...', 'run');
+                try { await handleMerchantEvent(); } catch(_) {}
+                await sleep(500);
+                continue; // 回到外层循环，重新启动探索
+            }
+            if (typeof _encounterActive !== 'undefined' && _encounterActive) {
+                console.log('[SysExplore] encounter caused stop, handling immediately...');
+                setStatus('处理妖兽遭遇...', 'run');
+                try { if (state.aggressiveMode) await handleEncounterEvent(); else await handleSelfFightEvent(false); } catch(_) {}
+                await sleep(500);
+                continue;
+            }
             var p = getPlayer() || {};
             var ci = getSpiritInfo();
             console.log('[SysExplore] stopped. dead=' + (p.isDead || window.playerDead) + ' spirit=' + ci.spirit + ' cost=' + ci.cost);
@@ -9112,6 +9162,11 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
                 if (_bt) { _bt.checked = state.autoBreakthrough; _bt.onchange = function() { state.autoBreakthrough = this.checked; persistSetting('lvSpiritCleaner.autoBreakthrough', this.checked); }; }
                 var _or = document.getElementById('lvscAutoOriginRepair');
                 if (_or) { _or.checked = state.autoOriginRepair; _or.onchange = function() { state.autoOriginRepair = this.checked; persistSetting('lvSpiritCleaner.autoOriginRepair', this.checked); }; }
+                // 系统自带探索模式
+                var _emApi = document.getElementById('lvscExploreModeApi');
+                var _emSys = document.getElementById('lvscExploreModeSystem');
+                if (_emApi) { _emApi.checked = state.exploreMode === 'api'; _emApi.onchange = function() { if (this.checked) { state.exploreMode = 'api'; persistSetting('lvSpiritCleaner.exploreMode', 'api'); } }; }
+                if (_emSys) { _emSys.checked = state.exploreMode === 'system'; _emSys.onchange = function() { if (this.checked) { state.exploreMode = 'system'; persistSetting('lvSpiritCleaner.exploreMode', 'system'); } }; }
                 // 珍宝阁
                 var _pi = document.getElementById('lvscPavilionItem');
                 if (_pi) _pi.onchange = function() { state.pavilionItemId = this.value; state.pavilionItemName = this.options[this.selectedIndex].textContent || ''; persistSetting('lvSpiritCleaner.pavilionItemId', state.pavilionItemId); persistSetting('lvSpiritCleaner.pavilionItemName', state.pavilionItemName); };
