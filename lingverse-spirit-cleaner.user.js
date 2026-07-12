@@ -1604,6 +1604,7 @@ async function ensureNirvanaPill() {
         hireMode: localStorage.getItem('lvSpiritCleaner.hireMode') || 'cheapest',
         hireRetryLimit: readNumber('lvSpiritCleaner.hireRetryLimit', 2),
         hireMaxFee: readNumber('lvSpiritCleaner.hireMaxFee', 0),
+        noMasterProtector: localStorage.getItem('lvSpiritCleaner.noMasterProtector') === '1',
 
         // === 战斗恢复 ===
         autoSelfFightWeak: localStorage.getItem('lvSpiritCleaner.autoSelfFightWeak') !== '0',
@@ -1611,6 +1612,8 @@ async function ensureNirvanaPill() {
         autoPetHealInterval: readNumber('lvSpiritCleaner.autoPetHealInterval', 30000),
         aggressiveMode: localStorage.getItem('lvSpiritCleaner.aggressiveMode') === '1',
         selfFightMargin: readNumber('lvSpiritCleaner.selfFightMargin', 1.15),
+        noCrossRealmFight: localStorage.getItem('lvSpiritCleaner.noCrossRealmFight') === '1',
+        noCrossRealmGap: readNumber('lvSpiritCleaner.noCrossRealmGap', 0),
         autoRecoveryMode: localStorage.getItem('lvSpiritCleaner.autoRecoveryMode') || 'both',
         autoRecoveryThreshold: readNumber('lvSpiritCleaner.autoRecoveryThreshold', 80),
         autoRecoveryTarget: readNumber('lvSpiritCleaner.autoRecoveryTarget', 100),
@@ -3395,6 +3398,19 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             };
         }
 
+        if (state.noCrossRealmFight) {
+            var playerRealm = Number(p.realmLevel || 0);
+            var monsterRealm = Number(encounterData.monsterRealmLevel || 0);
+            var gap = Number(state.noCrossRealmGap || 0);
+            if (monsterRealm - playerRealm >= gap) {
+                return {
+                    safe: false,
+                    reason: '妖兽境界过高（不越阶：差距' + (monsterRealm - playerRealm) + ' ≥ 上限' + gap + '）',
+                    summary: '自身境界 ' + playerRealm + '；妖兽境界 ' + monsterRealm + '；允许越阶上限 ' + gap
+                };
+            }
+        }
+
         if (monsterPower > playerPower * margin) {
             return {
                 safe: false,
@@ -3463,6 +3479,10 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             var decision = encounterSelfFightDecision(encounterData);
             if (!decision.safe) {
                 setStatus('不自战：' + decision.reason, manual ? 'warn' : 'run');
+                if (!manual && state.autoHireCheapest) {
+                    busyEvent = false;
+                    return await handleEncounterEvent();
+                }
                 return false;
             }
 
@@ -4246,6 +4266,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         (list || []).forEach(function (p) {
             var isDead = !!p.isDead || Number(p.hp || 0) <= 0;
             if (p.role === 'masterBody' || p.role === 'masterIncarnation') {
+                if (state.noMasterProtector) return;
                 if (isDisabledMasterProtector(p)) return;
                 candidates.push({
                     id: p.playerId,
@@ -6661,6 +6682,7 @@ function stop(reason) {
             '.lvsc-big-cat-title-row{background:rgba(219,185,112,.06);border-radius:6px;padding:4px 8px;margin:0 -4px}',
             '.lvsc-section-title-row.lvsc-title-collapsed>span::before{content:"▶ "}',
 'body .lvsc-section-content-hidden{display:none!important}',
+'body .lvsc-search-hidden{display:none!important}',
 '.lvsc-big-cat-title-row.lvsc-title-collapsed~*{display:none!important}',
             '.lvsc-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:8px}',
             '.lvsc-span2{grid-column:1 / -1}',
@@ -6759,7 +6781,7 @@ function stop(reason) {
 '<label class=\"lvsc-check\"><input id=\"lvscCheckDaoyunBoost\" type=\"checkbox\">启动前检查道韵加成</label>' +
 '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAggressiveMode\" type=\"checkbox\">⚔ 激进模式（遇怪直接打，不找护道，更快但更险）</label>' +
 '<div class=\"lvsc-section-title-row\"><span>模式</span></div>' +
-'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
+'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API(推荐)</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
 '</div>' +
             // ⑶遭遇 → 妖兽/护道/商人
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>遭遇</span></div>' +
@@ -6769,6 +6791,7 @@ function stop(reason) {
             '<button id="lvscSelfFightBtn">检查并自战</button>' +
             '</div>' +
             '<label class="lvsc-check"><input id="lvscAutoSelfFightWeak" type="checkbox">弱怪自战</label>' +
+            '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap"><label class="lvsc-check"><input id="lvscNoCrossRealmFight" type="checkbox">不越阶战斗</label><span style="font-size:11px">允许越阶上限</span><input id="lvscNoCrossRealmGap" type="number" min="0" step="1" style="width:50px;height:22px;font-size:11px;background:rgba(0,0,0,.3);color:#cfc6b2;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:0 4px"><span style="font-size:11px">个小境界（0=同境也不打）</span></div>' +
             '<label class="lvsc-check"><input id="lvscAutoHire" type="checkbox">无法自战时自动雇最低价护道</label>' +
             '<div class="lvsc-help">只按战力数值判断：妖兽战力 ≤ 自身战力 × 战力倍率时自战。</div>' +
             '<div class="lvsc-section-title-row" style="font-size:12px;color:#dbb970;margin-top:8px"><span>护道</span></div>' +
@@ -6777,6 +6800,7 @@ function stop(reason) {
             '<label>灵石上限<input id="lvscHireMaxFee" type="number" min="0" step="1"></label>' +
             '<label>护道重试上限<input id="lvscHireRetryLimit" type="number" min="1" max="10" step="1"></label>' +
             '</div>' +
+            '<label class="lvsc-check"><input id="lvscNoMasterProtector" type="checkbox">不使用师父护道</label>' +
             '<div class="lvsc-section-title-row" style="font-size:12px;color:#dbb970;margin-top:8px"><span>商人</span></div>' +
             '<div class="lvsc-grid2">' +
             '<label>商人策略<select id="lvscMerchantMode"><option value="legend">传说才买</option><option value="custom">按条件购买</option><option value="leave">直接离去</option></select></label>' +
@@ -7080,6 +7104,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('lvscHireRetryLimit').value = String(state.hireRetryLimit);
         document.getElementById('lvscHireMode').value = String(state.hireMode);
         document.getElementById('lvscHireMaxFee').value = String(state.hireMaxFee);
+        document.getElementById('lvscNoMasterProtector').checked = state.noMasterProtector;
         document.getElementById('lvscKeepMultiplier').checked = state.keepCurrentMultiplier;
         document.getElementById('lvscMerchantMode').value = String(state.merchantMode);
         document.getElementById('lvscMerchantKeyword').value = String(state.merchantKeyword);
@@ -7091,6 +7116,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         document.getElementById('autoPetHeal').checked = state.autoPetHeal;
         document.getElementById('autoPetHealInterval').value = String(state.autoPetHealInterval);
         document.getElementById('lvscSelfFightMargin').value = String(state.selfFightMargin);
+        document.getElementById('lvscNoCrossRealmFight').checked = state.noCrossRealmFight;
+        document.getElementById('lvscNoCrossRealmGap').value = String(state.noCrossRealmGap);
         document.getElementById('lvscAutoHire').checked = state.autoHireCheapest;
         document.getElementById('lvscAutoRecoveryMode').value = String(state.autoRecoveryMode);
         document.getElementById('lvscAutoRecoveryThreshold').value = String(state.autoRecoveryThreshold);
@@ -7757,7 +7784,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         var giftSearchResults = document.getElementById('lvscGiftItemSearchResults');
         giftSearchBtn.addEventListener('click', async function() {
             var q = (giftSearchInput.value || '').trim().toLowerCase();
-            if (!q) return;
+            if (!q) { giftSearchResults.style.display = 'none'; return; }
             giftSearchResults.style.display = 'block';
             giftSearchResults.innerHTML = '搜索中...';
             try {
@@ -7805,6 +7832,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
             } catch (_) { giftSearchResults.innerHTML = '搜索失败'; }
         });
         if (giftSearchInput) giftSearchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter' && giftSearchBtn) giftSearchBtn.click(); });
+        if (giftSearchInput) giftSearchInput.addEventListener('input', function() { if (!this.value.trim()) giftSearchResults.style.display = 'none'; });
         } catch(e) {}
         document.getElementById('lvscHiddenCharmBtn').onclick = function () {
             ensureHiddenCharm(true);
@@ -7828,6 +7856,7 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
         onNum('lvscHireRetryLimit', 'hireRetryLimit', 1);
         onSel('lvscHireMode', 'hireMode', ['cheapest', 'together', 'alone']);
         onNum('lvscHireMaxFee', 'hireMaxFee', 0);
+        onChk('lvscNoMasterProtector', 'noMasterProtector');
         onChkAlt('lvscKeepMultiplier', 'keepCurrentMultiplier', 'lvSpiritCleaner.keepMultiplier');
         document.getElementById('lvscPreferMultiplier').value = state.preferMultiplier;
         document.getElementById('lvscPreferMultiplier').onchange = function () { state.preferMultiplier = this.value; persistSetting('lvSpiritCleaner.preferMultiplier', this.value); };
@@ -7859,6 +7888,8 @@ panel.style.zIndex = String(PANEL_Z_INDEX);
             };
         })();
         onNum('lvscSelfFightMargin', 'selfFightMargin', 1);
+        onChk('lvscNoCrossRealmFight', 'noCrossRealmFight');
+        onNum('lvscNoCrossRealmGap', 'noCrossRealmGap', 0);
         onChk('lvscAutoHire', 'autoHireCheapest');
         onSel('lvscAutoRecoveryMode', 'autoRecoveryMode', ['none', 'hp', 'mp', 'both']);
         onNum('lvscAutoRecoveryThreshold', 'autoRecoveryThreshold', 0);
@@ -8448,7 +8479,7 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                 var _searchCache = [];
                 searchBtn.addEventListener('click', async function() {
                     var q = (searchInput.value || '').trim().toLowerCase();
-                    if (!q) return;
+                    if (!q) { searchResults.style.display = 'none'; return; }
                     searchResults.style.display = 'block';
                     searchResults.innerHTML = '搜索中...';
                     try {
@@ -8543,6 +8574,7 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     } catch (_) { searchResults.innerHTML = '搜索失败'; }
                 });
                 searchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') searchBtn.click(); });
+                searchInput.addEventListener('input', function() { if (!this.value.trim()) searchResults.style.display = 'none'; });
                 // 渲染保护列表（品质分组）
                 window._renderProtectedList = function() {
                     var el = document.getElementById('lvscDisposeProtectedList'); if (!el) return;
@@ -8783,8 +8815,10 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     var add = function(cond, name) { if (cond) items.push(name); };
                     add(state.autoMeditate, '自动冥想');
                     add(state.autoHireCheapest, '自动护道');
+                    add(state.noMasterProtector, '不用师父护道');
                     add(state.autoMerchantLegend, '传奇商人');
                     add(state.autoSelfFightWeak, '自战弱者');
+                    add(state.noCrossRealmFight, '不越阶战斗(≤' + (state.noCrossRealmGap||0) + ')');
                     add(state.autoReviveDeath, '自动复活');
                     add(state.checkDaoyunBoost, '道运检测');
                     add(state.autoVoidBody, '虚空淬体');
@@ -9061,53 +9095,84 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
         });
     };
         var _searchInput = document.getElementById('lvscSearchFunc');
-    if (_searchInput) _searchInput.oninput = function() {
-        var q = this.value.trim().toLowerCase();
-        // 先全部强制展开（移class绕过!important）
-        document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
-            r.classList.remove('lvsc-title-collapsed', 'lvsc-section-content-hidden');
-            r.style.display = '';
-            if (!r.classList.contains('lvsc-big-cat-title-row')) {
-                var el = r.nextElementSibling;
-                while (el && !el.classList.contains('lvsc-section-title-row')) {
-                    el.classList.remove('lvsc-section-content-hidden');
-                    el.style.display = '';
-                    el = el.nextElementSibling;
-                }
+    if (_searchInput) {
+        var _searchSavedTab = null;
+        _searchInput.addEventListener('input', function() {
+            var q = this.value.trim().toLowerCase();
+            var allPanels = document.querySelectorAll('.lvsc-tab-panel');
+            // 首次按键时记住当前tab（此时尚未展开所有tab）
+            if (_searchSavedTab === null) {
+                allPanels.forEach(function(p) { if (p.classList.contains('lvsc-active')) _searchSavedTab = p.getAttribute('data-tab-panel'); });
+                if (!_searchSavedTab) _searchSavedTab = localStorage.getItem('lvSpiritCleaner.activeTab') || 'explore';
             }
-        });
-        // 有搜索词时只按标题隐藏不匹配的
-        if (q) {
+            // 清除上一次搜索的隐藏标记 + 清除折叠class（只动class，不动 inline style）
+            document.querySelectorAll('.lvsc-search-hidden').forEach(function(el) { el.classList.remove('lvsc-search-hidden'); });
             document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
-                var title = r.textContent.trim().toLowerCase();
-                if (title.indexOf(q) === -1) {
-                    r.style.display = 'none';
-                    if (!r.classList.contains('lvsc-big-cat-title-row')) {
+                r.classList.remove('lvsc-title-collapsed');
+                if (!r.classList.contains('lvsc-big-cat-title-row')) {
+                    var el = r.nextElementSibling;
+                    while (el && !el.classList.contains('lvsc-section-title-row')) {
+                        el.classList.remove('lvsc-section-content-hidden');
+                        el = el.nextElementSibling;
+                    }
+                }
+            });
+            if (q) {
+                // 搜索时展开所有tab面板，跨tab结果都可见
+                allPanels.forEach(function(p) { p.classList.add('lvsc-active'); });
+                // 按区块文字匹配（标题行 + 内容区所有文字，big-cat 也要收内容）
+                document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
+                    var blockText = r.textContent || '';
+                    var el = r.nextElementSibling;
+                    while (el && !el.classList.contains('lvsc-section-title-row')) {
+                        blockText += ' ' + (el.textContent || '');
+                        el = el.nextElementSibling;
+                    }
+                    if (blockText.toLowerCase().indexOf(q) === -1) {
+                        r.classList.add('lvsc-search-hidden');
                         var el2 = r.nextElementSibling;
                         while (el2 && !el2.classList.contains('lvsc-section-title-row')) {
-                            el2.style.display = 'none';
+                            el2.classList.add('lvsc-search-hidden');
                             el2 = el2.nextElementSibling;
                         }
                     }
-                }
-            });
-        } else {
-            // 清空搜索时恢复折叠
-            document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
-                var v = localStorage.getItem('lvscCS_' + r.textContent.trim());
-                if (v !== '0') {
-                    r.classList.add('lvsc-title-collapsed');
-                    if (!r.classList.contains('lvsc-big-cat-title-row')) {
-                        var el = r.nextElementSibling;
-                        while (el && !el.classList.contains('lvsc-section-title-row')) {
-                            el.classList.add('lvsc-section-content-hidden');
-                            el = el.nextElementSibling;
+                });
+                // 修正 big-cat：有可见子标题的把已隐藏的 big-cat 重新显示出来
+                document.querySelectorAll('.lvsc-section-title-row.lvsc-big-cat-title-row').forEach(function(bigCat) {
+                    if (!bigCat.classList.contains('lvsc-search-hidden')) return;
+                    var anyVisible = false;
+                    var el = bigCat.nextElementSibling;
+                    while (el && !el.classList.contains('lvsc-big-cat-title-row')) {
+                        if (el.classList.contains('lvsc-section-title-row') && !el.classList.contains('lvsc-search-hidden')) {
+                            anyVisible = true;
+                            break;
+                        }
+                        el = el.nextElementSibling;
+                    }
+                    if (anyVisible) bigCat.classList.remove('lvsc-search-hidden');
+                });
+            } else {
+                // 清空搜索：清除所有搜索隐藏标记，恢复原活跃tab和折叠状态
+                document.querySelectorAll('.lvsc-search-hidden').forEach(function(el) { el.classList.remove('lvsc-search-hidden'); });
+                var restoreTab = _searchSavedTab || localStorage.getItem('lvSpiritCleaner.activeTab') || 'explore';
+                allPanels.forEach(function(p) { p.classList.toggle('lvsc-active', p.getAttribute('data-tab-panel') === restoreTab); });
+                _searchSavedTab = null;
+                document.querySelectorAll('.lvsc-section-title-row').forEach(function(r) {
+                    var v = localStorage.getItem('lvscCS_' + r.textContent.trim());
+                    if (v !== '0') {
+                        r.classList.add('lvsc-title-collapsed');
+                        if (!r.classList.contains('lvsc-big-cat-title-row')) {
+                            var el = r.nextElementSibling;
+                            while (el && !el.classList.contains('lvsc-section-title-row')) {
+                                el.classList.add('lvsc-section-content-hidden');
+                                el = el.nextElementSibling;
+                            }
                         }
                     }
-                }
-            });
-        }
-    };
+                });
+            }
+        });
+    }
 }
     // 登录页防无限循环：上次刷新在30秒内的跳过自动刷新
     if (location.pathname === '/' || location.pathname === '') {
