@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.5-dbb970?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/version-1.6.6-dbb970?style=for-the-badge" />
   <img src="https://img.shields.io/badge/platform-Tampermonkey-9be7c3?style=for-the-badge" />
   <img src="https://img.shields.io/badge/license-MIT-8f846f?style=for-the-badge" />
 </p>
@@ -66,7 +66,10 @@
 | 🔁 **状态恢复** | 页面刷新自动恢复运行 · 探索模式记忆 · 冥想前后装备套装切换 · 刷新后灵田/出售/升品自动启动 · 自动登录(邮箱密码保存) · 登录页暂停自动刷新 · 区域名缓存提升地图准确性 |
 | 🐾 **灵宠系统** | 灵宠自动回血 · 新增冥想检测 |
 | 📱 **微信通知** | 清理中10min/冥想中20min推送 · 显示境界+刷新倒计时 · 死亡/复活通知 · 清理统计(含修为进度) · 反馈直达 · 自动登录通知 |
-
+| 💸 **自动抢红包** | MutationObserver 实时监控聊天频道 · 自动抢红包 · 防重复机制 · 今日/昨日/7天/累计统计 |
+| 🌙 **快速清理** | 神识耗尽自动冥想 · 收功后仅夜间打怪 · 探索倍率智能降序(50→20→10→5) · 一夜未耗尽等下夜继续 |
+| 💾 **配置槽位** | A/B 双槽位快速切换配置方案 · 挂机/手动一键切换 |
+| 🖼️ **显示模式** | 内嵌主题(适配游戏侧边栏) · 省电模式(全黑覆盖层) · 画中画悬浮窗 · 通知推送(App Badge) |
 ---
 
 ## 📊 微信通知
