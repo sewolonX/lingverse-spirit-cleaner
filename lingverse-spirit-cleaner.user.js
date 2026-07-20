@@ -9759,7 +9759,7 @@ function stop(reason) {
             '<div class=\"lvsc-field-grid\">' +
             '<div id=\"lvscStatsPanel\" style=\"font-size:11px;color:#cfc6b2;line-height:1.8;white-space:nowrap;overflow-x:auto\">加载中...</div>' +
             '<div id=\"lvscExpTracker\" style=\"margin-top:8px;font-size:11px;color:#cfc6b2\"></div>' +
-            '<div style=\"margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center\"><button id=\"lvscExpRefreshBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,231,195,.15);color:#9be7c3;border:1px solid rgba(155,231,195,.3);border-radius:4px;cursor:pointer\">刷新统计</button><button id=\"lvscExpManualBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,200,231,.15);color:#9be7f3;border:1px solid rgba(155,200,231,.3);border-radius:4px;cursor:pointer\">手动记录</button><button id=\"lvscExpClearBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(255,100,100,.15);color:#f66;border:1px solid rgba(255,100,100,.3);border-radius:4px;cursor:pointer\">清空记录</button><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpAutoRefresh\" type=\"checkbox\"> 自动刷新</label><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpDayOnly\" type=\"checkbox\"> 仅首尾记录</label></div>' +
+            '<div style=\"margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center\"><button id=\"lvscExpRefreshBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,231,195,.15);color:#9be7c3;border:1px solid rgba(155,231,195,.3);border-radius:4px;cursor:pointer\">刷新统计</button><button id=\"lvscExpManualBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,200,231,.15);color:#9be7f3;border:1px solid rgba(155,200,231,.3);border-radius:4px;cursor:pointer\">手动记录</button><button id=\"lvscExpClearBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(255,100,100,.15);color:#f66;border:1px solid rgba(255,100,100,.3);border-radius:4px;cursor:pointer\">清空记录</button><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpAutoRefresh\" type=\"checkbox\"> 自动刷新</label><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpDayOnly\" type=\"checkbox\"> 仅首尾记录</label><span id=\"lvscExpDayOnlyTip\" style=\"font-size:9px;color:rgba(155,231,195,.5);display:none;margin-left:2px\">每天0:00和23:59各记录一次，计算日收益（省请求）</span></div>' +
             '</div></div>' +
             '</div>' +
             // ===== 其他 tab ====
@@ -10597,9 +10597,11 @@ function stop(reason) {
             // 自动刷新 + 仅首尾记录
             var autoRefreshEl = document.getElementById('lvscExpAutoRefresh');
             var dayOnlyEl = document.getElementById('lvscExpDayOnly');
+            var dayOnlyTip = document.getElementById('lvscExpDayOnlyTip');
             var _statsAutoTimer = null;
             var _statsDayOnlyTimer = null;
             var _dayOnlyRecorded = { start: '', end: '' };
+            var _dayOnlyKey = 'lvSpiritCleaner.expDayOnly';
             function _startNormalTimer() {
                 clearInterval(_statsAutoTimer);
                 _statsAutoTimer = setInterval(refreshStats, 600000);
@@ -10626,17 +10628,24 @@ function stop(reason) {
                 clearInterval(_statsAutoTimer); _statsAutoTimer = null;
                 clearInterval(_statsDayOnlyTimer); _statsDayOnlyTimer = null;
             }
-            // 初始化：根据开关启动
-            if (dayOnlyEl && dayOnlyEl.checked) {
+            // 初始化：从 localStorage 恢复状态
+            var _savedDayOnly = localStorage.getItem(_dayOnlyKey) === '1';
+            if (dayOnlyEl) {
+                dayOnlyEl.checked = _savedDayOnly;
+                if (dayOnlyTip) dayOnlyTip.style.display = _savedDayOnly ? 'inline' : 'none';
+            }
+            if (_savedDayOnly) {
                 _startDayOnlyTimer();
             } else {
-                autoRefreshEl.checked = true;
+                if (autoRefreshEl) autoRefreshEl.checked = true;
                 _startNormalTimer();
             }
             if (autoRefreshEl) {
                 autoRefreshEl.onchange = function() {
                     if (this.checked) {
                         if (dayOnlyEl) dayOnlyEl.checked = false;
+                        localStorage.removeItem(_dayOnlyKey);
+                        if (dayOnlyTip) dayOnlyTip.style.display = 'none';
                         _startNormalTimer();
                     } else {
                         _stopAllTimers();
@@ -10647,9 +10656,13 @@ function stop(reason) {
                 dayOnlyEl.onchange = function() {
                     if (this.checked) {
                         if (autoRefreshEl) autoRefreshEl.checked = false;
+                        localStorage.setItem(_dayOnlyKey, '1');
+                        if (dayOnlyTip) dayOnlyTip.style.display = 'inline';
                         _stopAllTimers();
                         _startDayOnlyTimer();
                     } else {
+                        localStorage.removeItem(_dayOnlyKey);
+                        if (dayOnlyTip) dayOnlyTip.style.display = 'none';
                         _stopAllTimers();
                     }
                 };
