@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LingVerse Spirit Cleaner
 // @namespace    local.lingverse.tools
-// @version      1.6.7
+// @version      1.6.8
 // @description  Authorized helper: spend LingVerse spirit, handle merchants, hire protectors, meditate, and maintain Void Body buff.
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
@@ -116,22 +116,41 @@
 (function () {
     'use strict';
 
-    // 反检测：拦截 shield telemetry fetch，清零敏感字段
+    // 反检测：拦截 shield telemetry fetch + XMLHttpRequest，清零敏感字段
+    function _lvCleanTelemetry(bodyStr) {
+        try {
+            var obj = JSON.parse(bodyStr);
+            obj.env = {score:0, flags:[]};
+            obj.scriptInject = 0; obj.directFetch = 0; obj.saltAccess = 0;
+            if (obj.keyboardInteractions !== undefined) obj.keyboardInteractions = 50;
+            return JSON.stringify(obj);
+        } catch(_) { return bodyStr; }
+    }
+    // 拦截 fetch
     var _lvOrigFetch = window.fetch;
     window.fetch = function(url, opts) {
         var urlStr = typeof url === 'string' ? url : (url && url.url || '');
         if (urlStr.indexOf('/api/game/shield/telemetry') >= 0) {
             try {
-                var body = typeof opts.body === 'string' ? JSON.parse(opts.body) : (opts.body || {});
-                body.env = {score:0, flags:[]};
-                body.scriptInject = 0; body.directFetch = 0; body.saltAccess = 0;
-                if (body.keyboardInteractions !== undefined) body.keyboardInteractions = 50;
                 var newOpts = Object.assign({}, opts);
-                newOpts.body = JSON.stringify(body);
+                newOpts.body = _lvCleanTelemetry(opts.body);
                 return _lvOrigFetch(url, newOpts);
             } catch(_) {}
         }
         return _lvOrigFetch.apply(this, arguments);
+    };
+    // 拦截 XMLHttpRequest
+    var _lvOrigXhrOpen = XMLHttpRequest.prototype.open;
+    var _lvOrigXhrSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url) {
+        this._lvUrl = url || '';
+        return _lvOrigXhrOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(body) {
+        if (this._lvUrl && this._lvUrl.indexOf('/api/game/shield/telemetry') >= 0) {
+            try { body = _lvCleanTelemetry(body); } catch(_) {}
+        }
+        return _lvOrigXhrSend.call(this, body);
     };
 
     if (window.__lvSpiritCleanerLoaded) return;
@@ -149,7 +168,9 @@
     var autoCraftTimerInterval = null;
     var autoNirvanaRunning = false;
     var autoNirvanaTimerInterval = null;
+    var autoIncarnationRunning = false;
     var _autoPetHealTimer = null;
+    var autoIncarnationRunning = false;
 
     async function fetchRecipes(type) {
         if (!gameApi()) return [];
@@ -201,6 +222,19 @@
         return false;
     }
     var _craftStats = { total: 0, startCount: 0 };
+    // 通用分批购买材料函数
+    async function buyMaterialsOnce(type, recipeId, totalNeeded) {
+        if (totalNeeded <= 0) return false;
+        var buyAmount = state.craftBuyAmount || 0;
+        var amount = buyAmount > 0 ? buyAmount : totalNeeded;
+        craftLog('购买材料: ' + amount + '个');
+        try {
+            var res = await gameApi().post('/api/game/craft/quick-buy-mats', { type: type, id: recipeId, amount: amount });
+            if (res) craftLog('购买结果: ' + (res.message || (res.code === 200 ? '成功' : '失败 code=' + res.code)));
+            return true;
+        } catch (e) { craftLog('购买异常: ' + (e.message || '未知')); return false; }
+    }
+
     async function autoCraftLoop() {
         if (autoCraftRunning) { setStatus('炼制已在运行', 'warn'); return; }
         if (autoInscriptionRunning) { setStatus('铭文洗练中，停止后再炼制', 'warn'); return; }
@@ -211,6 +245,7 @@
         var recipeId = state.craftRecipeId;
         var target = state.craftTargetCount;
         var autoBuy = state.craftAutoBuyMats;
+        var craftInterval = (state.craftBuyDelay || 3) * 1000;
         updateMeter();
         // 取配方信息
         var recipes = await fetchRecipes(type);
@@ -218,39 +253,34 @@
         for (var ri = 0; ri < recipes.length; ri++) { if (getCraftItemId(recipes[ri], type) === recipeId) { recipe = recipes[ri]; break; } }
         if (!recipe) { setStatus('未找到配方', 'warn'); autoCraftRunning = false; return; }
 var name = getCraftItemName(recipe, type);
-craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (autoBuy ? ' | 自动买材料' : ''));
+craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (autoBuy ? ' | 自动买材料' : '') + ' | 间隔' + state.craftBuyDelay + '秒');
         setStatus('开始炼制: ' + name + ' 目标' + target, 'run');
         // 每次炼制数量：用户设了就用（受游戏上限约束），没设用游戏上限
         var gameCap = 100;
         var batchCap = state.craftBatchSize > 0 ? Math.min(state.craftBatchSize, gameCap) : gameCap;
         var crafted = 0;
         while (autoCraftRunning && crafted < target) {
-            var iterStart = Date.now();
-            if (autoBuy && recipe.materials && recipe.materials.length) {
-                for (var mi = 0; mi < recipe.materials.length; mi++) {
-                    var mat = recipe.materials[mi];
-                    var needed = Math.max(0, (mat.required || mat.amount || 1) * Math.min(batchCap, target - crafted));
-                    if (needed > 0) {
-                        try { await gameApi().post('/api/game/craft/quick-buy-mats', { type: type, id: recipeId, amount: needed }); } catch (_) {}
-                        await sleep(300);
-                    }
-                }
-            }
-            // 每次炼上限或剩余数量
             var batchCount = Math.min(batchCap, target - crafted);
+            // 第一步：需要就买材料（只买一次）
+            if (autoBuy) {
+                var bought = await buyMaterialsOnce(type, recipeId, batchCount);
+                if (bought) { craftLog('购买完成，5秒后开始炼制'); await sleep(5000); }
+                if (!autoCraftRunning) break;
+            }
+            // 第二步：炼制
             var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : type === 'talisman' ? '/api/game/talisman/batch-craft' : '/api/game/forge/batch-craft';
             var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
             var payload = {}; payload[craftKey] = recipeId; payload.count = batchCount;
             var craftRes = await gameApi().post(craftEp, payload);
             if (!craftRes || craftRes.code !== 200) {
-                craftLog('失败: ' + ((craftRes && craftRes.message) || '未知'));
+                craftLog('炼制失败: ' + ((craftRes && craftRes.message) || '未知'));
                 setStatus('炼制失败', 'warn');
                 await sleep(2000);
                 continue;
             }
             var actualCount = Number(craftRes.data && craftRes.data.craftCount) || batchCount;
             crafted += actualCount;
-            // 从 message 字符串解析品质分布
+            // 解析品质分布
             var qualityTally = {};
             var msg = (craftRes.data && craftRes.data.message) || '';
             var tallyMatch = msg.match(/共锻.*?:\s*(.+?)(?:\s*\(|$)/) || msg.match(/共炼.*?:\s*(.+?)(?:\s*\(|$)/);
@@ -265,13 +295,16 @@ craftLog('开始炼制: ' + name + ' | 目标' + target + '次' + (autoBuy ? ' |
             for (var qk in qualityTally) { if (qualityTally.hasOwnProperty(qk)) parts.push(qk + '×' + qualityTally[qk]); }
             craftLog('炼+' + actualCount + ' | ' + Math.min(crafted, target) + '/' + target + (parts.length ? ' | ' + parts.join(' ') : ''));
             setStatus('炼制: ' + name + ' ' + crafted + '/' + target, 'run');
-            var remaining = Math.max(200, getCraftDelay() - (Date.now() - iterStart));
-            await sleep(remaining);
+            // 第三步：等间隔，再下一轮
+            if (autoCraftRunning && crafted < target) await sleep(craftInterval);
         }
         autoCraftRunning = false;
         updateMeter();
         craftLog(crafted >= target ? '完成! 共炼' + crafted + '次' : '停止 | ' + crafted + '/' + target);
-        setStatus('炼制完成: ' + name + ' ' + crafted + '/' + target, 'run');
+        setStatus('待命', 'idle');
+        var acb = document.getElementById('lvscAutoCraftBtn'); if (acb) acb.style.display = '';
+        var qcb = document.getElementById('lvscQualityCraftBtn'); if (qcb) qcb.style.display = '';
+        var scb = document.getElementById('lvscStopCraftBtn'); if (scb) scb.style.display = 'none';
         if (state.craftAutoTimer) updateNextAutoCraftTime();
     }
     function stopCraft() {
@@ -361,47 +394,68 @@ function startAutoCraftTimer() {
             if (state.craftAutoTimer) updateNextAutoCraftTime();
             return;
         }
+        var failCount = 0;
+        var craftInterval = (state.craftBuyDelay || 10) * 1000;
+        var failCount = 0;
         while (autoCraftRunning && qualMet < qualNeed) {
-            var iterStart = Date.now();
-            if (autoBuy && recipe.materials && recipe.materials.length) {
-                for (var mi = 0; mi < recipe.materials.length; mi++) {
-                    var mat = recipe.materials[mi];
-                    var needed = Math.max(0, (mat.required || mat.amount || 1) * batchCap);
-                    if (needed > 0) { try { await gameApi().post('/api/game/craft/quick-buy-mats', { type: type, id: recipeId, amount: needed }); } catch (_) {} await sleep(300); }                }
-            }
-            var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : type === 'talisman' ? '/api/game/talisman/batch-craft' : '/api/game/forge/batch-craft';
-            var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
-            var payload = {}; payload[craftKey] = recipeId; payload.count = batchCap;
-            var craftRes = await gameApi().post(craftEp, payload);
-            if (!craftRes || craftRes.code !== 200) { await sleep(2000); continue; }
-            totalCrafted += batchCap;
             try {
-                qualMet = 0;
-                var chkRes = await gameApi().get('/api/game/inventory/category?tab=all&page=1&size=200');
-                var chkArr = [];
-                if (chkRes && chkRes.code === 200 && Array.isArray(chkRes.data && chkRes.data.items)) {
-                    chkArr = chkRes.data.items;
+                var craftEp = type === 'alchemy' ? '/api/game/alchemy/batch-craft' : type === 'talisman' ? '/api/game/talisman/batch-craft' : '/api/game/forge/batch-craft';
+                var craftKey = type === 'alchemy' ? 'pillId' : 'recipeId';
+                var payload = {}; payload[craftKey] = recipeId; payload.count = batchCap;
+                // 先尝试炼制，材料够就直接炼
+                var craftRes = await gameApi().post(craftEp, payload);
+                // 炼制失败才买材料
+                if ((!craftRes || craftRes.code !== 200) && autoBuy) {
+                    craftLog('材料不足，尝试购买一次');
+                    await buyMaterialsOnce(type, recipeId, batchCap);
+                    if (autoCraftRunning) await sleep(3000);
+                    craftRes = await gameApi().post(craftEp, payload);
                 }
-                if (Array.isArray(chkArr)) {
-                    for (var qi = 0; qi < chkArr.length; qi++) {
-                        var qit = chkArr[qi];
-                        if (itemMatchesCraft(qit, recipeId, name)) {
-                            if (getItemQuality(qit) >= qualTarget) qualMet += Number(qit.quantity || qit.count || 1);
+                if (!craftRes || craftRes.code !== 200) {
+                    failCount++;
+                    craftLog('炼制失败(' + failCount + '/10): ' + ((craftRes && craftRes.message) || '未知'));
+                    if (failCount >= 10) { craftLog('连续失败10次，自动停止'); break; }
+                    await sleep(3000);
+                    continue;
+                }
+                failCount = 0;
+                totalCrafted += batchCap;
+                qualMet = 0;
+                try {
+                    var chkRes = await gameApi().get('/api/game/inventory/category?tab=all&page=1&size=200');
+                    var chkArr = [];
+                    if (chkRes && chkRes.code === 200 && Array.isArray(chkRes.data && chkRes.data.items)) {
+                        chkArr = chkRes.data.items;
+                    }
+                    if (Array.isArray(chkArr)) {
+                        for (var qi = 0; qi < chkArr.length; qi++) {
+                            var qit = chkArr[qi];
+                            if (itemMatchesCraft(qit, recipeId, name)) {
+                                if (getItemQuality(qit) >= qualTarget) qualMet += Number(qit.quantity || qit.count || 1);
+                            }
                         }
                     }
+                } catch (invErr) {
+                    craftLog('背包查询异常: ' + (invErr.message || invErr) + '，继续炼制');
                 }
+                craftLog('炼+' + batchCap + ' | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed + ' | 总' + totalCrafted + '次');
+                setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed, 'run');
             } catch (e) {
-                craftLog('错误: 获取背包异常 ' + (e.message || ''));
+                failCount++;
+                craftLog('异常(' + failCount + '/10): ' + (e.message || e));
+                if (failCount >= 10) { craftLog('连续异常10次，自动停止'); break; }
+                await sleep(3000);
             }
-            craftLog('炼+' + batchCap + ' | ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed + ' | 总' + totalCrafted + '次');
-            setStatus('品质炼制: ' + name + ' ' + QUAL_NAMES[qualTarget] + qualMet + '/' + qualNeed, 'run');
-            var remaining = Math.max(200, getCraftDelay() - (Date.now() - iterStart));
-            await sleep(remaining);
+            if (autoCraftRunning && qualMet < qualNeed) await sleep(craftInterval);
         }
         autoCraftRunning = false;
         updateMeter();
-        if (qualMet >= qualNeed) { craftLog('完成! ' + QUAL_NAMES[qualTarget] + qualMet + '件'); setStatus('品质炼制完成', 'run'); }
-        else { setStatus('品质炼制停止', 'idle'); }
+        if (qualMet >= qualNeed) { craftLog('完成! ' + QUAL_NAMES[qualTarget] + qualMet + '件'); }
+        else { craftLog('品质炼制停止 | ' + qualMet + '/' + qualNeed); }
+        setStatus('待命', 'idle');
+        var acb = document.getElementById('lvscAutoCraftBtn'); if (acb) acb.style.display = '';
+        var qcb = document.getElementById('lvscQualityCraftBtn'); if (qcb) qcb.style.display = '';
+        var scb = document.getElementById('lvscStopCraftBtn'); if (scb) scb.style.display = 'none';
         if (state.craftAutoTimer) updateNextAutoCraftTime();
     }
 
@@ -501,8 +555,8 @@ function startAutoCraftTimer() {
         setStatus('功法洗练' + (lastAffix ? '完成' : '停止'), 'run');
     }
     function stopSkillWash() { autoSkillWashRunning = false; }
-    function skillWashLog(msg) { var l = document.getElementById('lvscSkillWashLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
-    function washStoneLog(msg) { var l = document.getElementById('lvscWashStoneUpgradeLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+    function skillWashLog(msg) { allLog('功法洗练', msg); var l = document.getElementById('lvscSkillWashLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+    function washStoneLog(msg) { allLog('洗炼石', msg); var l = document.getElementById('lvscWashStoneUpgradeLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
 
     // --- 洗炼石一键升品（独立监控循环） --
     var autoWashStoneUpgradeRunning = false;
@@ -636,7 +690,194 @@ function startAutoCraftTimer() {
         pillUpgradeLog('丹药升阶监控停止');
     }
     function stopPillUpgrade() { autoPillUpgradeRunning = false; }
-    function pillUpgradeLog(msg) { var l = document.getElementById('lvscPillUpgradeLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+    function pillUpgradeLog(msg) { allLog('丹药升阶', msg); var l = document.getElementById('lvscPillUpgradeLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+
+    // --- 自动温养（监控循环） ---
+    var autoIncubationRunning = false;
+    var _incubationKnownPets = {}; // {petId: true} 已见过的宠物ID
+    function incubationLog(msg) { allLog('孵化', msg); var l = document.getElementById('lvscIncubationLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+    async function autoIncubationLoop() {
+        if (autoIncubationRunning) return;
+        if (!gameApi()) { setStatus('API不可用', 'warn'); return; }
+        autoIncubationRunning = true;
+        try { localStorage.setItem('lvSpiritCleaner.incubationRunning', '1'); } catch(_) {}
+        updateMeter();
+        var startBtn = document.getElementById('lvscIncubationStartBtn');
+        var stopBtn = document.getElementById('lvscIncubationStopBtn');
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = '';
+        incubationLog('自动温养监控启动');
+        // 首次启动先加载已知宠物列表，避免误把已存在的宠物当新孵化
+        try {
+            var initRes = await gameApi().get('/api/game/pets');
+            if (initRes && initRes.code === 200 && initRes.data && Array.isArray(initRes.data.pets)) {
+                for (var pi = 0; pi < initRes.data.pets.length; pi++) {
+                    _incubationKnownPets[initRes.data.pets[pi].id] = true;
+                }
+            }
+            incubationLog('已记录 ' + Object.keys(_incubationKnownPets).length + ' 只现有灵兽，首次扫描完成');
+        } catch(e) { incubationLog('首次扫描灵兽列表失败: ' + (e.message||'')); }
+        var firstCycle = true;
+        while (autoIncubationRunning) {
+            var interval = state.autoIncubationInterval * 1000 || 30000;
+            try {
+                // 首次启动不等待，立即检测
+                if (firstCycle) {
+                    firstCycle = false;
+                    incubationLog('首次检测开始...');
+                }
+                var res = await gameApi().get('/api/game/pets');
+                if (!res || res.code !== 200 || !res.data) {
+                    incubationLog('获取灵兽数据失败，稍后重试');
+                    await sleep(10000);
+                    continue;
+                }
+                var d = res.data;
+                // 步骤1：自动入队温养（勾选了就自动入队，不管是否正在孵化）
+                if (state.autoIncubationAutoEnqueue) {
+                    await autoEnqueueEggs();
+                }
+                // 步骤2：检查是否有新孵化的灵兽
+                if (Array.isArray(d.pets) && d.pets.length > 0) {
+                    for (var pi = 0; pi < d.pets.length; pi++) {
+                        var pet = d.pets[pi];
+                        var petId = pet.id;
+                        if (!petId) continue;
+                        // 排除已经见过的宠物
+                        if (_incubationKnownPets[petId]) continue;
+                        _incubationKnownPets[petId] = true;
+                        // 新出现的灵兽 → 检查是否符合要求
+                        var petName = pet.speciesName || '未知';
+                        var petRarity = pet.rarity || 0;
+                        // 获取宠物的先天属性（innateTalentName 为空字符串表示无属性）
+                        var petTraits = [];
+                        if (pet.innateTalentName && pet.innateTalentName.trim()) {
+                            petTraits = [pet.innateTalentName.trim()];
+                        }
+                        var traitStr = petTraits.length > 0 ? petTraits.join(', ') : '无';
+                        incubationLog('🔍 检测到新灵兽: ' + petName + ' (品质' + petRarity + ') 先天属性: ' + traitStr);
+                        // 检查是否符合要求
+                        var shouldKeep = false;
+                        // 检查名字是否在想要列表中
+                        var desiredBeasts = state.autoIncubationDesiredBeasts || [];
+                        var nameMatched = false;
+                        for (var bi = 0; bi < desiredBeasts.length; bi++) {
+                            if (petName.indexOf(desiredBeasts[bi]) >= 0) { nameMatched = true; break; }
+                        }
+                        if (nameMatched) {
+                            // 检查先天属性
+                            var desiredTraits = state.autoIncubationDesiredTraits || [];
+                            if (desiredTraits.length === 0) {
+                                shouldKeep = true; // 没设置属性要求，名字匹配就保留
+                            } else {
+                                // 检查是否有任一想要的属性
+                                var hasWantedTrait = false;
+                                var hasNoneOption = false;
+                                for (var ti = 0; ti < desiredTraits.length; ti++) {
+                                    var dt = desiredTraits[ti].trim();
+                                    if (dt === '无') { hasNoneOption = true; }
+                                    for (var pti = 0; pti < petTraits.length; pti++) {
+                                        if (petTraits[pti].indexOf(dt) >= 0) { hasWantedTrait = true; break; }
+                                    }
+                                    if (hasWantedTrait) break;
+                                }
+                                // innateTalentName为空字符串（无属性）且用户填了"无" → 匹配
+                                if ((!pet.innateTalentName || !pet.innateTalentName.trim()) && hasNoneOption) {
+                                    hasWantedTrait = true;
+                                }
+                                if (hasWantedTrait) shouldKeep = true;
+                            }
+                        }
+                        if (shouldKeep) {
+                            incubationLog('✅ 保留: ' + petName + ' (' + traitStr + ') 符合要求');
+                        } else {
+                            incubationLog('❌ 不符合要求，执行放生: ' + petName + ' (' + traitStr + ')');
+                            try {
+                                var releaseRes = await gameApi().post('/api/game/pets/release', { petId: petId });
+                                if (releaseRes && releaseRes.code === 200) {
+                                    incubationLog('✅ 放生成功: ' + (releaseRes.data || ''));
+                                } else {
+                                    var errMsg = (releaseRes && releaseRes.message) || '放生接口返回异常';
+                                    incubationLog('❌ 放生失败: ' + errMsg);
+                                }
+                            } catch(e) {
+                                incubationLog('❌ 放生异常: ' + (e.message || ''));
+                            }
+                        }
+                    }
+                }
+                // 如果正在孵化中，显示状态
+                if (d.incubating) {
+                    var eggName = d.incubatingEggName || '蛋';
+                    var eggRarity = d.incubatingEggRarity || 0;
+                    var rarityNames = ['','普通','优良','稀有','史诗','传说'];
+                    incubationLog('⏳ 正在温养: ' + eggName + '(' + (rarityNames[eggRarity]||eggRarity) + ') 经验:' + d.incubatingExp);
+                }
+            } catch(e) {
+                incubationLog('❌ 循环异常: ' + (e.message || ''));
+            }
+            await sleep(interval);
+        }
+        autoIncubationRunning = false;
+        try { localStorage.setItem('lvSpiritCleaner.incubationRunning', '0'); } catch(_) {}
+        if (startBtn) startBtn.style.display = '';
+        if (stopBtn) stopBtn.style.display = 'none';
+        updateMeter();
+        incubationLog('自动温养监控停止');
+    }
+    function stopIncubation() { autoIncubationRunning = false; }
+    // 从背包查找蛋并自动入队
+    async function autoEnqueueEggs() {
+        if (!gameApi()) return;
+        try {
+            var invRes = await gameApi().get('/api/game/inventory/category?tab=all&page=1&size=200');
+            if (!invRes || invRes.code !== 200 || !invRes.data || !Array.isArray(invRes.data.items)) return;
+            var eggs = [];
+            for (var ei = 0; ei < invRes.data.items.length; ei++) {
+                var item = invRes.data.items[ei];
+                var tid = String(item.templateId || '');
+                // 匹配灵兽蛋 templateId 格式: item_pet_egg_X
+                if (tid.indexOf('pet_egg') >= 0 || tid.indexOf('beast_egg') >= 0 || (item.name || '').indexOf('灵兽蛋') >= 0) {
+                    var rarity = item.rarity || 0;
+                    if (rarity >= state.autoIncubationMinRarity) {
+                        eggs.push({
+                            templateId: tid,
+                            name: item.name || tid,
+                            quantity: item.quantity || 1,
+                            rarity: rarity
+                        });
+                    }
+                }
+            }
+            if (eggs.length === 0) {
+                incubationLog('📦 背包无符合条件的灵兽蛋（最低品质≥' + state.autoIncubationMinRarity + '）');
+                return;
+            }
+            var rarityNames = ['','普通','优良','稀有','史诗','传说'];
+            for (var ei = 0; ei < eggs.length; ei++) {
+                var egg = eggs[ei];
+                incubationLog('📦 发现灵兽蛋: ' + egg.name + '(' + (rarityNames[egg.rarity]||egg.rarity) + ') ×' + egg.quantity);
+                // 入队温养API
+                try {
+                    var enqRes = await gameApi().post('/api/game/pets/egg-queue/add', {
+                        templateId: egg.templateId,
+                        count: egg.quantity
+                    });
+                    if (enqRes && enqRes.code === 200) {
+                        incubationLog('✅ 入队成功: ' + egg.name + ' ×' + egg.quantity + (enqRes.data ? ' | ' + enqRes.data : ''));
+                    } else {
+                        var errMsg = (enqRes && enqRes.message) || '接口异常';
+                        incubationLog('⚠️ 入队失败: ' + egg.name + ' - ' + errMsg);
+                    }
+                } catch(e) {
+                    incubationLog('⚠️ 入队异常: ' + egg.name + ' - ' + (e.message||''));
+                }
+                await sleep(1000); // 每个蛋之间间隔1秒
+            }
+        } catch(e) {
+            incubationLog('⚠️ 扫描背包蛋失败: ' + (e.message||''));
+        }
+    }
 
     var loopTimer = null;
     var busyEvent = false;
@@ -650,7 +891,40 @@ function startAutoCraftTimer() {
     var PANEL_Z_INDEX = 2147483000;
     var isPowerSave = false;
     var UPDATE_MODAL_Z_INDEX = 2147483001;
-    var SCRIPT_VERSION = '1.6.7';
+    var SCRIPT_VERSION = '1.6.8';
+    // ===== 全部日志系统 =====
+    var _allLogs = [];
+    var _allLogEnabled = localStorage.getItem('lvSpiritCleaner.allLogEnabled') === '1';
+    var _allLogUnlocked = localStorage.getItem('lvSpiritCleaner.allLogUnlocked') === '1';
+    var _versionClickCount = 0;
+    try { var _savedLogs = localStorage.getItem('lvscAllLogs'); if (_savedLogs) _allLogs = JSON.parse(_savedLogs); } catch(_) {}
+    function allLog(tag, msg) {
+        if (!_allLogEnabled) return;
+        var now = new Date();
+        var ts = now.toLocaleTimeString();
+        var line = '[' + ts + '] [' + tag + '] ' + msg;
+        if (_allLogs.length > 0 && _allLogs[0].replace(/^\[[^\]]+\]/, '') === line.replace(/^\[[^\]]+\]/, '')) return;
+        _allLogs.unshift(line);
+        if (_allLogs.length > 1000) _allLogs.length = 1000;
+        try { localStorage.setItem('lvscAllLogs', JSON.stringify(_allLogs)); } catch(_) {}
+        var el = document.getElementById('lvscAllLogContent');
+        if (el) {
+            var searchEl = document.getElementById('lvscAllLogSearch');
+            var filterEl = document.getElementById('lvscAllLogFilter');
+            if (searchEl && filterEl) {
+                var keyword = (searchEl.value || '').toLowerCase();
+                var tagFilter = filterEl.value;
+                var filtered = _allLogs.filter(function(l) {
+                    if (tagFilter && l.indexOf('[' + tagFilter + ']') < 0) return false;
+                    if (keyword && l.toLowerCase().indexOf(keyword) < 0) return false;
+                    return true;
+                });
+                el.textContent = filtered.length ? filtered.join('\n') : '无匹配日志';
+            } else {
+                el.textContent = _allLogs.join('\n');
+            }
+        }
+    }
     var CLOUD_UPDATE_POLL_MS = 60000;
     var CLOUD_UPDATE_REMIND_MS = 300000;
     var CLOUD_UPDATE_TIMEOUT_MS = 10000;
@@ -661,7 +935,8 @@ function startAutoCraftTimer() {
     var onlineHeartbeatStarted = false;
 
     // 清理统计
-    var _cleanStats = { explores: 0, combats: 0, combatExp: 0, deaths: 0, startTime: 0, startSpirit: 0, startRealm: '', startRealmPct: 0 };
+        var _cleanStats = { explores: 0, fights: 0, deaths: 0, merChats: 0, skips: 0, quicks: 0 };
+        var _lvscLastHourlySent = false;
     var _lastCleanReport = 0;
     var _lastMeditateReport = 0;
 
@@ -723,6 +998,7 @@ function startAutoCraftTimer() {
     var autoTalismanRunning = false;
 
 function nirvanaLog(msg) {
+    allLog('涅槃', msg);
     var l = document.getElementById('lvscNirvanaLog');
     if (!l) return;
     var t = new Date().toLocaleTimeString();
@@ -866,15 +1142,9 @@ var needCraft = targetCount - current;
         var iterStart = Date.now();
         var batchCount = batchSize;
         // 自动补充材料
-        if (recipe.materials && recipe.materials.length) {
-            for (var mi = 0; mi < recipe.materials.length; mi++) {
-                var mat = recipe.materials[mi];
-                var needed = Math.max(0, (mat.required || mat.amount || 1) * batchCount);
-                if (needed > 0) {
-                    try { await gameApi().post('/api/game/craft/quick-buy-mats', { type: 'alchemy', id: state.nirvanaRecipeId, amount: needed }); } catch (_) {}
-                    await sleep(300);
-                }
-            }
+        {
+            var bought = await buyMaterialsOnce('alchemy', state.nirvanaRecipeId, batchCount);
+            if (bought && autoNirvanaRunning) { nirvanaLog('购买完成，5秒后开始炼制'); await sleep(5000); }
         }
         var craftRes = await gameApi().post('/api/game/alchemy/batch-craft', { pillId: state.nirvanaRecipeId, count: batchCount });
         if (!craftRes || craftRes.code !== 200) {
@@ -987,7 +1257,7 @@ async function ensureNirvanaPill() {
         };
         input.click();
     }
-    var CONFIG_EXCLUDE_KEYS = ['wasRunning','monitoringSpirit','farmRunning','disposeRunning','washStoneUpgradeRunning','pillUpgradeRunning','quickClearRunning','collapsed','activeTab','alwaysOnTop','chatOnTop','panelHeight','panelWidth','panelLeft','panelTop','embeddedWidth','seenBuiltinVersion','seenCloudVersion','lastCloudReminder','lastReloadTime','onlineClientId','monthlyCardLastDate','mysteryBoxLastDate','mysteryBoxOpenedToday','mysteryBoxLog','nirvanaNextTimerTime','nextAutoCraftTime','autoLoginEmail','autoLoginPassword','configSlotA','configSlotB','safeMode','safeModeBackup'];
+    var CONFIG_EXCLUDE_KEYS = ['wasRunning','monitoringSpirit','farmRunning','disposeRunning','washStoneUpgradeRunning','pillUpgradeRunning','quickClearRunning','collapsed','activeTab','alwaysOnTop','chatOnTop','panelHeight','panelWidth','panelLeft','panelTop','embeddedWidth','seenBuiltinVersion','seenCloudVersion','lastCloudReminder','lastReloadTime','onlineClientId','monthlyCardLastDate','mysteryBoxLastDate','mysteryBoxOpenedToday','mysteryBoxLog','nirvanaNextTimerTime','nextAutoCraftTime','autoLoginEmail','autoLoginPassword','configSlotA','configSlotB','safeMode','safeModeBackup','__backup','__backupTime','redPacketClaimed','redPacketTotalAmount','redPacketTodayAmount','redPacketWeekAmount','redPacketYesterdayAmount','areaNameToId','skillWashState','giftItemsDiscipleItems','giftItemsDiscipleQtys','giftStonesDiscipleQtys','autoDisposeRules','autoIncubationDesiredTraits','autoIncubationDesiredBeasts','giftItemsSelected','giftStonesSelected','spiritEquipIds','combatEquipIds','autoDisposeProtectedIds','autoDisposeProtected','giftSelectedDiscipleNames','giftItemsSelectedDiscipleNames','redPacketToday','redPacketWeek','redPacketTotal','redPacketYesterday','redPacketLastDate','skillWashSkillId'];
     function _isRuntimeKey(k) {
         for (var i = 0; i < CONFIG_EXCLUDE_KEYS.length; i++) {
             if (k.indexOf(CONFIG_EXCLUDE_KEYS[i]) !== -1) return true;
@@ -1056,11 +1326,12 @@ async function ensureNirvanaPill() {
         autoMaintainLuckBusy = false;
     }
     async function autoBreakthroughCheck() { if (!gameApi() || Date.now() - _lastBreakCheck < 300000) return; _lastBreakCheck = Date.now(); var p = getPlayer() || {}; if (!(p.breakthroughRate >= 0)) return; try { setStatus('尝试突破...', 'run', 'Break'); var r = await gameApi().post('/api/game/breakthrough', { daoBonusPercent: 0 }); if (r && r.code === 200 && r.data && r.data.success === 'true') { setStatus('突破成功!', 'run', 'Break'); wecomEnqueue('突破成功', (p.realm||'') + ' 突破成功'); } } catch (_) {} }
-    async function autoOriginRepairCheck() { if (!gameApi() || Date.now() - _lastOriginCheck < 120000) return; _lastOriginCheck = Date.now(); var p = getPlayer() || {}; var od = p.originDamage; if (!od || !od.hasDamage) return; var repairType = (od.entries && od.entries.length > 0 && od.entries[0].type) ? od.entries[0].type : 'major'; try { setStatus('修复本源碎裂(' + repairType + ')...', 'run', 'Origin'); await gameApi().post('/api/player/origin-damage/repair', { type: repairType }); wecomEnqueue('本源修复', '已修复本源碎裂(' + repairType + ')'); } catch (_) {} }
+    async function autoOriginRepairCheck() { if (!gameApi() || Date.now() - _lastOriginCheck < 120000) return; _lastOriginCheck = Date.now(); var p = getPlayer() || {}; var od = p.originDamage; if (!od || !od.hasDamage) return; var _entry = (od.entries && od.entries.length > 0) ? od.entries[0] : null; var repairType = (_entry && _entry.type) ? _entry.type : 'major'; try { setStatus('修复本源碎裂(' + repairType + ')...', 'run', 'Origin'); var _rr = await gameApi().post('/api/player/origin-damage/repair', { type: repairType }); if (_rr && _rr.code === 200) { wecomEnqueue('本源修复', '已修复本源碎裂(' + repairType + ')'); return; } var _errMsg = (_rr && (_rr.message || _rr.msg || '')) || ''; var _mats = (_entry && Array.isArray(_entry.repairMaterials)) ? _entry.repairMaterials : (Array.isArray(od.majorRepairMaterials) ? od.majorRepairMaterials : []); var _missing = []; for (var _mi = 0; _mi < _mats.length; _mi++) { var _m = _mats[_mi]; if (Number(_m.currentQty) < Number(_m.requiredQty)) { _missing.push({ name: _m.itemName || '', need: Number(_m.requiredQty) - Number(_m.currentQty) }); } } if (!_missing.length) { setStatus('材料齐全但仍修复失败: ' + _errMsg, 'warn'); return; } var _sl = await gameApi().get('/api/game/shop'); var _sItems = (_sl && _sl.code === 200 && _sl.data && Array.isArray(_sl.data.items)) ? _sl.data.items : []; var _anyBought = false; for (var _ei = 0; _ei < _missing.length; _ei++) { var _mi2 = _missing[_ei]; if (!_mi2.name) continue; var _bought = false; for (var _si = 0; _si < _sItems.length; _si++) { var _it = _sItems[_si]; var _iName = String(_it.name || _it.itemName || ''); if (_iName.indexOf(_mi2.name) < 0) continue; var _tid = String(_it.templateId || _it.id || _it.itemId || ''); if (!_tid) continue; var _sec = String(_it.section || 'lingjie'); var _st = String(_it.shopType || 'item'); setStatus('购买' + _iName + 'x' + _mi2.need + '...', 'run', 'Origin'); var _br = await gameApi().post('/api/game/buy', { templateId: _tid, quantity: _mi2.need, section: _sec, shopType: _st }); if (_br && _br.code === 200) { _bought = true; _anyBought = true; await sleep(1000); break; } } if (!_bought) { setStatus('商铺没有[' + _mi2.name + ']材料', 'warn'); } } if (!_anyBought) return; await sleep(500); var _r2 = await gameApi().post('/api/player/origin-damage/repair', { type: repairType }); if (_r2 && _r2.code === 200) { wecomEnqueue('本源修复', '已修复本源碎裂(' + repairType + ')'); return; } setStatus('购买后仍修复失败: ' + ((_r2 && _r2.message)||'未知'), 'warn'); } catch (_) {} }
     var autoDisposeRunning = false;
     var SCOPE_LABELS = {equip:'装备',pill:'丹药',scroll:'卷轴',misc:'杂物',all:'全部'};
     var RARITY_LABELS = ['','普通','优良','稀有','史诗'];
     function disposeLog(msg) {
+        allLog('处理', msg);
         var l = document.getElementById('lvscDisposeLog');
         if (!l) { if (window._disposeLog) window._disposeLog(msg); return; }
         var t = new Date().toLocaleTimeString();
@@ -1261,7 +1532,7 @@ async function ensureNirvanaPill() {
         sweepLog('完成: ' + _sweepCount + '次 藏宝图+' + _sweepMaps + ' 耗灵石' + _sweepCost);
     }
     function stopSweep() { autoSweepRunning = false; }
-    function sweepLog(msg) { var l = document.getElementById('lvscSweepLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
+    function sweepLog(msg) { allLog('扫荡', msg); var l = document.getElementById('lvscSweepLog'); if (!l) return; var t = new Date().toLocaleTimeString(); l.textContent = '[' + t + '] ' + msg + '\n' + (l.textContent || ''); if (l.textContent.length > 4000) l.textContent = l.textContent.substring(0, 4000); }
 
     // --- 灵田 ---
     async function farmOverview() { if (!gameApi()) return null; try { var r = await gameApi().get('/api/game/player-sect/farm/overview?page=1&pageSize=1'); return (r && r.code === 200 && r.data) ? r.data : null; } catch (_) { return null; } }
@@ -1293,7 +1564,7 @@ async function ensureNirvanaPill() {
     }
     async function autoFarmLoop() { if (autoFarmRunning) return; autoFarmRunning = true; try { localStorage.setItem('lvSpiritCleaner.farmRunning', '1'); } catch(_) {} updateMeter(); farmLog('灵田监控启动'); var firstCycle = true; while (autoFarmRunning) { if (firstCycle) { firstCycle = false; farmLog('── 首次启动，等待 ' + state.farmInterval + ' 秒后开始检测 ──'); var waited = 0; while (autoFarmRunning && waited < state.farmInterval * 1000) { await sleep(1000); waited += 1000; } if (!autoFarmRunning) break; } try { var data = await farmOverview(); if (!data) { farmLog('获取灵田数据失败'); await sleep(10000); continue; } var mature = data.myMatureCount || 0, idle = data.myIdleCount || 0, total = data.myPlotTotal || 0; farmLog("成熟"+mature+" 空闲"+idle+" 总计"+total); if (mature > 0 && state.farmAutoHarvest) { farmLog('收获成熟 ×' + mature); await farmHarvest(); await sleep(500); } if (idle > 0 && state.farmAutoPlant && state.farmSeedId) { farmLog('种植 ' + state.farmSeedName + ' ×' + idle); await farmPlant(state.farmSeedId); await sleep(500); } if (data.farmInvasion && state.farmAutoInvasion) { farmLog('迎击灵田入侵...'); await farmInvasionAttack(); await sleep(500); } if (state.farmExpandEnabled && idle <= 0 && Date.now() - _lastFarmExpandTime > 3600000) { _lastFarmExpandTime = Date.now(); farmLog('开垦...'); await farmExpand(999); } updateFarmExpandTimer(); } catch (e) { farmLog('异常: ' + (e.message || '')); } await sleep(state.farmInterval * 1000); } updateMeter(); autoFarmRunning = false; try { localStorage.setItem('lvSpiritCleaner.farmRunning', '0'); } catch(_) {} }
     function stopFarm() { autoFarmRunning = false; try { localStorage.setItem('lvSpiritCleaner.farmRunning', '0'); } catch(_) {} updateMeter(); }
-    function farmLog(msg) { var log = document.getElementById('lvscFarmLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
+    function farmLog(msg) { allLog('灵田', msg); var log = document.getElementById('lvscFarmLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
     function updateFarmExpandTimer() {
         var el = document.getElementById('lvscFarmNextExpand'); if (!el) return;
         var next = _lastFarmExpandTime + 3600000;
@@ -1308,10 +1579,10 @@ async function ensureNirvanaPill() {
     async function fetchPavilionShop() { if (!gameApi()) return []; try { var res = await gameApi().get('/api/game/player-sect/builtin-shop'); if (res && res.code === 200 && Array.isArray(res.data) && res.data.length > 0) return res.data; } catch (_) {} try { var res2 = await gameApi().get('/api/game/sect/shop'); if (res2 && res2.code === 200 && Array.isArray(res2.data)) return res2.data; } catch (_) {} return []; }
     async function autoPavilionLoop() { if (autoPavilionRunning || running) return; syncSettingsFromUi(); if (!state.pavilionItemId || !gameApi()) { setStatus('请先选择珍宝阁商品', 'warn'); return; } autoPavilionRunning = true; var done = 0, succ = 0; updateMeter(); pavilionLog('开始兑换: ' + state.pavilionItemName + ' 每次' + state.pavilionQty + ' 循环' + state.pavilionLoop); while (autoPavilionRunning && done < state.pavilionLoop) { try { var r = await gameApi().post('/api/game/player-sect/buy-builtin-item', { itemId: state.pavilionItemId, quantity: state.pavilionQty }); if (!r || r.code !== 200) { r = await gameApi().post('/api/game/sect/shop/buy', { itemId: state.pavilionItemId, quantity: state.pavilionQty }); } if (r && r.code === 200) { succ++; pavilionLog('✓ ' + (done + 1) + '/' + state.pavilionLoop); } else { pavilionLog('✗ ' + (done + 1) + ': ' + ((r && r.message) || '')); } } catch (e) { pavilionLog('✗ 异常: ' + (e.message || '')); } done++; if (done < state.pavilionLoop) await sleep(state.pavilionDelay + Math.floor(Math.random() * 500)); } autoPavilionRunning = false; updateMeter(); pavilionLog('完成: ' + succ + '/' + done); setStatus('珍宝阁完成', 'run'); }
     function stopPavilion() { autoPavilionRunning = false; updateMeter(); }
-    function pavilionLog(msg) { var log = document.getElementById('lvscPavilionLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
+    function pavilionLog(msg) { allLog('珍宝阁', msg); var log = document.getElementById('lvscPavilionLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
 
     // --- 批量用符 ---
-    function talismanLog(msg) { var log = document.getElementById('lvscTalismanLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
+    function talismanLog(msg) { allLog('制符', msg); var log = document.getElementById('lvscTalismanLog'); if (!log) return; var t = new Date().toLocaleTimeString(); log.textContent = '[' + t + '] ' + msg + '\n' + (log.textContent || ''); if (log.textContent.length > 4000) log.textContent = log.textContent.substring(0, 4000); }
     async function autoTalismanLoop() {
         if (autoTalismanRunning || !gameApi()) return;
         autoTalismanRunning = true;
@@ -1478,7 +1749,200 @@ async function ensureNirvanaPill() {
         }
     }
 
-    function autoVerifySolver() { try { if (!state.autoVerify) return; var btns=document.querySelectorAll('button.modal-btn-outline');if(btns.length>=2){var c=document.querySelector('.modal-info-card')||document.querySelector('.modal-content');var t=(c&&c.textContent)||'';if(t.indexOf('试算')>=0||t.indexOf('人机验证')>=0){var nr=/([\d.]+|[一二三四五六七八九十百千万零壹贰叁肆伍陆柒捌玖拾]+)/g;var ns=[],m;while((m=nr.exec(t))!==null){var v=m[1];ns.push(isNaN(Number(v))?(typeof parseChineseNum==="function"?parseChineseNum(v):NaN):Number(v))}if(ns.length>=2){var a=ns[ns.length-2],b=ns[ns.length-1],ans;if(t.indexOf("加")>=0||t.indexOf("+")>=0)ans=a+b;else if(t.indexOf("减")>=0||t.indexOf("-")>=0)ans=a-b;else if(t.indexOf("乘")>=0||t.indexOf("×")>=0)ans=a*b;else if(t.indexOf("除")>=0||t.indexOf("÷")>=0)ans=a/b;if(!isNaN(ans)&&isFinite(ans)){if(ans===Math.floor(ans))ans=Math.floor(ans);else ans=Math.round(ans*100)/100;var s=String(ans);for(var i=0;i<btns.length;i++){if((btns[i].textContent||'').trim()===s){setTimeout(function(x){x.click()},200,btns[i]);setStatus('自动过验证(按钮): '+a+' op '+b+' = '+ans,'run');return}}}}}}var inp=document.getElementById("gamePromptInput");var btn=document.getElementById("gamePromptConfirmBtn");if(!inp||!btn||inp.offsetHeight===0)return;var card=document.querySelector(".modal-content");var txt=(card&&card.textContent)||"";var numRe=/([\d.]+|[一二三四五六七八九十百千万零壹贰叁肆伍陆柒捌玖拾]+)/g;var nums=[],m;while((m=numRe.exec(txt))!==null){var v=m[1];nums.push(isNaN(Number(v))?(typeof parseChineseNum==="function"?parseChineseNum(v):NaN):Number(v))}if(nums.length<2)return;var a=nums[nums.length-2],b=nums[nums.length-1],ans;if(txt.indexOf("加")>=0||txt.indexOf("+")>=0)ans=a+b;else if(txt.indexOf("减")>=0||txt.indexOf("-")>=0)ans=a-b;else if(txt.indexOf("乘")>=0||txt.indexOf("×")>=0)ans=a*b;else ans=a/b;if(!isNaN(ans)&&isFinite(ans)){inp.value=ans===Math.floor(ans)?String(Math.floor(ans)):String(Math.round(ans*100)/100);setTimeout(function(){btn.click()},200)} }catch(_){} } setInterval(autoVerifySolver,2000);
+    // 通用算术求解（支持括号、优先级、中文数字）
+    function solveVerifyArithmetic(text) {
+        text = text.replace(/\s+/g, ' ');
+        console.log('[验证] solveVerifyArithmetic输入=' + text.substring(0, 200));
+        // 提取表达式部分
+        var expr = null;
+        var m;
+        // 试算：...答案为/等于几何/结果是多少/得出何数/请选择
+        m = text.match(/试算[：:]\s*(.+?)(?:[，,]?\s*(?:答案为|等于几何|结果是多少|得出何数|请选择|[？?])|[，,]?\s*$)/);
+        if (m) { expr = m[1]; console.log('[验证] 匹配试算, expr=' + expr); }
+        // 道友，...
+        if (!expr) { m = text.match(/道友[，,]\s*(.+?)(?:[，,]?\s*(?:答案为|等于几何|结果是多少|得出何数|结果是|[？?])|[，,]?\s*$)/); if (m) { expr = m[1]; console.log('[验证] 匹配道友, expr=' + expr); } }
+        // 请心算...
+        if (!expr) { m = text.match(/请心算[，,]?\s*(.+?)(?:[，,]?\s*(?:答案为|等于几何|结果是多少|得出何数|结果是|[？?])|[，,]?\s*$)/); if (m) { expr = m[1]; console.log('[验证] 匹配请心算, expr=' + expr); } }
+        // 含括号的独立表达式
+        if (!expr) { m = text.match(/([（(][^）)]+[）)][^，,]*?)(?:[，,]?\s*(?:答案为|等于几何|结果是多少|得出何数|请选择|[？?])|[，,]?\s*$)/); if (m) { expr = m[1]; console.log('[验证] 匹配括号, expr=' + expr); } }
+        // 兜底：找数字开头的算式
+        if (!expr) { m = text.match(/([\d零一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾][^？?]*?)(?:[，,]?\s*(?:答案为|等于几何|结果是多少|得出何数|结果是|请选择|[？?])|[，,]?\s*$)/); if (m) { expr = m[1]; console.log('[验证] 匹配兜底, expr=' + expr); } }
+        if (!expr) { console.log('[验证] 所有正则均未匹配！'); return null; }
+        // 清理
+        expr = expr.replace(/等于几何|结果是多少|得出何数|答案为|答案|结果是|请选择/g, ' ');
+        expr = expr.replace(/[，,。？?!！]/g, ' ');
+        expr = expr.replace(/\s+/g, ' ').trim();
+        console.log('[验证] 清理后expr=' + expr);
+        // 递归求值（支持括号）
+        var finalResult = evalWithParens(expr);
+        console.log('[验证] evalWithParens结果=' + finalResult);
+        return finalResult;
+    }
+    function evalWithParens(expr) {
+        var maxIter = 10;
+        while (maxIter-- > 0) {
+            var m = expr.match(/[（(]([^（）()]+)[）)]/);
+            if (!m) break;
+            var v = evalSimpleExpr(m[1]);
+            if (v === null) return null;
+            expr = expr.substring(0, m.index) + String(v) + expr.substring(m.index + m[0].length);
+        }
+        return evalSimpleExpr(expr);
+    }
+    function evalSimpleExpr(expr) {
+        // 分词
+        expr = expr.replace(/的\\s*积/g, '').replace(/的/g, ' ').replace(/再/g, ' ').trim();
+        var combined = /(\d+(?:\.\d+)?|[零〇一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾]+)|(加上|减去|乘以|除以|加|减|乘|除|[+\-×÷*/])/g;
+        var tokens = [], m;
+        while ((m = combined.exec(expr)) !== null) {
+            if (m[1] !== undefined) {
+                if (tokens.length > 0 && typeof tokens[tokens.length - 1] === 'number') {
+                    tokens[tokens.length - 1] = parseChineseNum(String(tokens[tokens.length - 1]) + m[1]);
+                } else {
+                    tokens.push(parseChineseNum(m[1]));
+                }
+            } else if (m[2] !== undefined) {
+                tokens.push(m[2]);
+            }
+        }
+        if (tokens.length === 1 && typeof tokens[0] === 'number') return tokens[0];
+        if (tokens.length < 3 || tokens.length % 2 === 0) return null;
+        var nums = [], ops = [];
+        for (var i = 0; i < tokens.length; i++) {
+            if (i % 2 === 0) nums.push(tokens[i]); else ops.push(tokens[i]);
+        }
+        // 先乘除
+        for (var i = 0; i < ops.length; i++) {
+            var op = ops[i];
+            if (/乘|除|×|÷|\*|\//.test(op)) {
+                var a = nums[i], b = nums[i + 1];
+                var res;
+                if (/除|÷|\//.test(op)) { if (b === 0) return null; res = a / b; } else res = a * b;
+                nums.splice(i, 2, res); ops.splice(i, 1); i--;
+            }
+        }
+        // 再加减
+        var result = nums[0];
+        for (var i = 0; i < ops.length; i++) {
+            var b = nums[i + 1];
+            if (/加|＋|\+/.test(ops[i])) result += b;
+            else if (/减|－|−|-/.test(ops[i])) result -= b;
+            else return null;
+        }
+        return result;
+    }
+    var _verifyLastText = '';
+    var _verifyPassCount = parseInt(localStorage.getItem('lvscVerifyPassCount') || '0', 10) || 0;
+    function trySolveVerify(container) {
+        if (!state.autoVerify || !container) return;
+        var t = (container.textContent || '');
+        console.log('[验证] trySolveVerify 被调用, autoVerify=' + state.autoVerify + ', text前150字=' + t.substring(0, 150));
+        if (t === _verifyLastText) { console.log('[验证] 文本与上次相同，跳过'); return; }
+        if (t.indexOf('验证') < 0 && t.indexOf('试算') < 0 && t.indexOf('答案为') < 0 && t.indexOf('心算') < 0 && t.indexOf('道友') < 0) { console.log('[验证] 无关键词，跳过'); return; }
+        _verifyLastText = t;
+        var result = solveVerifyArithmetic(t);
+        console.log('[验证] solveVerifyArithmetic 结果=' + result);
+        if (result === null || !Number.isFinite(result)) { console.log('[验证] 计算结果无效，跳过'); return; }
+        if (result === Math.floor(result)) result = Math.floor(result);
+        else result = Math.round(result * 100) / 100;
+        var s = String(result);
+        console.log('[验证] 查找答案按钮，期望值=' + s + ', 容器内元素总数=' + container.querySelectorAll('td, div, span, button, a').length);
+        // 找所有可见的匹配选项
+        var all = container.querySelectorAll('td, div, span, button, a');
+        var clicked = false;
+        for (var j = 0; j < all.length; j++) {
+            var txt = (all[j].textContent || '').trim();
+            if (txt === s && all[j].offsetHeight > 0 && all[j].children.length === 0) {
+                console.log('[验证] 找到按钮，点击: tag=' + all[j].tagName + ', text=' + txt);
+                setTimeout(function(x) { x.click(); }, 200, all[j]);
+                clicked = true;
+                _verifyLastText = t;
+                _verifyPassCount++;
+                try { localStorage.setItem('lvscVerifyPassCount', String(_verifyPassCount)); } catch(_){}
+                var vc = document.getElementById('lvscVerifyCount');
+                if (vc) vc.textContent = _verifyPassCount;
+                return;
+            }
+        }
+        if (!clicked) console.log('[验证] 未找到匹配按钮，尝试input方案');
+        // 用input方式
+        var inp = document.getElementById('gamePromptInput');
+        var btn = document.getElementById('gamePromptConfirmBtn');
+        if (inp && btn && inp.offsetHeight > 0) {
+            inp.value = s;
+            setTimeout(function() { btn.click(); }, 200);
+        }
+        _verifyLastText = '';
+    }
+    // MutationObserver 实时检测验证弹窗
+    function startVerifyObserver() {
+        var observer = new MutationObserver(function(mutations) {
+            if (!state.autoVerify) return;
+            for (var i = 0; i < mutations.length; i++) {
+                var nodes = mutations[i].addedNodes;
+                for (var j = 0; j < nodes.length; j++) {
+                    var node = nodes[j];
+                    if (node.nodeType !== 1) continue;
+                    var t = (node.textContent || '');
+                    if (t.indexOf('验证') >= 0 || t.indexOf('试算') >= 0 || t.indexOf('道友') >= 0 || t.indexOf('心算') >= 0) {
+                        setTimeout(function(c) { trySolveVerify(c); }, 300, node);
+                        setTimeout(function(c) { _verifyLastText = ''; trySolveVerify(c); }, 1000, node);
+                        return;
+                    }
+                    // 检查子节点
+                    var children = node.querySelectorAll ? node.querySelectorAll('*') : [];
+                    for (var k = 0; k < children.length; k++) {
+                        var ct = (children[k].textContent || '');
+                        if (ct.indexOf('验证') >= 0 || ct.indexOf('试算') >= 0 || ct.indexOf('道友') >= 0) {
+                            setTimeout(function(c) { trySolveVerify(c); }, 300, node);
+                            setTimeout(function(c) { _verifyLastText = ''; trySolveVerify(c); }, 1000, node);
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+    // 轮询兜底
+    setInterval(function() {
+        if (!state.autoVerify) return;
+        var verifyKeywords = ['人机验证','试算','答案为','心算','等于几何','结果是多少','得出何数','道友'];
+        // 优先：检查 #gameDialogModal 弹窗本体
+        var modal = document.getElementById('gameDialogModal');
+        if (modal && !modal.classList.contains('hidden') && modal.offsetHeight > 0) {
+            var mt = (modal.textContent || '');
+            for (var k = 0; k < verifyKeywords.length; k++) {
+                if (mt.indexOf(verifyKeywords[k]) >= 0) {
+                    console.log('[验证] 命中gameDialogModal');
+                    var c = modal.querySelector('.modal-info-card') || modal.querySelector('.modal-content') || modal;
+                    _verifyLastText = '';
+                    trySolveVerify(c);
+                    return;
+                }
+            }
+        }
+        // 后备：只搜弹窗专用class，排除页面大容器
+        var all = document.querySelectorAll('.modal, .modal-info-card, .modal-content, [role="dialog"]');
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].offsetHeight <= 0) continue;
+            if (all[i].id === 'game-wrapper' || all[i].classList.contains('game-wrapper')) continue;
+            var t = (all[i].textContent || '');
+            var hasKeyword = false;
+            for (var k = 0; k < verifyKeywords.length; k++) {
+                if (t.indexOf(verifyKeywords[k]) >= 0) { hasKeyword = true; break; }
+            }
+            if (hasKeyword) {
+                console.log('[验证] 后备匹配, tag=' + all[i].tagName + ', class=' + all[i].className);
+                _verifyLastText = '';
+                trySolveVerify(all[i]);
+                return;
+            }
+        }
+    }, 1500);
+    // 启动Observer
+    if (document.body) startVerifyObserver();
+    else document.addEventListener('DOMContentLoaded', startVerifyObserver);
 
     // 自动解决反脚本验证（算术题）- 支持中文数字
     var CHINESE_NUMS = { '零':0,'〇':0,'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'百':100,'千':1000,'万':10000,'壹':1,'贰':2,'叁':3,'肆':4,'伍':5,'陆':6,'柒':7,'捌':8,'玖':9,'拾':10 };
@@ -1497,32 +1961,20 @@ async function ensureNirvanaPill() {
         window._origGamePrompt = origGamePrompt; // 保存原始引用，供手动测试用
         window.gamePrompt = function (message, title, onOk, onCancel, isDestructive, inputOpts) {
             // 检测是否是反脚本验证
-            if (message && message.indexOf('请输入下方算式结果') >= 0) {
+            if (message && (message.indexOf('算式') >= 0 || message.indexOf('试算') >= 0 || message.indexOf('人机验证') >= 0 || message.indexOf('答案为') >= 0 || message.indexOf('请心算') >= 0 || message.indexOf('等于几何') >= 0 || message.indexOf('结果是多少') >= 0 || message.indexOf('得出何数') >= 0 || message.indexOf('道友') >= 0)) {
+                console.log('[验证] gamePrompt钩子触发, message前150字=' + String(message).substring(0, 150));
                 var tmp = document.createElement('div');
                 tmp.innerHTML = message;
                 var text = (tmp.textContent || '').replace(/\s+/g, ' ');
-                var numRe = '([\d.]+|[一二三四五六七八九十百千万零〇壹贰叁肆伍陆柒捌玖拾]+)';
-                var opRe = '([+\-×÷*\/xX＋－−])';
-                var exprMatch = text.match(new RegExp(numRe + '\s*' + opRe + '\s*' + numRe));
-                if (!exprMatch) { exprMatch = message.replace(/<[^>]+>/g, ' ').match(new RegExp(numRe + '\s*' + opRe + '\s*' + numRe)); }
-                if (exprMatch) {
-                    var a = parseChineseNum(exprMatch[1]);
-                    var op = exprMatch[2];
-                    var b = parseChineseNum(exprMatch[3]);
-                    var answer = NaN;
-                    if (op === '+' || op === '＋') answer = a + b;
-                    else if (op === '-' || op === '－' || op === '−') answer = a - b;
-                    else if (op === '×' || op === 'x' || op === 'X' || op === '*') answer = a * b;
-                    else if (op === '÷' || op === '/') answer = a / b;
-                    if (Number.isFinite(answer)) {
-                        if (answer === Math.floor(answer)) answer = Math.floor(answer);
-                        else answer = Math.round(answer * 100) / 100;
-                        setStatus('自动过验证: ' + a + ' ' + op + ' ' + b + ' = ' + answer, 'run');
-                        if (onOk) { onOk(String(answer)); return; }
-                    }
+                var result = solveVerifyArithmetic(text);
+                console.log('[验证] gamePrompt计算=' + result + ', 有onOk=' + (typeof onOk === 'function'));
+                if (result !== null && Number.isFinite(result)) {
+                    if (result === Math.floor(result)) result = Math.floor(result);
+                    else result = Math.round(result * 100) / 100;
+                    setStatus('自动过验证: ' + result, 'run');
+                    if (onOk) { onOk(String(result)); return; }
                 }
             }
-
             // 不是验证弹窗，走原始逻辑
             return origGamePrompt.apply(this, arguments);
         };
@@ -1552,10 +2004,55 @@ async function ensureNirvanaPill() {
     }
     var wecomBusy = false;
     var wecomQueue = [];
+    // === 新功能标记系统 ===
+    // 自动从最新 changelog 提取关键词匹配面板标题，无需手动维护映射
+    function compareVer(a, b) {
+        var pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+        for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+            var na = pa[i] || 0, nb = pb[i] || 0;
+            if (na !== nb) return na - nb;
+        }
+        return 0;
+    }
+    function applyNewBadges() {
+        try {
+            var seenVer = localStorage.getItem('lvSpiritCleaner.seenBuiltinVersion') || '0.0.0';
+            var curVer = typeof SCRIPT_VERSION !== 'undefined' ? SCRIPT_VERSION : '0.0.0';
+            if (compareVer(seenVer, curVer) >= 0) return;
+            if (!BUILTIN_CHANGELOG || !BUILTIN_CHANGELOG.length) return;
+            var allNotes = (BUILTIN_CHANGELOG[0].notes || []).join(' ');
+            var rows = document.querySelectorAll('.lvsc-section-title-row');
+            for (var i = 0; i < rows.length; i++) {
+                var span = rows[i].querySelector('span');
+                if (!span) continue;
+                var title = span.textContent.trim();
+                if (!title || title.length < 2) continue;
+                if (allNotes.indexOf(title) !== -1) {
+                    if (rows[i].querySelector('.lvsc-new-badge')) continue;
+                    var badge = document.createElement('span');
+                    badge.className = 'lvsc-new-badge';
+                    badge.textContent = 'NEW';
+                    badge.title = 'v' + curVer + ' 新增/变更功能';
+                    rows[i].appendChild(badge);
+                }
+            }
+        } catch (_) {}
+    }
+
     var BUILTIN_CHANGELOG = [
          {
+            version: '1.6.8',
+            title: '自动温养+授箓+秘境+化身喂丹+修为统计',
+            notes: ['自动温养监控(灵兽蛋自动入队/孵化筛选/不符合自动放生)', '自动授箓(购买材料→上缴玄金→授箓循环/可计算预览)', '秘境自动挑战(自动创建队伍→准备→挑战/仙缘刷新)', '化身喂丹(自动炼制分魂丹→喂丹→自动突破/冥想自动暂停恢复)', '每日问道+每日上供(师父互动自动化)', '修为统计面板(实时进度/条形图/历史记录/每日收益)', '全部日志系统(点击版本号5次解锁/搜索分类筛选/浮窗模式)', '操作区折叠(收起操作区/左侧面板整体折叠)', '置顶按钮(内嵌模式下📌置顶面板)', '自动验证全面重写(支持括号/中文数字/多种题型/MutationObserver实时检测)', '试炼塔重写(独立循环/日志面板/可配间隔重试目标层数)', '红包最低金额过滤+抢后自动发言', '企业微信通知8类别开关(清理/冥想/战斗/Buff/装备/师门/铭文/其他/整点统计)', '炼制重构(先买再炼/单次购买量可配/连续失败10次自动停)', '本源修复失败自动购买缺失材料', '仙缘冥想神识阈值20%→30%+成功后切回战斗套', '系统模式陨落立即复活(不再等10秒)', '省电模式新增刷新保持选项', '配置自动备份(防丢失)+导出导入网站数据', '夜晚检测间隔可分别配置(快速清理/探索)']
+         },
+         {
+            version: '1.6.7',
+            title: '绕检测+禁闭修复',
+            notes: ['绕过检测解决禁闭问题，需清空灵界数据']
+         },
+         {
             version: '1.6.6',
-            title: 'QQ交流群901064639 快速清理+内嵌主题+抢红包',
+            title: '快速清理+内嵌主题+抢红包',
             notes: ['快速清理模式(神识耗尽冥想+夜晚智能打怪)', '自动抢红包监控(MutationObserver实时检测)', '竞技场模拟器(支持对手选择与胜率统计)', '省电模式(全黑覆盖层减少渲染负担)', '画中画模式(独立悬浮窗显示运行状态)', '通知推送(系统通知栏+App Badge)', '内嵌主题模式(适配游戏侧边栏主题)', '配置槽位(A/B槽快速切换配置方案)', '默认配置自动加载(新用户一键初始化)', '安全模式增强(配置备份与恢复机制)', '刷新后自启(多项监控支持自动恢复)', '炼制延迟可配置(防检测随机间隔)', '涅槃延迟可配置(独立设置每批间隔)', '首次启动等待(避免刚启动误判)', '运行日志弹窗(点击状态栏查看历史)', '主日志重构(日期分隔+刷新保留)', '面板动画优化(显示/折叠过渡效果)', '折叠状态持久化(记忆展开/收起)', '游戏菜单注入(更多菜单+灵界入口)', '自动登录实时保存(oninput即时存储)', '保释方式新增材料选项', '战力倍率范围扩展(0.05~10)', '品质炼制购买延迟降低(1500ms→300ms)', '修复空白卷轴误判问题', '修复折叠状态同步异常']
          },
          {
@@ -1677,45 +2174,99 @@ async function ensureNirvanaPill() {
         ]
     };
     var BUILTIN_DEFAULTS = {
-        autoMeditate:'1',autoMerchantLegend:'0',merchantMode:'leave',merchantKeyword:'0',merchantMaxPrice:'0',
-        autoHireCheapest:'1',hireRetryLimit:'1',hireMaxFee:'0',noMasterProtector:'0',autoMysteryBox:'0',
-        autoSelfFightWeak:'1',selfFightMargin:'1',noCrossRealmFight:'1',noCrossRealmGap:'1',
-        autoRecoveryMode:'both',autoRecoveryThreshold:'50',autoRecoveryTarget:'100',sectQuickRecovery:'1',
-        autoHpPriority:'宗门,灵力,丹药',autoMpPriority:'宗门,丹药,灵石',autoRepair:'0',autoOriginRepair:'1',repairThreshold:'100',
-        autoVoidBody:'0',voidBodyRarity:'5',voidBodyBuyQty:'1',autoHiddenCharm:'0',hiddenCharmRarity:'5',hiddenCharmBuyQty:'1',hiddenCharmRetryMs:'60000',
-        autoNirvanaPill:'1',autoReviveDeath:'1',nirvanaRarity:'5',nirvanaRecipeId:'',nirvanaCraftQty:'1',nirvanaBatchSize:'10',nirvanaQualityCount:'10',nirvanaQualityTarget:'5',nirvanaUseQty:'1',nirvanaAutoTimer:'0',nirvanaTimerMin:'45',
-        autoDisposeEnabled:'0',autoDisposeInterval:'300',autoDisposeRules:'[]',autoDisposeProtectedIds:'["skill_sect_sword"]',autoDisposeProtected:'[]',autoSynthesize:'0',
-        farmAutoHarvest:'0',farmAutoPlant:'0',farmSeedId:'',farmSeedName:'选择种子',farmInterval:'1000',farmExpandEnabled:'1',farmExpandCount:'50',farmExpandHours:'1',farmAutoInvasion:'0',
-        autoBreakthrough:'1',safeMode:'0',autoMonthlyCard:'1',bailMethod:'stone',autoBail:'0',autoBailClick:'0',autoVerify:'0',
-        minLuck:'10',luckRefreshMethod:'stone',autoMaintainLuck:'0',monitorStartSpirit:'95',meditateStopSpirit:'95',
-        autoGiftItemsDaily:'0',autoGiftStonesDaily:'0',autoTeachDaily:'0',autoMasterRequests:'0',
-        washStoneMonitorInterval:'900',washStoneUpgrade:'1',washUpgradeAfterRefresh:'1',craftQualityTarget:'0',craftTimerMode:'quality',craftType:'alchemy',craftRecipeId:'',craftBatchSize:'0',craftQualityCount:'0',craftTargetCount:'10',craftAutoTimer:'0',craftTimerMin:'60',craftAutoBuyMats:'0',craftAfterRefresh:'0',
-        inscriptionStat:'攻击',inscriptionQuality:'any',inscriptionMinValue:'0',inscriptionEquipmentId:'',inscriptionAutoEquip:'0',inscriptionTargets:'神识:195',inscriptionPullMode:'10',inscriptionResultDelay:'2000',inscriptionDiscardDelay:'2000',inscriptionEquipCrossStat:'0',inscriptionEquipSkipSpirit:'0',inscriptionStopMode:'any',inscriptionMaxAttempts:'0',
-        pavilionItemName:'宗门破境丹',pavilionItemId:'psect_breakthrough',pavilionQty:'99',pavilionLoop:'10',pavilionDelay:'5000',
-        autoReloadMin:'0',useAdvancedMeditate:'1',summerOnlyAdvMeditate:'1',summerOnlyAdvancedMeditate:'1',nightOnlyExplore:'1',advMedCooldownMin:'0',autoRefreshLuck:'1',autoExploreAfterMeditate:'1',
-        themeMode:'float',equipSwapEnabled:'0',exploreMode:'api',preferMultiplier:'1',keepMultiplier:'0',quickClearTargetPct:'95',
-        pillUpgradeMonitorInterval:'500',
-        wecomNotify:'0',wecomNotifyWebhook:'',wecomWorldWebhook:'',wecomPrivateWebhook:'',wecomShowStatus:'1',
-        autoRestart:'1',autoPetHeal:'1',autoPetHealInterval:'6666',autoFullHeal:'1',autoFullHealInterval:'1500',
-        delayMs:'2000',autoRecruit:'0',recruitIntervalMs:'1000',autoHudaoBreakMeditate:'0',
-        autoSellEnabled:'0',autoSellInterval:'60',autoSellScope:'pill',
-        giftItemsMode:'all',giftStonesMode:'all',giftItemName:'灵草',giftItemQty:'1',giftStonesQty:'1',giftItemTemplateId:'beast_core_high_1',giftPlayerItemId:'477417',
-        skillWashScope:'body',skillWashCategory:'ATTACK',skillWashSkillId:'4590',skillWashSlot:'1',skillWashStoneQuality:'5',skillWashTargetMin:'',skillWashTargetType:'',skillWashUpgradeTarget:'5',
-        spiritEquipIds:'["1395435","1250688","639818","1287451","-9000001"]',combatEquipIds:'["1395435","1250688","639818","1395419","-9000001"]',equipSpiritSlot:'1',equipCombatSlot:'2',
-        giftItemsSelected:'[]',giftStonesSelected:'[]',
-        giftItemsSelectedDiscipleNames:'["南风知我意","喵喵喵","改变","零四"]',giftSelectedDiscipleNames:'["南风知我意","喵喵喵","改变","零四"]',
-        giftItemsDiscipleQtys:'{}',giftStonesDiscipleQtys:'{}',
-        aggressiveMode:'0',giftItemsDiscipleItems:'{"id_3873":{"itemId":477417,"itemName":"灵草"},"id_3223":{"itemId":477417,"itemName":"灵草"},"id_3272":{"itemId":477417,"itemName":"灵草"},"id_3616":{"itemId":477417,"itemName":"灵草"},"id_933":{"itemId":477417,"itemName":"灵草"}}',
-        areaNameToId:'{"仙君诏庭天仙":"immortal_lord_edict_court","万法朝阙仙君":"immortal_lord_wanfa_court","玄黄荒阙仙王":"immortal_king_xuanhuang_waste","太荒王域仙王":"immortal_king_taihuang_realm"}',
-        autoNatalDevour:'0',checkDaoyunBoost:'0',
-        qualityCraftAfterRefresh:'1',luckAfterRefresh:'1',farmAfterRefresh:'1',disposeAfterRefresh:'1',
-        reviveExploreArea:'',merchantQualityFirst:'0',merchantStrictMatch:'0',
-        treasureBatchSize:'0',treasureUseQuantity:'1',treasureIntervalMs:'0',
-        powerSave:'0',pipMode:'0',notifyMode:'0',desktopNotify:'0',
-        statusMutedBreak:'0',statusMutedFarm:'0',statusMutedDispose:'0',statusMutedCraft:'0',statusMutedOrigin:'0',statusMutedLuck:'0',statusMutedInsc:'0',statusMutedFight:'0',statusMutedMerchant:'0',statusMutedEquip:'0',statusMutedWecom:'1'
+        areaCollapse:'1',nirvanaAutoTimer:'0',pavilionItemName:'宗门破境丹',
+        skillWashScope:'body',autoWashStoneUpgrade:'1',autoMerchantLegend:'1',
+        autoStartIncubation:'0',autoWenDaoDaily:'0',nightCheckIntervalExplore:'30',
+        minLuck:'10',statusMutedBreak:'0',offeringQty:'1',inscriptionMinValue:'',
+        qualityCraftAfterRefresh:'1',ordainTargetCount:'10',statusMutedFarm:'0',
+        autoOfferingDaily:'0',luckAfterRefresh:'1',skillWashCategory:'ATTACK',
+        ordainBuyQty:'1000',incarnationAutoBuy:'0',inscriptionPullMode:'10',
+        autoGiftStonesDaily:'1',offeringItemName:'高阶妖核',craftQualityTarget:'0',
+        autoReloadMin:'0',incarnationDelayMin:'15',farmExpandHours:'1',
+        autoHireCheapest:'1',giftPlayerItemId:'1940192',skillWashSlot:'1',
+        notifyMaster:'1',inscriptionStopMode:'any',skillWashTargetMin:'',
+        inscriptionMaxAttempts:'0',farmAutoPlant:'0',autoStartFarm:'0',
+        autoDisposeEnabled:'0',statusMutedDispose:'0',incarnationRetryDelay:'30',
+        redPacketMinAmount:'0',redPacketEnabled:'0',merchantQualityFirst:'0',
+        autoMpPriority:'宗门,丹药,灵石',farmAfterRefresh:'1',skillWashTargetType:'',
+        keepMultiplier:'0',advMedCooldownMin:'1',incubationRunning:'0',
+        summerOnlyAdvMeditate:'1',trialAutoMeditate:'0',autoBail:'0',
+        autoFullHeal:'1',treasureIntervalMs:'0',giftItemsMode:'all',
+        farmAutoHarvest:'0',autoHudaoBreakMeditate:'0',powerSave:'1',
+        bailMethod:'stone',statusMutedCraft:'0',hiddenCharmRetryMs:'60000',
+        craftAfterRefresh:'0',pavilionQty:'99',notifyMode:'0',giftItemQty:'1',
+        notifyEquip:'1',nirvanaRarity:'1',autoStartDispose:'0',
+        inscriptionEquipmentId:'1970978',treasureUseQuantity:'1',selfFightMargin:'1',
+        trialRetryDelay:'60',hiddenCharmBuyQty:'1',wecomWorldWebhook:'',
+        autoSellInterval:'60',statusMutedOrigin:'0',autoMonthlyCard:'0',
+        autoReviveDeath:'1',autoStartPillUpgrade:'0',autoDisposeRules:'[]',
+        inscriptionResultDelay:'2000',merchantMode:'legend',statusMutedLuck:'0',
+        autoDisposeProtected:'[]',autoRepair:'0',autoIncubationInterval:'300',
+        ordainPauseMeditate:'1',pavilionDelay:'5000',nightCheckIntervalQuick:'30',
+        aggressiveMode:'0',nirvanaRecipeId:'',autoSellScope:'pill',
+        farmAutoInvasion:'0',merchantMaxPrice:'99999',nirvanaCraftQty:'1',
+        statusMutedInsc:'0',quickClearTargetPct:'95',useAdvancedMeditate:'1',
+        nightOnlyExplore:'1',pipMode:'1',autoSellEnabled:'0',
+        washStoneMonitorInterval:'500',giftItemName:'传说洗炼石',
+        craftTimerMode:'normal',inscriptionQuality:'any',reviveExploreArea:'',
+        incarnationCraftQty:'10',equipSpiritSlot:'1',wecomShowStatus:'1',
+        autoMysteryBox:'0',autoHiddenCharm:'0',autoHpPriority:'宗门,灵力,丹药',
+        craftType:'alchemy',nirvanaBatchSize:'10',repairThreshold:'100',
+        noMasterProtector:'0',merchantKeyword:'洗炼石 灵兽蛋 涅槃重生丹 空白卷轴',
+        incarnationCraftBuyDelay:'60',craftDelayMax:'120',autoSynthesize:'0',
+        craftQualityCount:'0',autoVoidBody:'0',wecomNotify:'0',
+        inscriptionStat:'攻击',skillWashStoneQuality:'1',craftBuyAmount:'0',
+        skillWashUpgradeTarget:'5',trialSkipCombat:'0',hiddenCharmRarity:'5',
+        incarnationDelayMax:'25',pavilionItemId:'psect_breakthrough',
+        craftRecipeId:'',autoStartWashStone:'0',quickClearShowCompact:'0',
+        autoDisposeInterval:'2000',voidBodyRarity:'5',nirvanaQualityCount:'10',
+        craftAutoTimer:'0',autoVerify:'1',trialInterval:'5',autoTeachDaily:'0',
+        autoRecoveryTarget:'100',giftStonesMode:'all',notifyInsc:'1',
+        autoPetHeal:'1',notifyCombat:'1',autoNirvanaPill:'1',
+        wecomNotifyWebhook:'',redPacketChatMsgs:'',autoMeditate:'1',
+        voidBodyBuyQty:'1',statusMutedFight:'0',autoMaintainLuck:'0',
+        autoGiftItemsDaily:'0',autoRecruit:'0',checkDaoyunBoost:'0',
+        craftTimerMin:'10',inscriptionAutoEquip:'0',offeringPlayerItemId:'1697632',
+        craftDelayMin:'60',autoLoginEnabled:'0',farmSeedName:'选择种子',
+        treasureBatchSize:'0',ordainAutoBuy:'1',notifyClean:'1',
+        equipSwapEnabled:'0',inscriptionEquipSkipSpirit:'0',
+        autoPetHealInterval:'6666',disposeAfterRefresh:'1',exploreMode:'system',
+        recruitIntervalMs:'1000',craftTargetCount:'10',equipCombatSlot:'2',
+        autoBailClick:'0',autoFullHealInterval:'1500',giftStonesQty:'1',
+        summerOnlyAdvancedMeditate:'1',luckRefreshMethod:'stone',craftBatchSize:'0',
+        autoRestart:'0',noCrossRealmGap:'1',sectQuickRecovery:'1',
+        autoRecoveryMode:'both',inscriptionDiscardDelay:'2000',
+        autoBreakthrough:'0',desktopNotify:'0',hireMaxFee:'10000',
+        themeMode:'embed',statusMutedMerchant:'0',preferMultiplier:'1',
+        incarnationDelay:'5',farmExpandCount:'50',notifyMeditate:'1',
+        incarnationCraftBuyAmount:'0',pillUpgradeMonitorInterval:'1000',
+        autoNatalDevour:'0',farmExpandEnabled:'1',nirvanaQualityTarget:'5',
+        autoOriginRepair:'0',notifyMisc:'1',autoRecoveryThreshold:'30',
+        giftItemTemplateId:'beast_core_high_1',delayMs:'1234',pavilionLoop:'10',
+        statusMutedMeditate:'0',craftBuyDelay:'3',autoSelfFightWeak:'1',
+        trialStopFloor:'0',notifyBuff:'1',monitorStartSpirit:'80',
+        autoIncubationAutoEnqueue:'0',nirvanaUseQty:'1',autoMasterRequests:'0',
+        autoExploreAfterMeditate:'1',incarnationRecipeId:'',nirvanaTimerMin:'10',
+        statusMutedEquip:'0',trialAutoRetry:'0',hireRetryLimit:'10',
+        washStoneUpgrade:'1',merchantStrictMatch:'0',ordainInterval:'5',
+        wecomPrivateWebhook:'',inscriptionEquipCrossStat:'0',
+        farmInterval:'1500',farmSeedId:'',autoRefreshLuck:'1',
+        craftAutoBuyMats:'0',incarnationAutoBreak:'0',
+        washUpgradeAfterRefresh:'1',statusMutedWecom:'1',
+        inscriptionTargets:'神识:195',meditateStopSpirit:'80',
+        noCrossRealmFight:'1',redPacketEnabled:'0',
+        incarnedStackId:''
     };
     function loadDefaultConfig() {
         var cnt = 0;
+        // 先清掉所有旧配置
+        var toRemove = [];
+        for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf('lvSpiritCleaner.') === 0) toRemove.push(k);
+        }
+        for (var i = 0; i < toRemove.length; i++) { try { localStorage.removeItem(toRemove[i]); } catch(_) {} }
+        // 再写入默认配置
         for (var k in BUILTIN_DEFAULTS) {
             try { localStorage.setItem('lvSpiritCleaner.' + k, BUILTIN_DEFAULTS[k]); cnt++; } catch(_) {}
         }
@@ -1948,6 +2499,12 @@ async function ensureNirvanaPill() {
         "lvSpiritCleaner.statusMutedWecom": "1",
         "lvSpiritCleaner.inscriptionTargets": "神识:195",
         "lvSpiritCleaner.meditateStopSpirit": "0",
+        "lvSpiritCleaner.meditateStopSpirit": "0",
+        "lvSpiritCleaner.autoWenDaoDaily": "0",
+        "lvSpiritCleaner.autoOfferingDaily": "0",
+        "lvSpiritCleaner.offeringItemName": "",
+        "lvSpiritCleaner.offeringPlayerItemId": "",
+        "lvSpiritCleaner.offeringQty": "1",
         "lvSpiritCleaner.noCrossRealmFight": "0"
     };
 
@@ -1978,7 +2535,7 @@ async function ensureNirvanaPill() {
     function restoreOriginalSettings() {
         // 先保存当前的自启设置
         var autoStartSettings = {};
-        var autoStartKeys = ['lvSpiritCleaner.autoStartDispose','lvSpiritCleaner.autoStartWashStone','lvSpiritCleaner.autoStartPillUpgrade','lvSpiritCleaner.autoStartFarm'];
+        var autoStartKeys = ['lvSpiritCleaner.autoStartDispose','lvSpiritCleaner.autoStartWashStone','lvSpiritCleaner.autoStartPillUpgrade','lvSpiritCleaner.autoStartFarm','lvSpiritCleaner.autoStartIncubation'];
         for (var asi = 0; asi < autoStartKeys.length; asi++) {
             autoStartSettings[autoStartKeys[asi]] = localStorage.getItem(autoStartKeys[asi]);
         }
@@ -2066,6 +2623,8 @@ async function ensureNirvanaPill() {
         exploreMode: localStorage.getItem('lvSpiritCleaner.exploreMode') || 'api',
         quickClearRunning: false,
         quickClearTargetPct: readNumber('lvSpiritCleaner.quickClearTargetPct', 95),
+        nightCheckIntervalQuick: readNumber('lvSpiritCleaner.nightCheckIntervalQuick', 30),
+        nightCheckIntervalExplore: readNumber('lvSpiritCleaner.nightCheckIntervalExplore', 10),
         autoExploreAfterMeditate: localStorage.getItem('lvSpiritCleaner.autoExploreAfterMeditate') !== '0',
         checkDaoyunBoost: localStorage.getItem('lvSpiritCleaner.checkDaoyunBoost') !== '0',
         useAdvancedMeditate: localStorage.getItem('lvSpiritCleaner.useAdvancedMeditate') === '1',
@@ -2094,6 +2653,11 @@ async function ensureNirvanaPill() {
         giftPlayerItemId: parseInt(localStorage.getItem('lvSpiritCleaner.giftPlayerItemId') || '0', 10) || 0,
         giftItemName: localStorage.getItem('lvSpiritCleaner.giftItemName') || '',
         giftItemQty: readNumber('lvSpiritCleaner.giftItemQty', 1),
+        autoWenDaoDaily: localStorage.getItem('lvSpiritCleaner.autoWenDaoDaily') === '1',
+        autoOfferingDaily: localStorage.getItem('lvSpiritCleaner.autoOfferingDaily') === '1',
+        offeringPlayerItemId: parseInt(localStorage.getItem('lvSpiritCleaner.offeringPlayerItemId') || '0', 10) || 0,
+        offeringItemName: localStorage.getItem('lvSpiritCleaner.offeringItemName') || '',
+        offeringQty: readNumber('lvSpiritCleaner.offeringQty', 1),
         autoBail: localStorage.getItem('lvSpiritCleaner.autoBail') !== '0',
         autoBailClick: localStorage.getItem('lvSpiritCleaner.autoBailClick') !== '0',
         safeMode: localStorage.getItem('lvSpiritCleaner.safeMode') === '1',
@@ -2113,6 +2677,20 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         nirvanaUseQty: readNumber('lvSpiritCleaner.nirvanaUseQty', 1),
         nirvanaAutoTimer: localStorage.getItem('lvSpiritCleaner.nirvanaAutoTimer') === '1',
         nirvanaTimerMin: readNumber('lvSpiritCleaner.nirvanaTimerMin', 10),
+        incarnationRecipeId: localStorage.getItem('lvSpiritCleaner.incarnationRecipeId') || '',
+        incarnationCraftQty: readNumber('lvSpiritCleaner.incarnationCraftQty', 10),
+        incarnationAutoBuy: localStorage.getItem('lvSpiritCleaner.incarnationAutoBuy') !== '0',
+        incarnationDelayMin: readNumber('lvSpiritCleaner.incarnationDelayMin', 5),
+        incarnationRetryDelay: readNumber('lvSpiritCleaner.incarnationRetryDelay', 30),
+        incarnationCraftBuyAmount: readNumber('lvSpiritCleaner.incarnationCraftBuyAmount', 0),
+        incarnationCraftBuyDelay: readNumber('lvSpiritCleaner.incarnationCraftBuyDelay', 60),
+        incarnationDelayMax: readNumber('lvSpiritCleaner.incarnationDelayMax', 10),
+        incarnationAutoBreak: localStorage.getItem('lvSpiritCleaner.incarnationAutoBreak') !== '0',
+        incarnationRecipeId: localStorage.getItem('lvSpiritCleaner.incarnationRecipeId') || '',
+        incarnationCraftQty: readNumber('lvSpiritCleaner.incarnationCraftQty', 10),
+        incarnationAutoBuy: localStorage.getItem('lvSpiritCleaner.incarnationAutoBuy') !== '0',
+        incarnationDelay: readNumber('lvSpiritCleaner.incarnationDelay', 5),
+        incarnationAutoBreak: localStorage.getItem('lvSpiritCleaner.incarnationAutoBreak') !== '0',
         nirvanaDelayMin: readNumber('lvSpiritCleaner.nirvanaDelayMin', 5),
         nirvanaDelayMax: readNumber('lvSpiritCleaner.nirvanaDelayMax', 10),
         nirvanaNextTimerTime: readNumber('lvSpiritCleaner.nirvanaNextTimerTime', 0),
@@ -2140,6 +2718,9 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         redPacketWeekAmount: parseInt(localStorage.getItem('lvSpiritCleaner.redPacketWeekAmount')) || 0,
         redPacketLastDate: localStorage.getItem('lvSpiritCleaner.redPacketLastDate') || '',
         redPacketClaimed: JSON.parse(localStorage.getItem('lvSpiritCleaner.redPacketClaimed') || '[]'),
+        redPacketMinAmount: parseInt(localStorage.getItem('lvSpiritCleaner.redPacketMinAmount') || '0', 10),
+        redPacketChatMsgs: (localStorage.getItem('lvSpiritCleaner.redPacketChatMsgs') || '').split('|').filter(Boolean),
+        redPacketChatMsgs: (localStorage.getItem('lvSpiritCleaner.redPacketChatMsgs') || '').split('|').filter(Boolean),
         redPacketObserver: null,
         arenaSimCount: readNumber('lvSpiritCleaner.arenaSimCount', 100),
         arenaSimRunning: false,
@@ -2159,6 +2740,19 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         craftRecipeId: localStorage.getItem('lvSpiritCleaner.craftRecipeId') || '',
         craftTargetCount: readNumber('lvSpiritCleaner.craftTargetCount', 10),
         craftBatchSize: readNumber('lvSpiritCleaner.craftBatchSize', 0),
+        craftBuyDelay: readNumber('lvSpiritCleaner.craftBuyDelay', 3),
+        craftBuyAmount: readNumber('lvSpiritCleaner.craftBuyAmount', 0),
+        ordainTargetCount: readNumber('lvSpiritCleaner.ordainTargetCount', 10),
+        ordainBuyQty: readNumber('lvSpiritCleaner.ordainBuyQty', 100),
+        ordainAutoBuy: localStorage.getItem('lvSpiritCleaner.ordainAutoBuy') !== '0',
+        ordainPauseMeditate: localStorage.getItem('lvSpiritCleaner.ordainPauseMeditate') !== '0',
+        trialAutoRetry: localStorage.getItem('lvSpiritCleaner.trialAutoRetry') !== '0',
+        trialAutoMeditate: localStorage.getItem('lvSpiritCleaner.trialAutoMeditate') !== '0',
+        trialStopFloor: readNumber('lvSpiritCleaner.trialStopFloor', 0),
+        trialInterval: readNumber('lvSpiritCleaner.trialInterval', 3),
+        trialRetryDelay: readNumber('lvSpiritCleaner.trialRetryDelay', 30),
+        trialSkipCombat: localStorage.getItem('lvSpiritCleaner.trialSkipCombat') !== '0',
+        ordainInterval: readNumber('lvSpiritCleaner.ordainInterval', 5),
         craftQualityTarget: readNumber('lvSpiritCleaner.craftQualityTarget', 0),
         craftQualityCount: readNumber('lvSpiritCleaner.craftQualityCount', 0),
         skillWashScope: localStorage.getItem('lvSpiritCleaner.skillWashScope') || 'body',
@@ -2197,6 +2791,15 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         inscriptionDiscardDelay: readNumber('lvSpiritCleaner.inscriptionDiscardDelay', 600),
         inscriptionPullMode: Number(localStorage.getItem('lvSpiritCleaner.inscriptionPullMode') || 10),
 
+        // === 自动温养 ===
+        autoIncubationEnabled: localStorage.getItem('lvSpiritCleaner.autoIncubationEnabled') === '1',
+        autoIncubationInterval: readNumber('lvSpiritCleaner.autoIncubationInterval', 30),
+        autoIncubationMinRarity: readNumber('lvSpiritCleaner.autoIncubationMinRarity', 1),
+        autoIncubationAutoEnqueue: localStorage.getItem('lvSpiritCleaner.autoIncubationAutoEnqueue') === '1',
+        autoIncubationDesiredBeasts: (function(){try{return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoIncubationDesiredBeasts')||'[]');}catch(_){return[];}})(),
+        autoIncubationDesiredTraits: (function(){try{return JSON.parse(localStorage.getItem('lvSpiritCleaner.autoIncubationDesiredTraits')||'[]');}catch(_){return[];}})(),
+        autoStartIncubation: localStorage.getItem('lvSpiritCleaner.autoStartIncubation') === '1',
+
         // === 藏宝图 ===
         treasureBatchSize: readNumber('lvSpiritCleaner.treasureBatchSize', 0),
         treasureUseQuantity: readNumber('lvSpiritCleaner.treasureUseQuantity', 1),
@@ -2208,6 +2811,15 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         // === 企业微信 ===
         chatOnTop: localStorage.getItem('lvSpiritCleaner.chatOnTop') !== '0',
         wecomNotify: localStorage.getItem('lvSpiritCleaner.wecomNotify') === '1',
+        notifyClean: localStorage.getItem('lvSpiritCleaner.notifyClean') !== '0',
+        notifyMeditate: localStorage.getItem('lvSpiritCleaner.notifyMeditate') !== '0',
+        notifyCombat: localStorage.getItem('lvSpiritCleaner.notifyCombat') !== '0',
+        notifyBuff: localStorage.getItem('lvSpiritCleaner.notifyBuff') !== '0',
+        notifyEquip: localStorage.getItem('lvSpiritCleaner.notifyEquip') !== '0',
+        notifyMaster: localStorage.getItem('lvSpiritCleaner.notifyMaster') !== '0',
+        notifyInsc: localStorage.getItem('lvSpiritCleaner.notifyInsc') !== '0',
+        notifyMisc: localStorage.getItem('lvSpiritCleaner.notifyMisc') !== '0',
+        notifyHourly: localStorage.getItem('lvSpiritCleaner.notifyHourly') === '1',
         wecomNotifyWebhook: localStorage.getItem('lvSpiritCleaner.wecomNotifyWebhook') || '',
         wecomWorldWebhook: localStorage.getItem('lvSpiritCleaner.wecomWorldWebhook') || '',
         wecomPrivateWebhook: localStorage.getItem('lvSpiritCleaner.wecomPrivateWebhook') || '',
@@ -2219,9 +2831,66 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
         return Number.isFinite(value) ? value : fallback;
     }
 
+    var _backupTimer = null;
     function persistSetting(key, value) {
         localStorage.setItem(key, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
+        // 自动备份（防抖：5秒内多次变更只备份一次）
+        if (_backupTimer) clearTimeout(_backupTimer);
+        _backupTimer = setTimeout(backupSettings, 5000);
     }
+    function backupSettings() {
+        try {
+            var exclude = ['__backup', '__backupTime', 'redPacketClaimed', 'areaNameToId', 'skillWashState',
+                'giftItemsDiscipleItems', 'giftItemsDiscipleQtys', 'giftStonesDiscipleQtys',
+                'autoDisposeRules', 'autoIncubationDesiredTraits', 'autoIncubationDesiredBeasts',
+                'giftItemsSelected', 'giftStonesSelected', 'spiritEquipIds', 'combatEquipIds',
+                'autoDisposeProtectedIds', 'autoDisposeProtected', 'giftSelectedDiscipleNames',
+                'giftItemsSelectedDiscipleNames'];
+            var keys = [];
+            for (var i = 0; i < localStorage.length; i++) {
+                var k = localStorage.key(i);
+                if (k && k.indexOf('lvSpiritCleaner.') === 0 && exclude.indexOf(k) < 0) keys.push(k);
+            }
+            var backup = {};
+            for (var i = 0; i < keys.length; i++) {
+                var v = localStorage.getItem(keys[i]);
+                if (v && v.length > 500) continue;
+                backup[keys[i]] = v;
+            }
+            localStorage.setItem('lvSpiritCleaner.__backup', JSON.stringify(backup));
+            localStorage.setItem('lvSpiritCleaner.__backupTime', Date.now().toString());
+        } catch(_) {}
+    }
+    function restoreSettings() {
+        try {
+            var raw = localStorage.getItem('lvSpiritCleaner.__backup');
+            if (!raw) return false;
+            var backup = JSON.parse(raw);
+            var restored = 0;
+            for (var k in backup) {
+                if (backup.hasOwnProperty(k) && localStorage.getItem(k) === null) {
+                    localStorage.setItem(k, backup[k]);
+                    restored++;
+                }
+            }
+            if (restored > 0) {
+                console.log('[LVSC] 从备份恢复了 ' + restored + ' 项设置');
+                return true;
+            }
+        } catch(_) {}
+        return false;
+    }
+    // 启动时自动检查并恢复
+    // 清掉旧的超大备份，重建干净备份
+    try {
+        var old = localStorage.getItem('lvSpiritCleaner.__backup');
+        if (old && old.length > 10000) {
+            localStorage.removeItem('lvSpiritCleaner.__backup');
+            localStorage.removeItem('lvSpiritCleaner.__backupTime');
+        }
+    } catch(_) {}
+    restoreSettings();
+    backupSettings();
 
     function sleep(ms) {
         return new Promise(function (resolve) {
@@ -2336,6 +3005,417 @@ nirvanaCraftQty: readNumber('lvSpiritCleaner.nirvanaCraftQty', 1),
     function getPlayer() {
         return window._lastPlayerData || null;
     }
+    // ==== 自动授箓 ====
+    var autoOrdainRunning = false;
+    var _ordainTotalBought = 0;
+
+    function parseOrdainCost(costText) {
+        var m = (costText || '').match(/本周第\s*(\d+)\s*次\s*\/\s*仙庭功勋\s*(\d+)\s*\/\s*界源清辉\s*(\d+)/);
+        if (!m) return null;
+        return { count: parseInt(m[1], 10), merit: parseInt(m[2], 10), qinghui: parseInt(m[3], 10) };
+    }
+    function fmtNum(n) {
+        n = Number(n) || 0;
+        if (n >= 100000000) return (n / 100000000).toFixed(2).replace(/\.0+$/, '') + '亿';
+        if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+        return String(n);
+    }
+    function parseOrdainExp(rewardText) {
+
+        var m = (rewardText || '').match(/修为\s*([\d,]+)/);
+        return m ? parseInt(m[1].replace(/,/g, ''), 10) : 0;
+    }
+    function calcOrdainCosts(from, to, expPer) {
+        var tm = 0, tq = 0, te = 0;
+        for (var i = from; i < to; i++) { tm += 8 * i; tq += 4 * i; te += expPer; }
+        return { merit: tm, qinghui: tq, exp: te };
+    }
+    function ordainLog(msg) {
+        var el = document.getElementById('lvscOrdainLog');
+        if (!el) return;
+        var t = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        el.innerHTML = '[' + t + '] ' + msg.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '<br>' + el.innerHTML;
+        if (el.innerHTML.length > 8000) el.innerHTML = el.innerHTML.substring(0, 8000);
+    }
+    async function getOrdainState() {
+        try { var r = await gameApi().get('/api/game/immortal/state'); if (r && r.code === 200 && r.data) return r.data; } catch(e) {}
+        return null;
+    }
+    async function findOrdainRecipeId() {
+        var types = ['alchemy', 'forge'];
+        for (var t = 0; t < types.length; t++) {
+            var recipes = await fetchRecipes(types[t]);
+            for (var i = 0; i < recipes.length; i++) {
+                var n = getCraftItemName(recipes[i], types[t]);
+                if (n && n.indexOf('天阙万象炉') >= 0) return { type: types[t], id: getCraftItemId(recipes[i], types[t]) };
+            }
+        }
+        return null;
+    }
+    async function buyOrdainSand(qty) {
+        var recipe = await findOrdainRecipeId();
+        if (!recipe) { ordainLog('未找到天阙万象炉配方'); return false; }
+        ordainLog('购买材料: ' + qty + '个 (' + recipe.type + ')');
+        try {
+            var res = await gameApi().post('/api/game/craft/quick-buy-mats', { type: recipe.type, id: recipe.id, amount: qty });
+            if (res && res.code === 200) { ordainLog('购买成功'); return true; }
+            ordainLog('购买失败: ' + ((res && res.message) || 'code=' + (res && res.code)));
+            return false;
+        } catch (e) { ordainLog('购买异常: ' + (e.message || '未知')); return false; }
+    }
+    async function contributeOrdainSand(amount) {
+        var remaining = amount;
+        while (remaining > 0 && autoOrdainRunning) {
+            var batch = Math.min(999, remaining);
+            try {
+                var r = await gameApi().post('/api/game/immortal/contribute', { contributionId: 'xuanjin', quantity: batch });
+                if (r && r.code === 200) { remaining -= batch; ordainLog('上缴玄金仙砂 x' + batch + ' (剩余' + remaining + ')'); }
+                else { ordainLog('上缴失败: ' + ((r && r.message) || '未知')); return false; }
+            } catch(e) { ordainLog('上缴异常: ' + (e.message || '')); return false; }
+            await sleep(3000);
+        }
+        return remaining <= 0;
+    }
+    async function doOrdainOnce() {
+        try {
+            var r = await gameApi().post('/api/game/immortal/exchange', { recipeId: 'outer_cultivation' });
+            if (r && r.code === 200 && r.data) {
+                var exp = 0;
+                if (r.data.logs) for (var i = 0; i < r.data.logs.length; i++) { var m = r.data.logs[i].match(/修为\s*([\d,]+)/); if (m) exp = parseInt(m[1].replace(/,/g,''),10); }
+                return { success: true, exp: exp, state: r.data.state };
+            }
+            return { success: false, message: (r && r.message) || '未知' };
+        } catch(e) { return { success: false, message: e.message || '异常' }; }
+    }
+    async function refillAndContribute() {
+        if (!autoOrdainRunning) return false;
+        // 检查是否在冥想，如果是就暂停
+        var wasMeditating = false;
+        if (state.ordainPauseMeditate) {
+            try {
+                var medStatus = await getMeditationStatus();
+                if (isMeditatingStatus(medStatus)) {
+                    wasMeditating = true;
+                    ordainLog('检测到冥想中，暂停冥想...');
+                    await stopMeditationAndRefresh();
+                    await sleep(1000);
+                }
+            } catch(_) {}
+        }
+        // 先查背包有没有玄金仙砂
+        var data = await getOrdainState();
+        if (!data) return false;
+        var sandOwned = 0;
+        if (data.contributions) {
+            for (var i = 0; i < data.contributions.length; i++) {
+                if (data.contributions[i].id === 'xuanjin') { sandOwned = data.contributions[i].ownedQuantity || 0; break; }
+            }
+        }
+        // 背包没有才买
+        if (sandOwned <= 0) {
+            if (!state.ordainAutoBuy) { ordainLog('背包无玄金仙砂，自动买材料已关闭'); }
+            else {
+                var buyQty = state.ordainBuyQty || 1000;
+                _ordainTotalBought += buyQty;
+                ordainLog('背包无玄金仙砂，购买材料' + buyQty + '个 (累计' + _ordainTotalBought + '份)');
+                await buyOrdainSand(buyQty);
+                await sleep(3000);
+                // 买完再查背包
+                data = await getOrdainState();
+                if (data) {
+                    for (var i = 0; i < (data.contributions || []).length; i++) {
+                        if (data.contributions[i].id === 'xuanjin') { sandOwned = data.contributions[i].ownedQuantity || 0; break; }
+                    }
+                }
+            }
+        }
+        if (sandOwned > 0) {
+            ordainLog('背包玄金仙砂: ' + sandOwned + '个，开始上缴');
+            var result = await contributeOrdainSand(sandOwned);
+            if (wasMeditating) {
+                ordainLog('恢复冥想...');
+                try { await gameApi().post('/api/game/meditate/start', {}); if (typeof window.startMeditationUI === 'function') { window.startMeditationUI(); } } catch(_) {}
+            }
+            return result;
+        }
+        ordainLog('没有玄金仙砂可上缴');
+        if (wasMeditating) {
+            ordainLog('恢复冥想...');
+            try { await gameApi().post('/api/game/meditate/start', {}); if (typeof window.startMeditationUI === 'function') { window.startMeditationUI(); } } catch(_) {}
+        }
+        return false;
+    }
+    async function updateOrdainPreview() {
+        var ss = document.getElementById('lvscOrdainStatus'); if (ss) ss.textContent = '查询中...';
+        var data = await getOrdainState();
+        if (!data || !data.exchanges || !data.exchanges[0]) { if (ss) ss.textContent = '获取失败'; return; }
+        var ex = data.exchanges[0];
+        var parsed = parseOrdainCost(ex.costText);
+        if (!parsed) { if (ss) ss.textContent = '解析失败'; return; }
+        var cur = parsed.count, cm = data.routeResource || 0, cq = data.secondaryResource || 0;
+        var expPer = parseOrdainExp(ex.rewardText);
+        var tgt = cur + (state.ordainTargetCount || 10);
+        var costs = calcOrdainCosts(cur, tgt, expPer);
+        var mg = Math.max(0, costs.merit - cm), qg = Math.max(0, costs.qinghui - cq);
+        var sands = Math.max(mg * 2, qg * 2);
+        var buyQty = state.ordainBuyQty || 1000;
+        var matsNeed = Math.ceil(sands / 300);
+        var buyTimes = Math.ceil(matsNeed / buyQty);
+        var html = '当前: 第' + cur + '次 | 功勋:' + fmtNum(cm) + ' | 清辉:' + fmtNum(cq) + '<br>'
+            + '目标: 第' + tgt + '次 (+' + (state.ordainTargetCount || 10) + ')<br>'
+            + '本次单次: 功勋=' + (8*cur) + ' | 清辉=' + (4*cur) + '<br>'
+            + '累计需要: 功勋+' + fmtNum(costs.merit) + ' | 清辉+' + fmtNum(costs.qinghui) + '<br>'
+            + '缺口: 功勋-' + fmtNum(mg) + ' | 清辉-' + fmtNum(qg) + '<br>'
+            + '修为: +' + fmtNum(costs.exp) + '<br>'
+            + '玄金仙砂: ' + sands + '个 (' + matsNeed + '份材料, 购买' + buyTimes + '次×' + buyQty + '份)<br>'
+            + '灵石: ' + fmtNum(sands * 128000);
+        var el = document.getElementById('lvscOrdainPreview');
+        if (el) el.innerHTML = html;
+        if (ss) ss.textContent = '就绪';
+    }
+    async function autoOrdainLoop() {
+        if (autoOrdainRunning) return;
+        syncSettingsFromUi();
+        autoOrdainRunning = true;
+        var targetCount = state.ordainTargetCount || 10;
+        var buyQty = state.ordainBuyQty || 1000;
+        var ordainInterval = (state.ordainInterval || 5) * 1000;
+        var ss = document.getElementById('lvscOrdainStatus');
+        ordainLog('开始自动授箓: +' + targetCount + '次 | 单次补' + buyQty + '份材料(=' + (buyQty * 300) + '玄金) | 间隔' + (state.ordainInterval || 5) + '秒');
+        if (ss) ss.textContent = '运行中';
+
+        // 1. 检查资源是否够，够就直接开始，不够才买
+        var initState = await getOrdainState();
+        if (!initState || !initState.exchanges || !initState.exchanges[0]) {
+            ordainLog('获取状态失败'); autoOrdainRunning = false; if (ss) ss.textContent = '失败'; return;
+        }
+        var initParsed = parseOrdainCost(initState.exchanges[0].costText);
+        if (initParsed) {
+            var needMerit = 8 * initParsed.count;
+            var needQinghui = 4 * initParsed.count;
+            var haveMerit = initState.routeResource || 0;
+            var haveQinghui = initState.secondaryResource || 0;
+            if (haveMerit < needMerit || haveQinghui < needQinghui) {
+                ordainLog('资源不足，购买+上缴');
+                await refillAndContribute();
+            } else {
+                ordainLog('资源充足，直接开始授箓');
+            }
+        }
+        if (!autoOrdainRunning) { if (ss) ss.textContent = '已停止'; return; }
+
+        // 2. 循环授箓
+        var done = 0, totalExp = 0, totalSpent = 0, failStreak = 0;
+        _ordainTotalBought = 0;
+        try {
+            while (autoOrdainRunning && done < targetCount) {
+                var result = await doOrdainOnce();
+                if (result.success) {
+                    done++; totalExp += result.exp; failStreak = 0;
+                    ordainLog('授箓 +' + done + '/' + targetCount + ' | 修为+' + fmtNum(result.exp));
+                    // 检查资源是否还够下一次
+                    if (result.state && result.state.exchanges && result.state.exchanges[0]) {
+                        var nextParsed = parseOrdainCost(result.state.exchanges[0].costText);
+                        if (nextParsed) {
+                            var needMerit = 8 * nextParsed.count;
+                            var needQinghui = 4 * nextParsed.count;
+                            var haveMerit = result.state.routeResource || 0;
+                            var haveQinghui = result.state.secondaryResource || 0;
+                            if (haveMerit < needMerit || haveQinghui < needQinghui) {
+                                ordainLog('资源不足，补充材料+上缴');
+                                var refillOk = await refillAndContribute();
+                                if (refillOk) totalSpent += buyQty * 128000;
+                                else { ordainLog('补充失败'); failStreak++; if (failStreak >= 3) { ordainLog('连续失败3次，停止'); break; } }
+                            }
+                        }
+                    }
+                } else {
+                    ordainLog('授箓失败: ' + result.message);
+                    failStreak++;
+                    if (failStreak >= 5) { ordainLog('连续失败5次，停止'); break; }
+                    if (result.message.indexOf('不足') >= 0 || result.message.indexOf('功勋') >= 0) {
+                        ordainLog('补充材料+上缴');
+                        var refillOk = await refillAndContribute();
+                        if (refillOk) totalSpent += buyQty * 128000;
+                        await sleep(3000);
+                        continue;
+                    }
+                    break;
+                }
+                if (autoOrdainRunning && done < targetCount) await sleep(ordainInterval);
+            }
+        } catch (e) { ordainLog('授箓异常: ' + (e.message || e)); }
+
+        autoOrdainRunning = false;
+        if (ss) ss.textContent = '完成';
+        ordainLog('授箓完成: ' + done + '次 | 修为+' + fmtNum(totalExp) + ' | 灵石-' + fmtNum(totalSpent) + ' | 累计购买' + _ordainTotalBought + '份材料');
+        var sb = document.getElementById('lvscOrdainStartBtn'); if (sb) sb.style.display = '';
+        var stb = document.getElementById('lvscOrdainStopBtn'); if (stb) stb.style.display = 'none';
+    }
+    // ==== 秘境自动挑战 + 仙缘刷新 ====
+    var autoDungeonRunning = false;
+    function dungeonLog(msg) {
+        var l = document.getElementById('lvscDungeonLog');
+        if (!l) return;
+        var t = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        l.textContent = '[' + t + '] ' + msg + '\n' + l.textContent;
+        if (l.textContent.length > 5000) l.textContent = l.textContent.substring(0, 5000);
+    }
+    async function fetchDungeonList() {
+        if (!gameApi()) return [];
+        try {
+            var res = await gameApi().get('/api/dungeon/list');
+            if (res && res.code === 200 && Array.isArray(res.data)) return res.data;
+        } catch(e) { console.warn('[Dungeon] fetch list failed', e); }
+        return [];
+    }
+    function getDungeonTargets(dungeons, dungeonId) {
+        var targets = [];
+        var playerStage = Number((getPlayer() || {}).realmStage || 0);
+        var playerArea = (getPlayer() || {}).currentArea || '';
+        if (dungeonId) {
+            for (var i = 0; i < dungeons.length; i++) {
+                if (String(dungeons[i].id) === dungeonId) { targets.push(dungeons[i]); break; }
+            }
+        } else {
+            var canEnter = [], exhausted = [], others = [];
+            for (var i = 0; i < dungeons.length; i++) {
+                var d = dungeons[i];
+                var maxStage = d.minRealmStage + 1;
+                var eligible = playerStage >= d.minRealmStage && playerStage <= maxStage;
+                if (!eligible) continue;
+                if (d.remainingToday > 0 && playerArea === d.areaId) canEnter.push(d);
+                else if (d.remainingToday <= 0 && d.refillable) exhausted.push(d);
+                else if (d.refillable) others.push(d);
+            }
+            targets = canEnter.concat(exhausted).concat(others);
+        }
+        return targets;
+    }
+    async function autoDungeonLoop() {
+        if (autoDungeonRunning) return;
+        if (!gameApi()) { setStatus('API不可用', 'warn'); return; }
+        syncSettingsFromUi();
+        autoDungeonRunning = true;
+        var maxCostPerRefill = state.dungeonRefillMaxAd || 5;
+        var interval = (state.dungeonRefillInterval || 3) * 1000;
+        var dungeonId = state.dungeonSelectedId || '';
+        var totalFights = 0, totalRefills = 0, totalAdSpent = 0;
+        dungeonLog('启动秘境自动挑战 | 单次仙缘上限:' + maxCostPerRefill);
+        setStatus('秘境自动挑战中...', 'run');
+        var startBtn = document.getElementById('lvscDungeonRefillStartBtn');
+        var stopBtn = document.getElementById('lvscDungeonRefillStopBtn');
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = '';
+        while (autoDungeonRunning) {
+            var dungeons = await fetchDungeonList();
+            if (!dungeons.length) { dungeonLog('获取秘境列表失败，5秒后重试'); await sleep(5000); continue; }
+            var targets = getDungeonTargets(dungeons, dungeonId);
+            if (!targets.length) { dungeonLog('无可挑战秘境，停止'); break; }
+            var d = targets[0];
+            if (d.remainingToday <= 0) {
+                if (!d.refillable) {
+                    dungeonLog('[' + d.name + '] 今日已用完且不可刷新');
+                    if (dungeonId) break;
+                    targets.shift();
+                    if (!targets.length) { dungeonLog('所有秘境已用完，停止'); break; }
+                    continue;
+                }
+                var cost = d.nextRefillCost || 1;
+                if (cost > maxCostPerRefill) {
+                    dungeonLog('[' + d.name + '] 刷新费用 ' + cost + ' 超过上限 ' + maxCostPerRefill + '，跳过');
+                    if (dungeonId) break;
+                    targets.shift();
+                    if (!targets.length) { dungeonLog('所有秘境刷新费用超限，停止'); break; }
+                    continue;
+                }
+                dungeonLog('仙缘刷新 [' + d.name + '] 费用:' + cost);
+                try {
+                    var refRes = await gameApi().post('/api/dungeon/refill', { dungeonId: d.id });
+                    if (refRes && refRes.code === 200 && refRes.data && refRes.data.success) {
+                        totalRefills++;
+                        totalAdSpent += cost;
+                        d.remainingToday = (d.remainingToday || 0) + 1;
+                        d.nextRefillCost = (d.nextRefillCost || cost) + 2;
+                        dungeonLog('✓ 刷新成功 ' + (refRes.data.message || '+1次') + ' | 累计仙缘:' + totalAdSpent);
+                    } else {
+                        var errMsg = (refRes && refRes.data && refRes.data.message) || (refRes && refRes.message) || '未知';
+                        dungeonLog('✗ 刷新失败: ' + errMsg);
+                        if (errMsg.indexOf('不足') >= 0) break;
+                    }
+                } catch(e) { dungeonLog('✗ 刷新异常: ' + (e.message || '')); }
+                await sleep(interval);
+                continue;
+            }
+            dungeonLog('创建队伍 [' + d.name + '] 剩余' + d.remainingToday + '次');
+            try {
+                var createRes = await gameApi().post('/api/dungeon/create', { dungeonId: d.id });
+                if (!createRes || createRes.code !== 200) {
+                    dungeonLog('✗ 创建失败: ' + ((createRes && createRes.message) || '未知'));
+                    await sleep(interval);
+                    continue;
+                }
+                dungeonLog('队伍已创建');
+            } catch(e) { dungeonLog('✗ 创建异常: ' + (e.message || '')); await sleep(interval); continue; }
+            await sleep(1000);
+            try {
+                var readyRes = await gameApi().post('/api/dungeon/ready', {});
+                if (readyRes && readyRes.code === 200) { dungeonLog('已准备'); }
+                else { dungeonLog('准备: ' + ((readyRes && readyRes.message) || 'ok')); }
+            } catch(e) { dungeonLog('准备异常: ' + (e.message || '')); }
+            await sleep(1000);
+            dungeonLog('开始挑战...');
+            try {
+                var startRes = await gameApi().post('/api/dungeon/start', {});
+                if (!startRes || startRes.code !== 200) {
+                    dungeonLog('✗ 挑战失败: ' + ((startRes && startRes.message) || '未知'));
+                    try { await gameApi().post('/api/dungeon/leave', {}); } catch(_) {}
+                    await sleep(interval);
+                    continue;
+                }
+            } catch(e) {
+                dungeonLog('✗ 挑战异常: ' + (e.message || ''));
+                try { await gameApi().post('/api/dungeon/leave', {}); } catch(_) {}
+                await sleep(interval);
+                continue;
+            }
+            dungeonLog('战斗中...');
+            for (var wait = 0; wait < 5 && autoDungeonRunning; wait++) {
+                await sleep(1000);
+                try {
+                    var chk = await gameApi().get('/api/dungeon/last-result');
+                    if (chk && chk.code === 200 && chk.data && chk.data.hasResult) break;
+                } catch(_) {}
+            }
+            totalFights++;
+            try {
+                var lr = await gameApi().get('/api/dungeon/last-result');
+                if (lr && lr.code === 200 && lr.data && lr.data.hasResult && lr.data.result) {
+                    var rd = lr.data.result;
+                    var resultText = rd.victory ? '✓通关' : '✗失败';
+                    var rewards = [];
+                    if (rd.expReward) rewards.push('修为+' + rd.expReward);
+                    if (rd.stoneReward) rewards.push('灵石+' + rd.stoneReward);
+                    dungeonLog('第' + totalFights + '次: ' + resultText + (rewards.length ? ' | ' + rewards.join(', ') : ''));
+                } else {
+                    dungeonLog('第' + totalFights + '次: 挑战结束');
+                }
+            } catch(_) {
+                dungeonLog('第' + totalFights + '次: 挑战结束');
+            }
+            try { await gameApi().post('/api/dungeon/leave', {}); } catch(_) {}
+            try { await refreshPlayer(); } catch(_) {}
+            await sleep(interval);
+        }
+        autoDungeonRunning = false;
+        if (startBtn) startBtn.style.display = '';
+        if (stopBtn) stopBtn.style.display = 'none';
+        dungeonLog('完成 | 挑战' + totalFights + '次 | 刷新' + totalRefills + '次 | 消耗' + totalAdSpent + '仙缘');
+        setStatus('秘境完成: ' + totalFights + '战/' + totalRefills + '刷/' + totalAdSpent + '仙缘', 'run');
+        wecomEnqueue('秘境完成', '挑战' + totalFights + '次\n刷新' + totalRefills + '次\n消耗' + totalAdSpent + '仙缘');
+    }
+    function stopOrdain() { autoOrdainRunning = false; }
+    function stopDungeon() { autoDungeonRunning = false; }
 
     function gameApi() {
         // 登录页不调用游戏API，防止401触发页面重定向死循环
@@ -2438,6 +3518,7 @@ function isEncounterActive() {
     var _statusLog = [];
     function setStatus(text, tone, category) {
         if (category && _statusMuted[category]) return;
+        allLog('状态', text);
         var el = document.getElementById('lvscStatus');
         var compactEl = document.getElementById('lvscCompactStatus');
         if (el) {
@@ -2454,7 +3535,7 @@ function isEncounterActive() {
 
     function showStatusLog() {
         var ov = document.createElement('div'); ov.id = 'lvscLogOverlay';
-        ov.innerHTML = '<div id="lvscLogBox"><div id="lvscLogHead"><span>📋 运行日志</span><button id="lvscLogClose">✕</button></div><div id="lvscLogList">' + _statusLog.slice().reverse().map(function(l){ return '<div class="lvsc-log-' + l.o + '"><b>' + l.t + '</b> ' + l.m + '</div>'; }).join('') + '</div></div>';
+        ov.innerHTML = '<div id="lvscLogBox"><div id="lvscLogHead"><span>历史通知</span><button id="lvscLogClose">✕</button></div><div id="lvscLogList">' + _statusLog.slice().reverse().map(function(l){ return '<div class="lvsc-log-' + l.o + '"><b>' + l.t + '</b> ' + l.m + '</div>'; }).join('') + '</div></div>';
         document.body.appendChild(ov);
         ov.onclick = function(e) { if (e.target === ov) { ov.remove(); } };
         document.getElementById('lvscLogClose').onclick = function() { ov.remove(); };
@@ -2601,8 +3682,19 @@ function isEncounterActive() {
         state.wecomNotify = chk('lvscWecomNotify');
         state.wecomNotifyWebhook = str('lvscWecomNotifyWebhook', '');
         state.wecomWorldWebhook = str('lvscWecomWorldWebhook', '');
+        state.notifyClean = chk('lvscNotifyClean');
+        state.notifyMeditate = chk('lvscNotifyMeditate');
+        state.notifyCombat = chk('lvscNotifyCombat');
+        state.notifyBuff = chk('lvscNotifyBuff');
+        state.notifyEquip = chk('lvscNotifyEquip');
+        state.notifyMaster = chk('lvscNotifyMaster');
+        state.notifyInsc = chk('lvscNotifyInsc');
+        state.notifyMisc = chk('lvscNotifyMisc');
+        state.notifyHourly = chk('lvscNotifyHourly');
         state.wecomPrivateWebhook = str('lvscWecomPrivateWebhook', '');
         state.autoMasterRequests = chk('lvscAutoMasterRequests');
+        state.autoWenDaoDaily = chk('lvscAutoWenDaoDaily');
+        state.autoOfferingDaily = chk('lvscAutoOfferingDaily');
         state.autoBail = chk('lvscAutoBail');
         state.autoReloadMin = num('lvscAutoReloadMin', 0, 0);
         state.skillWashScope = sel('lvscSkillWashScope', 'body', ['body', 'incarnation']);
@@ -2616,6 +3708,27 @@ function isEncounterActive() {
         state.craftDelayMax = num('lvscCraftDelayMax', 0.5, 10);
         state.nirvanaDelayMin = num('lvscNirvanaDelayMin', 0.5, 5);
         state.nirvanaDelayMax = num('lvscNirvanaDelayMax', 0.5, 10);
+        // 批量持久化所有state到localStorage（防丢失）
+        try {
+            var _persistKeys = [
+                ['craftBuyAmount','lvSpiritCleaner.craftBuyAmount'],
+                ['craftBuyDelay','lvSpiritCleaner.craftBuyDelay'],
+                ['craftRecipeId','lvSpiritCleaner.craftRecipeId'],
+                ['craftType','lvSpiritCleaner.craftType'],
+                ['craftInterval','lvSpiritCleaner.craftInterval'],
+                ['craftTargetCount','lvSpiritCleaner.craftTargetCount'],
+                ['ordainBuyQty','lvSpiritCleaner.ordainBuyQty'],
+                ['ordainTargetCount','lvSpiritCleaner.ordainTargetCount'],
+                ['nirvanaRecipeId','lvSpiritCleaner.nirvanaRecipeId'],
+                ['farmInterval','lvSpiritCleaner.farmInterval'],
+                ['autoVerify','lvSpiritCleaner.autoVerify']
+            ];
+            for (var pi = 0; pi < _persistKeys.length; pi++) {
+                var pk = _persistKeys[pi];
+                var pv = state[pk[0]];
+                if (pv !== undefined) localStorage.setItem(pk[1], typeof pv === 'boolean' ? (pv ? '1' : '0') : String(pv));
+            }
+        } catch(_) {}
     }
 
     // 保证别名：运行循环启动时需要从 UI 读取
@@ -2953,6 +4066,37 @@ function isEncounterActive() {
         }
     }
 
+    // 强制复活（绕过 autoReviveDeath 开关，系统模式专用）
+    async function tryForceRevive() {
+        if (!isDeathActive()) return false;
+        busyEvent = true;
+        try {
+            setStatus('尝试引渡归来...', 'warn');
+            _cleanStats.deaths++;
+            var revived = false;
+            if (typeof window.revivePlayer === 'function') {
+                try { await window.revivePlayer(); revived = true; } catch (_) {}
+            }
+            if (!revived) {
+                var overlay = document.getElementById('deathOverlay');
+                var btn = visibleButtonByText(overlay || document, '引渡归来');
+                if (btn) { btn.click(); revived = true; }
+            }
+            if (!revived) { setStatus('未找到引渡归来按钮', 'warn'); return false; }
+            await sleep(1200);
+            window.playerDead = false;
+            var deathOverlay = document.getElementById('deathOverlay');
+            if (deathOverlay) deathOverlay.classList.add('hidden');
+            if (typeof window.loadGameLogs === 'function') window.loadGameLogs();
+            await refreshPlayer();
+            // 复活后恢复
+            await sleep(800);
+            if (state.sectQuickRecovery) await activeRecover();
+            return true;
+        } catch (e) { console.warn('[SysExplore] force revive failed', e); return false; }
+        finally { busyEvent = false; }
+    }
+
     function isGameNight() {
         if (typeof window.calcGameTime === 'function') {
             try {
@@ -3070,6 +4214,7 @@ function isEncounterActive() {
     }
 
     async function tryAdvancedMeditateOnce() {
+        var wasMeditating = false;
         if (!state.useAdvancedMeditate || !gameApi()) return false;
         // 冷却（默认15分钟，可配置）
         var cooldownMs = state.advMedCooldownMin * 60000;
@@ -3087,9 +4232,9 @@ function isEncounterActive() {
             else if (typeof calcGameTime === 'function') { try { var gt = calcGameTime(); if (gt && (gt.seasonIdx === 1 || gt.seasonIdx === 2 || gt.seasonIdx === 3)) seasonOk = true; } catch (_) {} }
             if (!seasonOk) return false;
         }
-        // 神识低于20%才能使用高级冥想
+        // 神识低于30%才能使用高级冥想
         var spi = getSpiritInfo();
-        if (spi.spirit >= Math.floor(spi.maxSpirit * 0.2)) {
+        if (spi.spirit >= Math.floor(spi.maxSpirit * 0.3)) {
             return false;
         }
         try {
@@ -3132,6 +4277,7 @@ function isEncounterActive() {
         var targetSpirit = getMeditateTargetSpirit(info);
         if (info.maxSpirit <= 0 || info.spirit >= targetSpirit) return true;
 
+        try { var _mp = getPlayer(); if (_mp && window._lvscRecordExp) window._lvscRecordExp(_mp.cultivation||0, _mp.cultivationNeeded||0, _mp.realmLevelName||_mp.realmName||'-'); } catch(_){}
         setStatus('神识不足，开始冥想到 ' + targetSpirit, 'run');
         // 切换神识套
         if (state.equipSwapEnabled && state.equipSpiritSlot) {
@@ -3140,8 +4286,20 @@ function isEncounterActive() {
         }
         if (await tryAdvancedMeditateOnce()) {
             info = getSpiritInfo();
-            if (info.spirit >= info.cost && info.spirit > state.reserve) return true;
-            if (info.spirit >= targetSpirit) return true;
+            if (info.spirit >= info.cost && info.spirit > state.reserve) {
+                if (state.equipSwapEnabled && state.equipCombatSlot) {
+                    setStatus('仙缘冥想成功，切回战斗套', 'run', 'Equip');
+                    await equipLoadoutApply(state.equipCombatSlot);
+                }
+                return true;
+            }
+            if (info.spirit >= targetSpirit) {
+                if (state.equipSwapEnabled && state.equipCombatSlot) {
+                    setStatus('仙缘冥想成功，切回战斗套', 'run', 'Equip');
+                    await equipLoadoutApply(state.equipCombatSlot);
+                }
+                return true;
+            }
         }
         // 直接用API启动冥想
         var startRes = await gameApi().post('/api/game/meditate/start', {});
@@ -4295,6 +5453,22 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         if (!state.wecomNotify) return;
         var url = webhookUrl || state.wecomNotifyWebhook;
         if (!url) return;
+        // 按标题匹配类别开关
+        var catMap = {
+            notifyClean:  /^(🧹|🔄|✅|脚本停止|自动切换)/,
+            notifyMeditate: /^(🧘|✨|快速清理冥想)/,
+            notifyCombat:  /^(💀|🔄 已引渡|转入监测|商人购买)/,
+            notifyBuff:    /^(虚空淬体|隐秘符|突破成功)/,
+            notifyEquip:   /^(装备维修|本命吞噬|本源修复)/,
+            notifyMaster:  /^(授业|赠物|赠灵石|问道完成|上供完成|收徒成功|问道处理|互道突破|历练应允|纳贡收取)/,
+            notifyInsc:    /^铭文/,
+            notifyMisc:    /^(自动出狱|自动解除禁闭|自动月卡|藏宝图|脚本新版|自动刷新|通知测试)/
+        };
+        var allowed = false;
+        for (var k in catMap) {
+            if (state[k] && catMap[k].test(title)) { allowed = true; break; }
+        }
+        if (!allowed) return;
         wecomQueue.push({ title: title, content: content, url: url });
         if (wecomQueue.length > 50) wecomQueue.shift();
         wecomDrainQueue();
@@ -4516,6 +5690,44 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             wecomEnqueue('赠灵石完成', '已完成每日赠灵石');
         } catch (err) { masterLog('❌ 赠灵石异常: ' + err); }
     }
+
+    // 每日自动问道
+    async function autoWenDaoDaily() {
+        if (!state.autoWenDaoDaily || !gameApi()) return;
+        var today = new Date().toDateString();
+        if (localStorage.getItem('lvscWenDaoDate') === today) return;
+        try {
+            var res = await gameApi().post('/api/master/wendao/request', {});
+            if (res && res.code === 200 && res.data) {
+                masterSelfLog('✅ 问道完成: ' + res.data);
+            } else {
+                masterSelfLog('⚠️ 问道失败: ' + ((res && res.message) || '未知'));
+            }
+            localStorage.setItem('lvscWenDaoDate', today);
+            wecomEnqueue('问道完成', '已完成每日问道');
+        } catch (err) { masterSelfLog('❌ 问道异常: ' + err); }
+    }
+
+    // 每日自动上供
+    async function autoOfferingDaily() {
+        if (!state.autoOfferingDaily || !gameApi()) return;
+        var today = new Date().toDateString();
+        if (localStorage.getItem('lvscOfferingDate') === today) return;
+        if (!state.offeringPlayerItemId) { masterSelfLog('❌ 上供: 未选择物品'); return; }
+        try {
+            var body = {playerItemId: state.offeringPlayerItemId, quantity: state.offeringQty, reason: ''};
+            var res = await gameApi().post('/api/master/offering/request', body);
+            if (res && res.code === 200 && res.data) {
+                masterSelfLog('✅ 上供完成: ' + (res.data || '已上呈师父'));
+            } else {
+                masterSelfLog('⚠️ 上供失败: ' + ((res && res.message) || '未知'));
+            }
+            localStorage.setItem('lvscOfferingDate', today);
+            wecomEnqueue('上供完成', '已完成每日上供');
+        } catch (err) { masterSelfLog('❌ 上供异常: ' + err); }
+    }
+
+    // 自动处理徒弟请求
 
     // 自动处理徒弟请求
     async function handleMasterRequests() {
@@ -4990,84 +6202,116 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         }
     }
 
+    function trialLog(msg) {
+        var el = document.getElementById('lvscTrialLog');
+        if (!el) return;
+        var t = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+        el.innerHTML = '[' + t + '] ' + msg.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '<br>' + el.innerHTML;
+        if (el.innerHTML.length > 5000) el.innerHTML = el.innerHTML.substring(0, 5000);
+    }
+    function trialSleep(ms) {
+        var start = Date.now();
+        return new Promise(function(resolve) {
+            var timer = setInterval(function() {
+                if (!autoTrialRunning || Date.now() - start >= ms) { clearInterval(timer); resolve(); }
+            }, 200);
+        });
+    }
     async function autoTrialLoop() {
-        if (autoTrialRunning || running) return;
+        if (autoTrialRunning) return;
         autoTrialRunning = true;
         updateMeter();
-        setStatus('自动试炼启动', 'run');
+        var trialSec = state.trialInterval || 3;
+        var retrySec = state.trialRetryDelay || 30;
+        trialLog('开始自动试炼 | 间隔' + trialSec + '秒 | 重试' + retrySec + '秒');
+        var ss = document.getElementById('lvscTrialStatus');
 
         var trialFailRounds = 0;
+        var bestFloor = 0, totalFights = 0, wins = 0, losses = 0;
         while (autoTrialRunning) {
             try {
                 var infoRes = await gameApi().get('/api/trial-tower/info');
                 if (!infoRes || infoRes.code !== 200 || !infoRes.data) {
-                    setStatus('试炼信息读取失败，等待重试', 'warn');
-                    await sleep(state.delayMs);
+                    trialLog('信息读取失败，' + retrySec + '秒后重试');
+                    if (ss) ss.textContent = '读取失败';
+                    if (!autoTrialRunning) break;
+                    await trialSleep(retrySec * 1000);
                     continue;
                 }
                 var info = infoRes.data;
+                if (info.activeFloor > bestFloor) bestFloor = info.activeFloor;
+                if (ss) ss.textContent = '第' + info.activeFloor + '层 | ' + wins + '胜' + losses + '败';
+
                 if (!info.hasActiveTrial) {
-                    setStatus('开始新一轮试炼', 'run');
+                    trialLog('开始新一轮试炼');
                     var startRes = await gameApi().post('/api/trial-tower/start', { useAdPoints: false });
                     if (!startRes || startRes.code !== 200) {
                         trialFailRounds++;
                         if (trialFailRounds >= 10) {
-                            setStatus('试炼连续失败，自动切换为探索', 'run');
-                            wecomEnqueue('自动切换', '试炼无法继续，切换为探索模式');
+                            trialLog('连续失败10次，停止');
                             autoTrialRunning = false;
-                            updateMeter();
-                            await sleep(500);
-                            runLoop();
-                            return;
+                            break;
                         }
-                        setStatus('试炼开始失败（' + trialFailRounds + '/10），等待重试', 'warn');
-                        await sleep(state.delayMs);
+                        trialLog('开始失败（' + trialFailRounds + '/10），' + retrySec + '秒后重试');
+                        if (!autoTrialRunning) break;
+                        await trialSleep(retrySec * 1000);
                         continue;
                     }
                     trialFailRounds = 0;
-                    await refreshTrialPanel();
-                    await sleep(state.delayMs);
+                    if (!autoTrialRunning) break;
+                    await trialSleep(trialSec * 1000);
                     continue;
                 }
 
                 if (info.pendingBuffs && info.pendingBuffs.length) {
                     var pendingBest = chooseBestTrialBuff(info.pendingBuffs);
-                    setStatus('试炼选择天赋：' + (pendingBest.name || pendingBest.id), 'run');
+                    trialLog('第' + info.activeFloor + '层 选择天赋: ' + (pendingBest.name || pendingBest.id));
                     var choosePendingRes = await gameApi().post('/api/trial-tower/choose-buff', { buffId: pendingBest.id });
                     if (!choosePendingRes || choosePendingRes.code !== 200) {
-                        setStatus('试炼天赋选择失败，等待重试', 'warn');
+                        trialLog('天赋选择失败');
                     }
-                    await refreshTrialPanel();
-                    await sleep(state.delayMs);
+                    if (!autoTrialRunning) break;
+                    await trialSleep(trialSec * 1000);
                     continue;
                 }
 
-                setStatus('试炼挑战第' + (info.activeFloor || '?') + '层', 'run');
+                trialLog('挑战第' + (info.activeFloor || '?') + '层');
                 var fightRes = await gameApi().post('/api/trial-tower/fight', {});
                 if (!fightRes || fightRes.code !== 200 || !fightRes.data) {
-                    setStatus('试炼挑战失败，等待重试', 'warn');
-                    await sleep(state.delayMs);
+                    trialLog('挑战失败，' + retrySec + '秒后重试');
+                    if (!autoTrialRunning) break;
+                    await trialSleep(retrySec * 1000);
                     continue;
                 }
+                totalFights++;
                 var data = fightRes.data;
-                if (data.victory && data.buffs && data.buffs.length) {
-                    var best = chooseBestTrialBuff(data.buffs);
-                    setStatus('通关，选择天赋：' + (best.name || best.id), 'run');
-                    await gameApi().post('/api/trial-tower/choose-buff', { buffId: best.id });
-                } else if (!data.victory) {
-                    setStatus('试炼结束，藏宝图 +' + (data.rewardMaps || 0) + '，准备重开', 'run');
+                if (data.victory) {
+                    wins++;
+                    if (data.buffs && data.buffs.length) {
+                        var best = chooseBestTrialBuff(data.buffs);
+                        trialLog('第' + info.activeFloor + '层 胜利! 选择: ' + (best.name || best.id) + ' (' + wins + '胜)');
+                        await gameApi().post('/api/trial-tower/choose-buff', { buffId: best.id });
+                    }
+                } else {
+                    losses++;
+                    trialLog('第' + info.activeFloor + '层 战败 (' + losses + '败)');
+                    if (!state.trialAutoRetry) { trialLog('自动重试已关闭，停止'); autoTrialRunning = false; break; }
                 }
-                await refreshTrialPanel();
-                await sleep(state.delayMs);
+                if (!autoTrialRunning) break;
+                await trialSleep(trialSec * 1000);
             } catch (err) {
-                console.warn('[LingVerse Spirit Cleaner] auto trial failed', err);
-                setStatus('自动试炼异常，等待重试', 'warn');
-                await sleep(state.delayMs);
+                trialLog('异常: ' + (err.message || err) + '，' + retrySec + '秒后重试');
+                if (!autoTrialRunning) break;
+                await trialSleep(retrySec * 1000);
             }
         }
 
+        autoTrialRunning = false;
         updateMeter();
-        if (!running && !monitoringSpirit && !autoTreasureRunning) setStatus('自动试炼已停止', 'idle');
+        trialLog('试炼结束 | 最佳' + bestFloor + '层 | ' + totalFights + '战' + wins + '胜' + losses + '败');
+        if (ss) ss.textContent = '结束';
+        var sb = document.getElementById('lvscTrialStartBtn'); if (sb) sb.style.display = '';
+        var stb = document.getElementById('lvscTrialStopBtn'); if (stb) stb.style.display = 'none';
     }
 
     function toggleAutoTrial() {
@@ -5401,8 +6645,37 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         }).join('\n');
         log.scrollTop = log.scrollHeight;
     }
+        function masterSelfLog(message) {
+        var log = document.getElementById('lvscMasterSelfLog');
+        if (!log) return;
+        var timeStr = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        var today = new Date().toLocaleDateString('zh-CN');
+        var logs = [];
+        try { logs = JSON.parse(localStorage.getItem('lvscMasterSelfLogArr') || '[]'); } catch(_) {}
+        var lastDate = localStorage.getItem('lvscMasterSelfLogLastDate');
+        if (lastDate !== today) {
+            localStorage.setItem('lvscMasterSelfLogLastDate', today);
+            logs.push({ time: timeStr, text: '<span style="color:#dbb970">━━━ ' + today + ' ━━━</span>' });
+        }
+        logs.push({ time: timeStr, text: message });
+        if (logs.length > 50) logs = logs.slice(-50);
+        localStorage.setItem('lvscMasterSelfLogArr', JSON.stringify(logs));
+        renderMasterSelfLog();
+    }
+    function renderMasterSelfLog() {
+        var log = document.getElementById('lvscMasterSelfLog');
+        if (!log) return;
+        var logs = [];
+        try { logs = JSON.parse(localStorage.getItem('lvscMasterSelfLogArr') || '[]'); } catch(_) {}
+        if (!logs.length) { log.innerHTML = '等待执行...'; return; }
+        log.innerHTML = logs.map(function(e) {
+            return '<span style="color:#8f846f">' + e.time + '</span> ' + e.text;
+        }).join('\n');
+        log.scrollTop = log.scrollHeight;
+    }
 
     function craftLog(message) {
+        allLog('炼制', message);
         var log = document.getElementById('lvscCraftQualityLog');
         if (!log) return;
         var time = new Date().toLocaleTimeString();
@@ -5926,14 +7199,22 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             try {
                 var res = await openMysteryBoxOnce();
                 if (!res || res.code !== 200 || !res.data) {
-                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#ff6b6b\">✗ 第' + (i+1) + '次失败：' + ((res && res.message) || '未知错误') + '</span>' });
-                    if (ss) ss.textContent = '开启失败，已停止';
+                    var failMsg = (res && res.message) || '未知错误';
+                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style="color:#ff6b6b">✗ 第' + (i+1) + '次失败：' + failMsg + '</span>' });
+                    if (failMsg.indexOf('次数已用完') >= 0 || failMsg.indexOf('明日再来') >= 0) {
+                        localStorage.setItem(MYSTERY_BOX_OPENED_KEY, '10');
+                        if (ss) ss.textContent = '今日秘匣已开启（10/10）';
+                    } else if (ss) { ss.textContent = '开启失败，已停止'; }
                     break;
                 }
                 var d = res.data;
                 if (!d.success) {
-                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style=\"color:#ff6b6b\">✗ 第' + (i+1) + '次：' + (d.reason || '开启失败') + '</span>' });
-                    if (ss) ss.textContent = '已停止（' + (d.reason || '失败') + '）';
+                    var reason = d.reason || '开启失败';
+                    appendMysteryBoxLog({ time: new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}), text: '<span style="color:#ff6b6b">✗ 第' + (i+1) + '次：' + reason + '</span>' });
+                    if (reason.indexOf('次数已用完') >= 0 || reason.indexOf('明日再来') >= 0) {
+                        localStorage.setItem(MYSTERY_BOX_OPENED_KEY, '10');
+                        if (ss) ss.textContent = '今日秘匣已开启（10/10）';
+                    } else if (ss) { ss.textContent = '已停止（' + reason + '）'; }
                     break;
                 }
                 var item = d.item;
@@ -6031,10 +7312,33 @@ for (var i = 0; i < invRes.data.items.length; i++) {
         if (state.redPacketClaimed.length > 500) state.redPacketClaimed = state.redPacketClaimed.slice(-300);
         localStorage.setItem('lvSpiritCleaner.redPacketClaimed', JSON.stringify(state.redPacketClaimed));
 
-        var delay = 300 + Math.floor(Math.random() * 400);
-        setTimeout(function() {
-            doClaimRedPacket(packetId);
-        }, delay);
+        // 最低金额过滤
+        if (state.redPacketMinAmount > 0) {
+            checkRedPacketAmount(packetId).then(function(amount) {
+                if (amount >= 0 && amount < state.redPacketMinAmount) {
+                    appendRedPacketLog('跳过红包 #' + packetId + ': ' + formatNum(amount) + '灵石 (低于' + formatNum(state.redPacketMinAmount) + ')');
+                    return;
+                }
+                doClaimRedPacket(packetId);
+            });
+        } else {
+            var delay = 300 + Math.floor(Math.random() * 400);
+            setTimeout(function() {
+                doClaimRedPacket(packetId);
+            }, delay);
+        }
+    }
+
+    async function checkRedPacketAmount(packetId) {
+        try {
+            var api = gameApi();
+            if (!api) return -1;
+            var info = await api.get('/api/chat/red-packet/' + encodeURIComponent(packetId));
+            if (info && info.code === 200 && info.data && info.data.packet) {
+                return info.data.packet.totalAmount || 0;
+            }
+        } catch (e) {}
+        return -1;
     }
 
     async function doClaimRedPacket(packetId) {
@@ -6052,6 +7356,20 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                 state.redPacketWeekAmount += amount;
                 updateRedPacketStats();
                 appendRedPacketLog('抢到：' + formatNumber(amount) + '灵石');
+                if (state.redPacketChatMsgs && state.redPacketChatMsgs.length > 0) {
+                    var rpMsg = state.redPacketChatMsgs[Math.floor(Math.random() * state.redPacketChatMsgs.length)];
+                    setTimeout(function() { try { gameApi().post('/api/chat/send', { content: rpMsg }); } catch(_) {} }, 2000 + Math.floor(Math.random() * 3000));
+                }
+                // 抢到后自动发言
+                if (state.redPacketChatMsgs && state.redPacketChatMsgs.length > 0) {
+                    var msg = state.redPacketChatMsgs[Math.floor(Math.random() * state.redPacketChatMsgs.length)];
+                    setTimeout(function() {
+                        try {
+                            var api2 = gameApi();
+                            if (api2) api2.post('/api/chat/send', { content: msg });
+                        } catch(_) {}
+                    }, 2000 + Math.floor(Math.random() * 3000));
+                }
             }
         } catch(e) {
             // 静默处理
@@ -6082,6 +7400,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
     }
 
     function appendRedPacketLog(msg) {
+        allLog('红包', msg);
         var el = document.getElementById('lvscRedPacketLog');
         if (!el) return;
         var time = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
@@ -6206,6 +7525,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
     }
 
     function appendArenaLog(msg) {
+        allLog('竞技场', msg);
         var el = document.getElementById('lvscArenaLog');
         if (!el) return;
         var time = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
@@ -6236,6 +7556,8 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             if (state.autoGiftItemsDaily) await autoGiftItemsDaily();
             if (state.autoGiftStonesDaily) await autoGiftStonesDaily();
             if (state.autoMasterRequests) await handleMasterRequests();
+            if (state.autoWenDaoDaily) await autoWenDaoDaily();
+            if (state.autoOfferingDaily) await autoOfferingDaily();
 
                         // 非冥想状态自动疗伤
             if (state.sectQuickRecovery) {
@@ -6377,6 +7699,8 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             if (state.autoGiftItemsDaily) await autoGiftItemsDaily();
             if (state.autoGiftStonesDaily) await autoGiftStonesDaily();
             if (state.autoMasterRequests) await handleMasterRequests();
+            if (state.autoWenDaoDaily) await autoWenDaoDaily();
+            if (state.autoOfferingDaily) await autoOfferingDaily();
 
             if (await checkEventBlockers()) {
                 await sleep(state.delayMs);
@@ -6385,9 +7709,10 @@ for (var i = 0; i < invRes.data.items.length; i++) {
 
             var info = getSpiritInfo();
             if (info.player && (info.player.isDead || window.playerDead)) {
-                if (state.autoReviveDeath) {
-                    setStatus('💀 陨落，等待复活...', 'warn');
-                    await sleep(10000);
+                if (state.autoReviveDeath && isDeathActive()) {
+                    setStatus('💀 陨落，立即复活...', 'warn');
+                    await handleDeathReviveEvent(false);
+                    await sleep(1000);
                     continue;
                 }
                 setStatus('💀 角色陨落，停止', 'warn');
@@ -6410,6 +7735,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                     await equipLoadoutApply(state.equipSpiritSlot);
                 }
                 var targetSpirit = Math.floor(info.maxSpirit * TARGET_PCT);
+                try { var _mp2 = getPlayer(); if (_mp2 && window._lvscRecordExp) window._lvscRecordExp(_mp2.cultivation||0, _mp2.cultivationNeeded||0, _mp2.realmLevelName||_mp2.realmName||'-'); } catch(_){}
                 setStatus('🧘 神识耗尽(' + info.spirit + '/' + info.maxSpirit + ')，开始冥想→' + targetSpirit, 'run');
                 forceClearMeditationUi();
                 window._meditationActive = false;
@@ -6476,7 +7802,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                     setStatus('☀️ 白天（神识' + Math.round(info.spirit / info.maxSpirit * 100) + '%），等待夜晚...', 'run');
                     _dayNotified = true;
                 }
-                await sleep(30000);
+                await sleep(state.nightCheckIntervalQuick * 1000);
                 await refreshPlayer();
                 info = getSpiritInfo();
                 if (info.spirit < info.cost) break;
@@ -6591,34 +7917,67 @@ for (var i = 0; i < invRes.data.items.length; i++) {
 
     // --- 系统自带探索 + 脚本特性监控 ---
     async function systemExploreLoop() {
-        if (running || autoInscriptionRunning) { console.log('[SysExplore] blocked: running=' + running + ' insc=' + autoInscriptionRunning); return; }
+        if (running || autoInscriptionRunning || quickClearRunning) { console.log('[SysExplore] blocked: running=' + running + ' insc=' + autoInscriptionRunning + ' quick=' + quickClearRunning); return; }
         if (monitoringSpirit) { monitoringSpirit = false; updateMeter(); }
         if (typeof startAutoExplore !== 'function') { setStatus('系统自动探索不可用', 'warn'); return; }
         console.log('[SysExplore] start. medActive=' + window._meditationActive + ' medProg=' + window._meditationInProgress + ' _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
-        // 如果正在冥想，先收功再启动
-        var playerNow = getPlayer() || {};
-        if (playerNow.isMeditating) {
-            setStatus('检测到正在冥想，先收功...', 'run');
-            console.log('[SysExplore] player isMeditating, stopping meditation...');
-            try {
-                await gameApi().post('/api/game/meditate/stop', {});
-                await sleep(1500);
-                // 强制清除UI残留
-                if (typeof forceClearMeditationUi === 'function') forceClearMeditationUi();
-                window._meditationActive = false;
-                window._meditationInProgress = false;
-                // 点"收工并继续" — 刷新玩家数据
-                await refreshPlayer();
-            } catch (e) { console.log('[SysExplore] meditate stop err:', e.message); }
-            setStatus('已收功，启动系统探索', 'run');
+        // 同步UI设置到state
+        syncSettingsFromUi();
+        // 道韵加成检查
+        if (!await checkDaoyunBeforeStart('系统自动清理')) {
+            setStatus('道韵加成未确认，已取消启动', 'warn');
+            return;
         }
+        // 如果正在冥想，先收功再启动
+        await stopMeditationBeforeRun();
         running = true;
         persistRunning(true);
+        resetCleanStats();
+        // 启动时切战斗套
+        if (state.equipSwapEnabled && state.equipCombatSlot) {
+            setStatus('切换战斗套...', 'run', 'Equip');
+            await equipLoadoutApply(state.equipCombatSlot);
+        }
         updateMeter();
         setStatus('系统自动探索启动（脚本监控中）', 'run');
         var pName = (getPlayer() || {}).name || '';
         wecomEnqueue('🧹 开始清理', '角色：' + pName + '\n模式：系统自带');
+
         while (running) {
+            if (state.nightOnlyExplore && !isGameNight()) {
+                if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('白天暂停探索', true); } catch(_) {} }
+                setStatus('白天等待入夜（系统模式）', 'run');
+                var _nightMedStarted = false;
+                while (running && !isGameNight()) {
+                    var _ni = getSpiritInfo();
+                    if (_ni.spirit < _ni.maxSpirit && gameApi() && state.autoMeditate) {
+                        if (!_nightMedStarted) {
+                            // 冥想前切换神识套
+                            if (state.equipSwapEnabled && state.equipSpiritSlot) {
+                                setStatus('切换神识套...', 'run', 'Equip');
+                                await equipLoadoutApply(state.equipSpiritSlot);
+                            }
+                            setStatus('白天挂机冥想等入夜', 'run');
+                            var _nMedBtn = document.getElementById('meditateBtn');
+                            if (_nMedBtn && !_nMedBtn.classList.contains('meditating')) { await humanClick(_nMedBtn); await sleep(2000); }
+                            var _nRes = await gameApi().get('/api/game/meditate/status');
+                            if (_nRes && _nRes.code === 200) { if (typeof window.startMeditationUI === 'function') { try { window.startMeditationUI(); } catch (_) {} } _nightMedStarted = true; }
+                            else { setStatus('冥想启动失败', 'warn'); }
+                        }
+                    } else if (_nightMedStarted && _ni.spirit >= _ni.maxSpirit) {
+                        await stopMeditationAndRefresh();
+                        _nightMedStarted = false;
+                    }
+                    await sleep(state.nightCheckIntervalExplore * 1000);
+                }
+                if (_nightMedStarted) { await stopMeditationAndRefresh(); }
+                // 入夜后切回战斗套
+                if (state.equipSwapEnabled && state.equipCombatSlot) {
+                    setStatus('切回战斗套...', 'run', 'Equip');
+                    await equipLoadoutApply(state.equipCombatSlot);
+                }
+                setStatus('已入夜，继续系统探索', 'run');
+            }
             await refreshPlayer();
             // === 全局检测 ===
             if (state.autoBreakthrough) await autoBreakthroughCheck();
@@ -6627,6 +7986,8 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             if (state.autoGiftItemsDaily) await autoGiftItemsDaily();
             if (state.autoGiftStonesDaily) await autoGiftStonesDaily();
             if (state.autoMasterRequests) await handleMasterRequests();
+            if (state.autoWenDaoDaily) await autoWenDaoDaily();
+            if (state.autoOfferingDaily) await autoOfferingDaily();
 
             var _sci = getSpiritInfo();
             if (_sci.player && _sci.spirit < _sci.cost) {
@@ -6671,6 +8032,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                     _lastCleanReport = Date.now();
                     var _rci = getSpiritInfo();
                     wecomEnqueue('🔄 清理中', '神识剩余：' + _rci.spirit + '/' + _rci.maxSpirit + '\n境界：' + getPlayerRealmStr());
+                    if (window._renderRunningMonitors) window._renderRunningMonitors();
                 }
                 try {
                     // 兜底：游戏自动探索有时卡遭遇，脚本接管
@@ -6689,8 +8051,22 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                     }
                     if (state.autoNirvanaPill) await ensureNirvanaPill();
                     if (state.autoMaintainLuck) await autoMaintainLuckCheck();
-                    if (state.autoVoidBody && !hasVoidBodyBuff()) await ensureVoidBodyBuff(false);
-                    if (state.autoHiddenCharm) await ensureHiddenCharm(false);
+                    if (state.autoVoidBody && !hasVoidBodyBuff()) {
+                        var vOk = await ensureVoidBodyBuff(false);
+                        if (!vOk) {
+                            if (!hasVoidBodyFailSafe()) { await switchToMonitor('虚空淬体连续失败'); return; }
+                            await sleep(state.delayMs);
+                            continue;
+                        }
+                    }
+                    if (state.autoHiddenCharm) {
+                        var hOk = await ensureHiddenCharm(false);
+                        if (!hOk) {
+                            if (!hasHiddenCharmFailSafe()) { await switchToMonitor('隐秘符连续失败'); return; }
+                            await sleep(state.hiddenCharmRetryMs || state.delayMs);
+                            continue;
+                        }
+                    }
                     if (state.sectQuickRecovery) await activeRecover();
                     if (state.autoRepair) await triggerAutoRepair(false);
                     if (state.autoNatalDevour) await triggerAutoNatalDevour(false);
@@ -6699,8 +8075,19 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                     if (await checkEventBlockers()) { await sleep(state.delayMs); continue; }
                     if (state.autoTeachDaily) await autoTeachDaily();
                     if (state.autoMasterRequests) await handleMasterRequests();
-                    applyExploreMultiplier();
-                } catch (_) {}
+                    if (state.autoWenDaoDaily) await autoWenDaoDaily();
+                    if (state.autoOfferingDaily) await autoOfferingDaily();
+                    applyExploreMultiplier();                } catch (_) {}
+                var _sysDeadP = getPlayer() || {};
+                if (_sysDeadP.isDead || window.playerDead) {
+                    setStatus('💀 系统模式检测到陨落，立即复活', 'warn');
+                    if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('陨落', true); } catch(_) {} }
+                    await sleep(500);
+                    if (!await tryForceRevive()) { setStatus('💀 引渡失败，停止', 'warn'); running = false; persistRunning(false); updateMeter(); return; }
+                    await refreshPlayer();
+                    await sleep(1500);
+                    break;
+                }
                 await sleep(5000);
             }
             console.log('[SysExplore] monitor loop exited. running=' + running + ' _autoExploreRunning=' + (typeof _autoExploreRunning !== 'undefined' ? _autoExploreRunning : 'undef'));
@@ -6724,9 +8111,9 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             var ci = getSpiritInfo();
             console.log('[SysExplore] stopped. dead=' + (p.isDead || window.playerDead) + ' spirit=' + ci.spirit + ' cost=' + ci.cost);
             if (p.isDead || window.playerDead) {
-                setStatus('系统探索因死亡停止，尝试复活', 'warn');
-                if (state.autoReviveDeath && isDeathActive()) { await handleDeathReviveEvent(false); await sleep(2000); continue; }
-                setStatus('死亡，停止', 'warn'); break;
+                setStatus('💀 系统模式检测到陨落，尝试引渡', 'warn');
+                if (await tryForceRevive()) { await sleep(2000); continue; }
+                setStatus('💀 引渡失败，停止', 'warn'); break;
             }
             if (ci.spirit < ci.cost) {
                 if (typeof stopAutoExplore === 'function') { try { stopAutoExplore('神识不足', true); } catch(_) {} }
@@ -6800,6 +8187,8 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             if (state.autoGiftItemsDaily) await autoGiftItemsDaily();
             if (state.autoGiftStonesDaily) await autoGiftStonesDaily();
             if (state.autoMasterRequests) await handleMasterRequests();
+            if (state.autoWenDaoDaily) await autoWenDaoDaily();
+            if (state.autoOfferingDaily) await autoOfferingDaily();
 
             // 每10分钟清理中通知
             if (Date.now() - _lastCleanReport > 600000) {
@@ -6846,7 +8235,7 @@ for (var i = 0; i < invRes.data.items.length; i++) {
                         await stopMeditationAndRefresh();
                         nightMedStarted = false;
                     }
-                    await sleep(10000);
+                    await sleep(state.nightCheckIntervalExplore * 1000);
                 }
                 if (nightMedStarted) { setStatus('已入夜，收功', 'run'); await stopMeditationAndRefresh(); }
                 // 入夜后切回战斗套
@@ -6949,6 +8338,31 @@ for (var i = 0; i < invRes.data.items.length; i++) {
             }
 
             _cleanStats.explores++;
+            // 每次清理循环完成后记录修为
+            try {
+                await refreshPlayer();
+                var _p = getPlayer() || {};
+                recordExpSnapshot(_p.cultivation || 0, _p.cultivationNeeded || 0, _p.realmLevelName || _p.realmName || '-');
+                if (window._lvscRefreshStats) window._lvscRefreshStats();
+                if (window._lvscRecordExp) window._lvscRecordExp(_p.cultivation||0, _p.cultivationNeeded||0, _p.realmLevelName||_p.realmName||'-');
+            } catch(_) {}
+            // 整点通知（每小时整点触发一次）
+            var _hrNow = new Date();
+            if (state.notifyHourly && state.wecomNotify && state.wecomNotifyWebhook && _hrNow.getMinutes() === 0 && !_lvscLastHourlySent) {
+                _lvscLastHourlySent = true;
+                var _hrP = getPlayer() || {};
+                var _hrExp = _hrP.cultivation || 0, _hrMax = _hrP.cultivationNeeded || 0;
+                var _hrPct = _hrMax > 0 ? (_hrExp * 100 / _hrMax).toFixed(1) : 0;
+                var _hrRealm = _hrP.realmLevelName || _hrP.realmName || '-';
+                var _hrDay = null;
+                try { _hrDay = JSON.parse(localStorage.getItem('lvscExpToday') || 'null'); } catch(_) {}
+                var _hrGain = '';
+                if (_hrDay && _hrDay.date === new Date().toISOString().split('T')[0]) {
+                    _hrGain = '\n今日修为: +' + fmtNum(_hrExp - _hrDay.startExp);
+                }
+                wecomEnqueue('整点统计', '⏰ ' + _hrNow.getHours() + ':00\n境界: ' + _hrRealm + '\n修为: ' + fmtNum(_hrExp) + '/' + fmtNum(_hrMax) + ' (' + _hrPct + '%)' + _hrGain);
+            }
+            if (_hrNow.getMinutes() !== 0) _lvscLastHourlySent = false;
             var jitter = Math.floor(Math.random() * 350);
             await sleep(state.delayMs + jitter);
         }
@@ -7780,7 +9194,7 @@ function stop(reason) {
             '.lvsc-stop-btn:hover{background:rgba(255,107,107,.28)}',
             '.lvsc-rfr-btn{background:rgba(255,255,255,.08);color:#000!important;border:1px solid rgba(255,255,255,.1)!important;font-size:11px}',
             '.lvsc-rfr-btn:hover{background:rgba(255,255,255,.14)}',
-            '#lvscClose,#lvscCollapseBtn,#lvscExpandBtn{height:28px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.1)!important}',
+            '#lvscClose,#lvscCollapseBtn,#lvscExpandBtn,#lvscPinBtn{height:28px;background:rgba(255,255,255,.08);color:#f5f1e8;border:1px solid rgba(255,255,255,.1)!important}',
             '#lvscClose{width:28px}',
             '#lvscCollapseBtn,#lvscExpandBtn{padding:0 8px}',
             '#lvscStatus{flex:0 0 auto;margin:0;padding:8px 12px;border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.08);background:rgba(155,231,195,.08);font-size:12px;color:#cfc6b2;min-height:18px;white-space:normal;overflow-wrap:anywhere;cursor:pointer;user-select:none}#lvscStatus:hover{background:rgba(155,231,195,.16)}',
@@ -7814,6 +9228,9 @@ function stop(reason) {
 
             '#lvscPanel.lvsc-embedded #lvscResizeHandle{display:block!important;position:absolute;left:-4px;right:auto!important;bottom:0!important;top:0!important;width:8px!important;height:auto!important;cursor:ew-resize!important;border-radius:0!important;background:transparent!important;opacity:1!important}',
             '#lvscPanel.lvsc-embedded #lvscResizeHandle:hover{background:rgba(219,185,112,.18)!important}',
+            '#lvscPinBtn{display:none}',
+            '#lvscPanel.lvsc-embedded #lvscPinBtn{display:inline-block!important}',
+            '#lvscPanel.lvsc-embedded.lvsc-pinned{z-index:2147483647!important}',
             '#lvscPanel.lvsc-embedded #lvscClose{display:none!important}',
             '#lvscPanel.lvsc-embedded.lvsc-collapsed{flex:0 0 auto!important;width:100%!important;height:auto!important;display:none!important}',
             '@media (max-width: 768px){#lvscPanel.lvsc-embedded{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;height:100dvh!important;z-index:10000!important;flex:none!important;border:1px solid var(--border-color,#d5d0c8)!important;border-radius:0!important;overflow-y:auto!important;display:flex!important;flex-direction:column!important;background:var(--lvsc-panel,var(--bg-panel,#181e24))!important}}',
@@ -7863,6 +9280,8 @@ function stop(reason) {
             '.lvsc-section .lvsc-section-title-row{padding:9px 9px 0 9px}',
             '.lvsc-section>*{margin-bottom:8px}.lvsc-section>*:last-child{margin-bottom:0}',            
             '.lvsc-section-title,.lvsc-section-title-row>span{font-weight:700;color:#dbb970}',
+            '.lvsc-new-badge{display:inline-block;font-size:9px;font-weight:800;color:#fff;background:linear-gradient(135deg,#ff6b6b,#ee5a24);padding:0 5px;border-radius:3px;margin-left:6px;vertical-align:middle;line-height:16px;letter-spacing:.5px;animation:lvsc-new-pulse 2s ease-in-out infinite}',
+            '@keyframes lvsc-new-pulse{0%,100%{opacity:1}50%{opacity:.7}}',
             '.lvsc-section-title-row{display:flex;align-items:center;gap:8px;min-width:0}',
             '.lvsc-section>.lvsc-section-title,.lvsc-section-title-row{cursor:pointer;user-select:none}',
             '.lvsc-section>.lvsc-section-title::before{content:"▼ ";font-size:10px}',
@@ -7936,6 +9355,21 @@ function stop(reason) {
             '#lvscPanel:not(.lvsc-embedded) select,#lvscPanel:not(.lvsc-embedded) select option{background:#1b2127!important;color:#d8dde0!important}',
             '#lvscCraftQualityLog{color:#797979!important;background:transparent!important;border:1px solid rgba(255,255,255,.25)!important}',
             '.lvsc-menu-btn::before{content:\"\"!important;display:inline-block!important;width:3px!important;height:18px!important;border-radius:2px!important;background:var(--lvsc-bar,rgb(22,128,106))!important;margin-right:6px!important;vertical-align:middle!important}',
+            '#lvscAllLogModal{position:fixed;inset:0;z-index:2147483645;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7);backdrop-filter:blur(2px)}',
+            '#lvscAllLogModal .lvsc-log-card{position:relative;width:min(600px,calc(100vw - 28px));max-height:80vh;background:rgba(17,20,29,.98);border:1px solid rgba(219,185,112,.5);border-radius:12px;padding:16px;display:flex;flex-direction:column}',
+            '#lvscAllLogModal .lvsc-log-card h3{margin:0 0 8px;font-size:16px;color:#dbb970;display:flex;justify-content:space-between;align-items:center}',
+            '#lvscAllLogModal .lvsc-log-card h3 button{background:rgba(255,100,100,.2);color:#f66;border:1px solid rgba(255,100,100,.4);border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px}',
+            '#lvscAllLogContent{flex:1;overflow:auto;white-space:pre-wrap;font-size:11px;color:#9be7c3;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15);border-radius:6px;padding:8px;font-family:Consolas,monospace;max-height:60vh}',
+            '#lvscExpTracker .lvsc-bar{display:flex;align-items:center;margin:2px 0}',
+            '#lvscExpTracker .lvsc-bar-label{width:42px;text-align:right;font-size:10px;color:#aaa;margin-right:4px;flex-shrink:0}',
+            '#lvscExpTracker .lvsc-bar-bg{flex:1;height:14px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;position:relative}',
+            '#lvscExpTracker .lvsc-bar-fill{height:100%;border-radius:3px;min-width:2px}',
+            '#lvscExpTracker .lvsc-bar-val{font-size:9px;color:#ccc;margin-left:4px;white-space:nowrap;flex-shrink:0}',
+            '#lvscAllLogFloat{position:fixed;bottom:10px;right:10px;width:360px;height:260px;z-index:2147483644;background:rgba(17,20,29,.95);border:1px solid rgba(219,185,112,.5);border-radius:10px;display:flex;flex-direction:column;resize:both;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.6)}',
+            '#lvscAllLogFloat .lvsc-fl-hdr{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;cursor:move;background:rgba(219,185,112,.1);border-bottom:1px solid rgba(219,185,112,.3);flex-shrink:0}',
+            '#lvscAllLogFloat .lvsc-fl-hdr span{font-size:12px;color:#dbb970}',
+            '#lvscAllLogFloat .lvsc-fl-hdr button{background:rgba(255,100,100,.2);color:#f66;border:1px solid rgba(255,100,100,.4);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;margin-left:4px}',
+            '#lvscAllLogFloat .lvsc-fl-body{flex:1;overflow:auto;white-space:pre-wrap;font-size:10px;color:#9be7c3;padding:6px;font-family:Consolas,monospace}',
             '#lvscPowerSaveOverlay{position:fixed;inset:0;background:#000;z-index:2147483646;display:none;overflow:hidden;cursor:default}',
             '#lvscPowerSaveOverlay.active{display:block}',
             '#lvscPowerSaveOverlay .ps-info{position:absolute;bottom:40px;left:50%;transform:translateX(-50%);color:#444;font-family:Consolas,monospace;font-size:20px;font-weight:700;user-select:none;pointer-events:none;text-align:center;line-height:1.6;white-space:nowrap}',
@@ -7951,7 +9385,7 @@ function stop(reason) {
         panel.id = 'lvscPanel';
                 var loadoutNames = getGameLoadoutNames();
         panel.innerHTML =
-            '<header><span id="lvscTitle"><span id="lvscTitleText">神识清理</span></span><span id="lvscHeaderActions"><button id="lvscCollapseBtn" title="收起成横幅">收起</button><button id="lvscClose" title="隐藏">×</button></span></header>' +
+            '<header><span id=\"lvscTitle\"><span id=\"lvscTitleText\">神识清理</span></span><span id=\"lvscHeaderActions\"><button id=\"lvscPinBtn\" title=\"置顶\">📌</button><button id=\"lvscCollapseBtn\" title=\"收起成横幅\">收起</button><button id=\"lvscClose\" title=\"隐藏\">×</button></span></header>' +
             '<div id="lvscStatus" data-tone="idle">待命</div>' +
             '<div id=\"lvscCompactBar\"><span id=\"lvscCompactSpirit\">读取中</span><span id=\"lvscCompactStatus\" data-tone=\"idle\">待命</span><button id=\"lvscCompactRunBtn\">开始</button><button id=\"lvscCompactMonitorBtn\">监测</button><span id=\"lvscCompactQuickStatus\" style=\"display:none;color:#9be7c3;font-size:11px;white-space:nowrap\"></span><button id=\"lvscCompactQuickBtn\" style=\"display:none;height:30px;padding:0 8px;font-size:11px;background:linear-gradient(135deg,#6bc9a0,#4a8);color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700\">快清</button><button id=\"lvscCompactAutoRestartBtn\" style=\"height:30px;min-width:36px;font-size:10px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.12)!important\">自启</button><button id=\"lvscExpandBtn\">展开</button></div>' +
             '<div id="lvscBody">' +
@@ -7984,9 +9418,9 @@ function stop(reason) {
 '<label class=\"lvsc-check\"><input id=\"lvscCheckDaoyunBoost\" type=\"checkbox\">启动前检查道韵加成</label>' +
 '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAggressiveMode\" type=\"checkbox\">⚔ 激进模式（遇怪直接打，不找护道，更快但更险）</label>' +
             '<div class=\"lvsc-section-title-row\" style=\"font-size:12px;color:#dbb970;margin-top:8px\"><span>快速清理</span></div>' +
-            '<div class=\"lvsc-section-content-hidden\"><div style=\"display:flex;align-items:center;gap:4px;margin-bottom:6px\"><input id=\"lvscQuickClearTargetPct\" type=\"number\" min=\"1\" max=\"100\" style=\"width:52px;height:26px;padding:0 4px;font-size:11px;background:transparent;color:#ccc;border:1px solid #bbb;border-radius:4px;text-align:center\">% <button id=\"lvscQuickClearBtn\" style=\"height:28px;padding:0 12px;background:linear-gradient(135deg,#6bc9a0,#4a8);color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:11px\">启动</button></div><div class=\"lvsc-help\">神识耗尽时冥想到上方设定%，收功后只在夜晚打怪（50→20→10→5倍降序），一夜未耗尽则等下夜继续，白天自动等待。</div><label class=\"lvsc-check\" style=\"font-size:11px;margin-top:4px\"><input id=\"lvscQuickClearShowCompact\" type=\"checkbox\"> 显示在底栏</label></div>' +
+            '<div class=\"lvsc-section-content-hidden\"><div style=\"display:flex;align-items:center;gap:4px;margin-bottom:6px\"><input id=\"lvscQuickClearTargetPct\" type=\"number\" min=\"1\" max=\"100\" style=\"width:52px;height:26px;padding:0 4px;font-size:11px;background:transparent;color:#ccc;border:1px solid #bbb;border-radius:4px;text-align:center\">% <button id=\"lvscQuickClearBtn\" style=\"height:28px;padding:0 12px;background:linear-gradient(135deg,#6bc9a0,#4a8);color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:11px\">启动</button></div><div class=\"lvsc-help\">神识耗尽时冥想到上方设定%，收功后只在夜晚打怪（50→20→10→5倍降序），一夜未耗尽则等下夜继续，白天自动等待。</div><label style=\"font-size:11px;display:flex;align-items:center;gap:4px\">夜晚检测间隔<input id=\"lvscNightCheckIntervalQuick\" type=\"number\" min=\"1\" style=\"width:50px;height:22px;font-size:11px;background:transparent;color:#ccc;border:1px solid #bbb;border-radius:4px;text-align:center\">秒</label><label class=\"lvsc-check\" style=\"font-size:11px;margin-top:4px\"><input id=\"lvscQuickClearShowCompact\" type=\"checkbox\"> 显示在底栏</label></div>' +
 '<div class=\"lvsc-section-title-row\"><span>模式</span></div>' +
-'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API(推荐)</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
+'<div style=\"font-size:11px;margin-top:4px;display:flex;gap:8px;white-space:nowrap\"><label><input id=\"lvscExploreModeApi\" type=\"radio\" name=\"lvscExploreMode\" value=\"api\"> 脚本API</label><label><input id=\"lvscExploreModeSystem\" type=\"radio\" name=\"lvscExploreMode\" value=\"system\"> 系统自带</label></div>' +
 '</div>' +
             // ⑶遭遇 → 妖兽/护道/商人
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>遭遇</span></div>' +
@@ -8054,6 +9488,7 @@ function stop(reason) {
             '<label>收功神识(%)<input id=\"lvscMeditateStopSpirit\" type=\"number\" min=\"0\" max=\"100\" step=\"1\"></label>' +
             '<label class=\"lvsc-check\"><input id=\"lvscAutoExploreAfterMeditate\" type=\"checkbox\">收功后自动继续探索</label>' +
             '<label class=\"lvsc-check\"><input id=\"lvscNightOnlyExplore\" type=\"checkbox\">只在游戏夜晚探索</label>' +
+            '<label>夜晚检测间隔(秒)<input id=\"lvscNightCheckIntervalExplore\" type=\"number\" min=\"1\" style=\"width:60px;height:22px;font-size:11px;background:transparent;color:#ccc;border:1px solid #bbb;border-radius:4px;text-align:center\"></label>' +
             '<label class=\"lvsc-check\"><input id=\"lvscUseAdvancedMeditate\" type=\"checkbox\">优先仙缘高级冥想(冷却<input id=\"lvscAdvMedCooldownMin\" type=\"number\" min=\"0\" value=\"' + state.advMedCooldownMin + '\" style=\"width:60px;height:20px;font-size:11px\">分钟)</label>' +
             '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscSummerOnlyAdvancedMeditate\" type=\"checkbox\">仙缘冥想只在夏季以后</label>' +
             '<div class=\"lvsc-section-title-row\"><span>复活</span></div>' +
@@ -8082,7 +9517,7 @@ function stop(reason) {
             '<div class="lvsc-category lvsc-tab-panel" data-tab-panel="auto">' +
             // ⑴炼制（批量炼制/涅槃/虚空淬体丹/隐匿符/批量用符 → 动态注入）
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>炼制</span></div>' +
-            '<div class="lvsc-card-grid"><div class="lvsc-section"><div class="lvsc-section-title-row"><span>批量炼制</span></div><div class="lvsc-field-grid"><label>炼制类型<select id="lvscCraftType"><option value="alchemy">炼丹</option><option value="forge">炼器</option><option value="talisman">制符</option></select></label><label>配方<select id="lvscCraftRecipe"><option value="">点击刷新</option></select></label><label>目标数量<input id="lvscCraftTargetCount" type="number" min="1" value="10"></label><label>每次炼制<input id="lvscCraftBatchSize" type="number" min="0" value="0" placeholder="0=全部"></label><label>目标品质<select id="lvscCraftQualityTarget"><option value="0">任意</option><option value="1">普通+</option><option value="2">优良+</option><option value="3">稀有+</option><option value="4">史诗+</option><option value="5">传说</option></select></label><label>品质达标<input id="lvscCraftQualityCount" type="number" min="0" value="0">个</label><label class="lvsc-check"><input id="lvscCraftAutoBuyMats" type="checkbox">自动买材料</label><label class="lvsc-check"><input id="lvscCraftAutoTimer" type="checkbox">定时炼制</label><label>间隔(分钟)<input id=\"lvscCraftTimerMin\" type=\"number\" min=\"1\" value=\"10\"></label><div style=\"display:flex;align-items:center;gap:4px;color:#cfc6b2;font-size:12px\"><span style=\"white-space:nowrap\">每批间隔(秒)</span><input id=\"lvscCraftDelayMin\" type=\"number\" min=\"0.5\" step=\"0.5\" value=\"5\" style=\"width:50px;flex:none\">~<input id=\"lvscCraftDelayMax\" type=\"number\" min=\"0.5\" step=\"0.5\" value=\"10\" style=\"width:50px;flex:none\"></div><label>炼制模式<select id=\"lvscCraftTimerMode\"><option value="normal">普通炼制</option><option value="quality">品质炼制</option></select></label><span id="lvscCraftTimerCountdown" style="font-size:11px;color:#dbb970;margin-left:4px;white-space:nowrap"></span></div><div style="display:flex;gap:6px"><button id="lvscRefreshRecipes" style="height:32px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1">刷新配方</button><button id="lvscAutoCraftBtn" style="height:32px;background:linear-gradient(135deg,#dbb970,#c9a050);color:#17141d;border:0!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1">开始炼制</button><button id="lvscQualityCraftBtn" style="height:34px;background:#c08060;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;flex:1">品质炼制</button><button id="lvscStopCraftBtn" style="height:32px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28)!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1;display:none">停止</button></div><div id="lvscCraftQualityLog" style="min-height:60px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px">待命</div></div></div>' +
+            '<div class="lvsc-card-grid"><div class="lvsc-section"><div class="lvsc-section-title-row"><span>批量炼制</span></div><div class="lvsc-field-grid"><label>炼制类型<select id="lvscCraftType"><option value="alchemy">炼丹</option><option value="forge">炼器</option><option value="talisman">制符</option></select></label><label>配方<select id="lvscCraftRecipe"><option value="">点击刷新</option></select></label><label>目标数量<input id="lvscCraftTargetCount" type="number" min="1" value="10"></label><label>每次炼制<input id="lvscCraftBatchSize" type="number" min="0" value="0" placeholder="0=全部"></label><label>目标品质<select id="lvscCraftQualityTarget"><option value="0">任意</option><option value="1">普通+</option><option value="2">优良+</option><option value="3">稀有+</option><option value="4">史诗+</option><option value="5">传说</option></select></label><label>品质达标<input id="lvscCraftQualityCount" type="number" min="0" value="0">个</label><label class="lvsc-check"><input id="lvscCraftAutoBuyMats" type="checkbox">自动买材料</label><label style=\"font-size:11px;display:flex;align-items:center;gap:4px\"><span style=\"white-space:nowrap\">单次炼制间隔(秒)</span><input id=\"lvscCraftBuyDelay\" type=\"number\" min=\"1\" step=\"1\" value=\"3\" style=\"width:75px;flex:none\"></label><label style=\"font-size:11px;display:flex;align-items:center;gap:4px\"><span style=\"white-space:nowrap\">每次购买量</span><input id=\"lvscCraftBuyAmount\" type=\"number\" min=\"0\" step=\"10\" value=\"0\" placeholder=\"0=全部\" style=\"width:75px;flex:none\"></label><label class=\"lvsc-check\"><input id=\"lvscCraftAutoTimer\" type="checkbox">定时炼制</label><label>定时炼制间隔(分钟)<input id=\"lvscCraftTimerMin\" type=\"number\" min=\"1\" value=\"10\"></label><label>定时炼制模式<select id=\"lvscCraftTimerMode\"><option value="normal">普通炼制</option><option value="quality">品质炼制</option></select></label><span id="lvscCraftTimerCountdown" style="font-size:11px;color:#dbb970;margin-left:4px;white-space:nowrap"></span></div><div style="display:flex;gap:6px"><button id="lvscRefreshRecipes" style="height:32px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1">刷新配方</button><button id="lvscAutoCraftBtn" style="height:32px;background:linear-gradient(135deg,#dbb970,#c9a050);color:#17141d;border:0!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1">开始炼制</button><button id="lvscQualityCraftBtn" style="height:34px;background:#c08060;color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;flex:1">品质炼制</button><button id="lvscStopCraftBtn" style="height:32px;background:rgba(255,107,107,.16);color:#ff6b6b;border:1px solid rgba(255,107,107,.28)!important;border-radius:6px;cursor:pointer;font-weight:700;flex:1;display:none">停止</button></div><div id="lvscCraftQualityLog" style="min-height:60px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#cfc6b2;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:8px">待命</div></div></div>' +
             '<div class="lvsc-section"><div class="lvsc-section-title-row"><span>虚空淬体</span></div>' +
             '<label class="lvsc-check"><input id="lvscAutoVoidBody" type="checkbox">探索前自动补加成</label>' +
             '<div class="lvsc-grid2">' +
@@ -8160,6 +9595,18 @@ function stop(reason) {
             '<div class=\"lvsc-help\">自动处理徒弟的问答解惑、护道突破、历练请求。授业每天自动一次。勾选冥想中断护道后：自动收功→接护道→恢复冥想。赠物/赠灵石每天各自动一次，勾选后生效。</div>' +
             '<div style=\"margin:2px 0;display:flex;gap:6px;align-items:center\"><span style=\"color:#ff6b6b;cursor:pointer;font-size:10px\" id=\"lvscClearGiftToday\">清空今日记录（重置赠物/赠灵石/授业）</span><span style=\"color:#ff6b6b;cursor:pointer;font-size:10px;margin-left:12px\" id=\"lvscClearMasterLog\">清空所有日志</span></div>' +
             '<div id=\"lvscMasterLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:6px;font-family:Consolas,monospace;margin-top:4px\">等待执行...</div>' +
+            '<div class=\"lvsc-section-title-row\"><span>师父互动</span></div>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscAutoWenDaoDaily\" type=\"checkbox\">每日自动问道</label>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscAutoOfferingDaily\" type=\"checkbox\">每日自动上供</label>' +
+            '<div style=\"margin:2px 0 2px 22px;display:flex;align-items:center;gap:4px\">' +
+            '<span style=\"font-size:11px;color:#aaa;white-space:nowrap\">物品：</span>' +
+            '<input id=\"lvscOfferingItemSearch\" type=\"text\" placeholder=\"搜物品名\" style=\"flex:1;height:22px;font-size:11px;background:rgba(0,0,0,.3);color:#cfc6b2;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:0 6px\">' +
+            '<button id=\"lvscOfferingItemSearchBtn\" style=\"height:22px;padding:0 8px;background:rgba(219,185,112,.16);color:#dbb970;border:1px solid rgba(219,185,112,.3);border-radius:4px;cursor:pointer;font-size:10px;white-space:nowrap\">搜索</button>' +
+            '</div>' +
+            '<div id=\"lvscOfferingItemSearchResults\" style=\"display:none;margin:0 0 2px 22px;max-height:200px;overflow:auto;font-size:10px;color:#cfc6b2;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.06);border-radius:4px;padding:4px\"></div>' +
+            '<div style=\"margin:0 0 2px 22px\"><span style=\"font-size:11px;color:#6bc9a0\">已选：<span id=\"lvscOfferingItemSelected\">未选择</span></span><span style=\"font-size:11px;color:#aaa;margin-left:12px\">数量：</span><input id=\"lvscOfferingItemQty\" type=\"number\" min=\"1\" step=\"1\" value=\"1\" style=\"width:50px;height:22px;font-size:11px;background:rgba(0,0,0,.3);color:#cfc6b2;border:1px solid rgba(255,255,255,.1);border-radius:4px;padding:0 4px;margin-left:4px\"></div>' +
+            '<div style=\"margin:2px 0 0 0;display:flex;gap:6px;align-items:center\"><span style=\"color:#ff6b6b;cursor:pointer;font-size:10px\" id=\"lvscClearMasterSelfLog\">清空师父互动日志</span></div>' +
+            '<div id=\"lvscMasterSelfLog\" style=\"min-height:20px;max-height:80px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:4px;font-family:Consolas,monospace;margin-top:2px\">等待执行...</div>' +
             '</div>' +
             // ⑸监控（自动出售/洗练石升品/气运/出狱/灵田）
             '<div class=\"lvsc-section\"><div class=\"lvsc-section-title-row lvsc-big-cat-title-row\"><span>监控</span></div>' +
@@ -8179,14 +9626,18 @@ function stop(reason) {
             // ④自动出狱
             '<div class=\"lvsc-section-title-row\"><span>自动解除禁闭</span></div>' +
             '<label class=\"lvsc-check\"><input id=\"lvscAutoBail\" type=\"checkbox\">自动混天典狱保释</label>' +
-            '<label>保释方式<select id=\"lvscBailMethod\"><option value=\"stone\">灵石</option><option value=\"ad\">材料</option></select></label>' +
+            '<label>保释方式<select id=\"lvscBailMethod\"><option value=\"stone\">灵石</option><option value=\"material\">材料</option></select></label>' +
             '<label class=\"lvsc-check\"><input id=\"lvscAutoBailClick\" type=\"checkbox\">自动禁闭解除（点击天道禁闭解除按钮）</label>' +
-            '<label class=\"lvsc-check\"><input id=\"lvscAutoVerify\" type=\"checkbox\">自动过验证（算术题自动答题）</label>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscAutoVerify\" type=\"checkbox\">自动过验证（算术题自动答题） <span style=\"color:#5b8;\">已过 <span id=\"lvscVerifyCount\">0</span> 次</span></label>' +
             // ⑤自动灵田
             '<div class=\"lvsc-section-title-row\"><span>自动灵田</span></div>' +
             '<div class=\"lvsc-card-grid\" id=\"lvscMonitorFarm\"></div>' +
+            // ⑥自动温养
+            '<div class=\"lvsc-section-title-row\"><span>自动温养</span></div>' +
+            '<div class=\"lvsc-card-grid\" id=\"lvscMonitorIncubation\"></div>' +
             '<div class=\"lvsc-section-title-row\"><span>自动抢红包</span></div>' +
             '<label class=\"lvsc-check\"><input id=\"lvscRedPacketEnabled\" type=\"checkbox\">启用自动抢红包</label>' +
+            '<label style=\"font-size:11px;display:flex;align-items:center;gap:4px;margin-top:4px\"><span style=\"white-space:nowrap\">红包最低金额</span><input id=\"lvscRedPacketMinAmount\" type=\"number\" min=\"0\" step=\"100000\" value=\"0\" placeholder=\"0=不限\" style=\"width:100px;height:20px;flex:none\"><span style=\"font-size:10px;color:#888\">低于此金额不抢</span></label><label style=\"font-size:11px;display:flex;align-items:center;gap:4px;margin-top:4px\"><span style=\"white-space:nowrap\">抢后发言(空格分隔)</span><input id=\"lvscRedPacketChatMsgs\" type=\"text\" value=\"\" placeholder=\"谢谢老板 大佬大气\" style=\"width:200px;height:20px;flex:none\"></label>' +
             '<div id=\"lvscRedPacketStats\" style=\"font-size:11px;color:#dbb970;margin-top:4px\">今日：0次 / 0灵石<br>昨日：0次 / 0灵石<br>近7天：0次 / 0灵石<br>累计：0次 / 0灵石</div>' +
             '<div id=\"lvscRedPacketLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待红包...</div>' +
             '</div>' +
@@ -8219,6 +9670,21 @@ function stop(reason) {
             '</div>' +
             '<div id=\"lvscPavilionLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待执行...</div>' +
             '</div>' +
+            '<div class=\"lvsc-section-title-row\"><span>自动试炼塔</span></div>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscTrialAutoRetry\" type=\"checkbox\"'+(state.trialAutoRetry?' checked':'')+'>战败自动重试</label>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscTrialAutoMeditate\" type=\"checkbox\"'+(state.trialAutoMeditate?' checked':'')+'>自动暂停/恢复冥想</label>' +
+            '<label class=\"lvsc-check\"><input id=\"lvscTrialSkipCombat\" type=\"checkbox\"'+(state.trialSkipCombat?' checked':'')+'>跳过战斗动画</label>' +
+            '<div class=\"lvsc-grid2\">' +
+            '<label>目标层数(0=不限)<input id=\"lvscTrialStopFloor\" type=\"number\" min=\"0\" step=\"1\" value=\"'+(state.trialStopFloor||0)+'\"></label>' +
+            '<label>挑战间隔(秒)<input id=\"lvscTrialInterval\" type=\"number\" min=\"1\" step=\"1\" value=\"'+(state.trialInterval||3)+'\"></label>' +
+            '<label>重试间隔(秒)<input id=\"lvscTrialRetryDelay\" type=\"number\" min=\"5\" step=\"5\" value=\"'+(state.trialRetryDelay||30)+'\"></label>' +
+            '</div>' +
+            '<div style=\"display:flex;gap:6px;align-items:center\">' +
+            '<button id=\"lvscTrialStartBtn\" style=\"height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;border-radius:6px;cursor:pointer;font-weight:700\">开始试炼</button>' +
+            '<button id=\"lvscTrialStopBtn\" class=\"lvsc-stop-btn\" style=\"height:32px;display:none\">停止</button>' +
+            '<span id=\"lvscTrialStatus\" style=\"font-size:11px;color:#dbb970;margin-left:4px\"></span>' +
+            '</div>' +
+            '<div id=\"lvscTrialLog\" style=\"min-height:30px;max-height:120px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待操作...</div>' +
             '<div class=\"lvsc-section-title-row\"><span>试练塔扫荡</span></div>' +
             '<div class=\"lvsc-card-grid\" id=\"lvscMonitorSweep\">' +
             '<div class=\"lvsc-grid2\">' +
@@ -8247,6 +9713,34 @@ function stop(reason) {
             '<span id=\"lvscMysteryBoxStatus\" style=\"font-size:11px;color:#dbb970;margin-left:4px\"></span>' +
             '</div>' +
             '<div id=\"lvscMysteryBoxLog\" style=\"min-height:40px;max-height:160px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace\">待命</div>' +
+            '<div class=\"lvsc-section-title-row\" style=\"margin-top:6px\"><span>自动授箓</span></div>' +
+            '<div class=\"lvsc-grid2\">' +
+            '<label>授箓次数<input id=\"lvscOrdainTargetCount\" type=\"number\" min=\"10\" step=\"10\" value=\"'+(state.ordainTargetCount||10)+'\" style=\"width:75px\"></label>' +
+            '<label>单次材料补充量<input id=\"lvscOrdainBuyQty\" type=\"number\" min=\"1\" max=\"1000\" step=\"10\" value=\"'+(state.ordainBuyQty||100)+'\" style=\"width:75px\"><span style=\"font-size:10px;color:#888\">(1份=300玄金)</span></label>' +
+            '<label>授箓间隔(秒)<input id=\"lvscOrdainInterval\" type=\"number\" min=\"1\" step=\"1\" value=\"'+(state.ordainInterval||5)+'\" style=\"width:75px\"></label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscOrdainAutoBuy\" type=\"checkbox\"'+(state.ordainAutoBuy?' checked':'')+'>自动买材料</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscOrdainPauseMeditate\" type=\"checkbox\"'+(state.ordainPauseMeditate?' checked':'')+'>上缴前暂停冥想</label>' +
+            '</div>' +
+            '<div style=\"display:flex;gap:6px;align-items:center\">' +
+            '<button id=\"lvscOrdainPreviewBtn\" style=\"height:32px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;cursor:pointer;font-weight:700\">计算预览</button>' +
+            '<button id=\"lvscOrdainStartBtn\" style=\"height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;border-radius:6px;cursor:pointer;font-weight:700\">开始授箓</button>' +
+            '<button id=\"lvscOrdainStopBtn\" class=\"lvsc-stop-btn\" style=\"height:32px;display:none\">停止</button>' +
+            '<span id=\"lvscOrdainStatus\" style=\"font-size:11px;color:#dbb970;margin-left:4px\"></span>' +
+            '</div>' +
+            '<div id=\"lvscOrdainPreview\" style=\"font-size:11px;color:#a0a0a0;background:transparent;border:1px solid rgba(255,255,255,.15);border-radius:6px;padding:8px;margin-top:4px;min-height:30px\">点击计算预览查看</div>' +
+            '<div id=\"lvscOrdainLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待操作...</div>' +
+            '<div class=\"lvsc-section-title-row\"><span>秘境自动挑战</span></div>' +
+            '<div class=\"lvsc-grid2\">' +
+            '<label>目标秘境<select id=\"lvscDungeonSelect\"><option value=\"\">自动选择</option></select><button id=\"lvscDungeonRefreshBtn\" style=\"height:29px;padding:0 8px;margin-left:4px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;font-size:11px;\">刷新</button></label>' +
+            '<label>单次仙缘上限<input id=\"lvscDungeonRefillMaxAd\" type=\"number\" min=\"1\" step=\"1\" value=\"5\"></label>' +
+            '<label>挑战间隔(秒)<input id=\"lvscDungeonRefillInterval\" type=\"number\" min=\"1\" step=\"1\" value=\"3\"></label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscDungeonAutoDaily\" type=\"checkbox\">每天自动执行一次</label>' +
+            '</div>' +
+            '<div style=\"display:flex;gap:6px\">' +
+            '<button id=\"lvscDungeonRefillStartBtn\" style=\"flex:1;height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;border-radius:6px;cursor:pointer;font-weight:700\">开始挑战</button>' +
+            '<button id=\"lvscDungeonRefillStopBtn\" class=\"lvsc-stop-btn\" style=\"flex:1;height:32px;display:none\">停止</button>' +
+            '</div>' +
+            '<div id=\"lvscDungeonLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待操作...</div>' +
             '<div class=\"lvsc-section-title-row\"><span>竞技场模拟</span></div>' +
             '<div class=\"lvsc-card-grid\">' +
             '<label>对手<select id=\"lvscArenaOpponent\"><option value=\"\">点击刷新</option></select></label>' +
@@ -8261,25 +9755,38 @@ function stop(reason) {
             '<div id=\"lvscArenaStats\" style=\"font-size:11px;color:#dbb970;margin-top:4px\">总场次：0 | 胜场：0 | 胜率：0%</div>' +
             '<div id=\"lvscArenaLog\" style=\"min-height:30px;max-height:100px;overflow:auto;white-space:pre-wrap;font-size:10px;color:#797979;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:8px;font-family:Consolas,monospace;margin-top:4px\">等待执行...</div>' +
             '</div>' +
+            '<div class=\"lvsc-section\"><div class=\"lvsc-section-title-row lvsc-big-cat-title-row\"><span>统计</span></div>' +
+            '<div class=\"lvsc-field-grid\">' +
+            '<div id=\"lvscStatsPanel\" style=\"font-size:11px;color:#cfc6b2;line-height:1.8;white-space:nowrap;overflow-x:auto\">加载中...</div>' +
+            '<div id=\"lvscExpTracker\" style=\"margin-top:8px;font-size:11px;color:#cfc6b2\"></div>' +
+            '<div style=\"margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;align-items:center\"><button id=\"lvscExpRefreshBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,231,195,.15);color:#9be7c3;border:1px solid rgba(155,231,195,.3);border-radius:4px;cursor:pointer\">刷新统计</button><button id=\"lvscExpManualBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(155,200,231,.15);color:#9be7f3;border:1px solid rgba(155,200,231,.3);border-radius:4px;cursor:pointer\">手动记录</button><button id=\"lvscExpClearBtn\" style=\"font-size:10px;padding:2px 8px;background:rgba(255,100,100,.15);color:#f66;border:1px solid rgba(255,100,100,.3);border-radius:4px;cursor:pointer\">清空记录</button><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpAutoRefresh\" type=\"checkbox\"> 自动刷新</label><label class=\"lvsc-check\" style=\"font-size:10px\"><input id=\"lvscExpDayOnly\" type=\"checkbox\"> 仅首尾记录</label></div>' +
+            '</div></div>' +
             '</div>' +
             // ===== 其他 tab ====
             '<div class="lvsc-category lvsc-tab-panel" data-tab-panel="other">' +
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>更新</span></div>' +
-            '<div class="lvsc-category-title">更新公告<small>v' + SCRIPT_VERSION + '</small></div>' +
+            '<div class=\"lvsc-category-title\">更新公告<small id=\"lvscVersionTag\" style=\"cursor:pointer\" title=\"点击5次解锁全部日志\">v' + SCRIPT_VERSION + '</small></div>' +
             '<div class="lvsc-field-grid">' +
             '<label>云端公告 JSON<input id="lvscUpdateManifestUrl" type="text" placeholder="' + DEFAULT_UPDATE_MANIFEST_URL + '"></label>' +
             '<label class="lvsc-check"><input id="lvscUpdateMuted" type="checkbox">屏蔽更新提醒</label>' +
-            '<button id="lvscCheckUpdateBtn">检查云端更新</button>' +
+            '<button id=\"lvscCheckUpdateBtn\">检查云端更新</button>' +
             '</div></div>' +
-            '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>通知</span></div>' +
+            '<div id=\"lvscAllLogSection\" class=\"lvsc-section\" style=\"display:' + (_allLogUnlocked ? '' : 'none') + '\"><div class=\"lvsc-section-title-row lvsc-big-cat-title-row\"><span>日志</span></div>' +
+            '<div class=\"lvsc-field-grid\">' +
+            '<label class=\"lvsc-check\"><input id=\"lvscAllLogToggle\" type=\"checkbox\">启用全部日志记录</label>' +
+            '<button id=\"lvscAllLogViewBtn\">查看全部日志</button>' +
+            '<button id=\"lvscAllLogClearBtn\">清空日志</button>' +
+            '<button id=\"lvscAllLogLockBtn\" style=\"color:#f66\">关闭/锁定全部日志</button>' +
+            '</div></div>' +
+            '<div class=\"lvsc-section\"><div class=\"lvsc-section-title-row lvsc-big-cat-title-row\"><span>通知</span></div>' +
             '<div class="lvsc-section-title-row" style="font-size:12px;color:#dbb970;margin-top:4px"><span>脚本</span></div>' +
             '<div class="lvsc-field-grid">' +
             '<label class="lvsc-check"><input id="lvscDesktopNotify" type="checkbox">浏览器通知</label>' +
             '<label class="lvsc-check"><input id="lvscChatOnTop" type="checkbox">传音筒始终上层</label>' +
             '<label class="lvsc-check"><input id="lvscWecomNotify" type="checkbox">企业微信通知</label>' +
-            '<button id="lvscTestNotifyBtn" style="height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;">测试通知</button>' +
+            '<button id=\"lvscTestNotifyBtn\" style=\"height:32px;background:rgba(155,231,195,.16);color:#9be7c3;border:1px solid rgba(155,231,195,.28)!important;\">测试通知</button>' +
             '</div>' +
-            '<div class="lvsc-help" style="margin-top:4px;">状态栏提示（默认全开，取消勾选不再显示对应类型）：</div>' +
+            '<div class=\"lvsc-help\" style=\"margin-top:4px;\">状态栏提示（默认全开，取消勾选不再显示对应类型）：</div>' +
             '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 8px;">' +
             '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusRun" type="checkbox" checked>运行</label>' +
             '<label class="lvsc-check" style="font-size:11px;"><input id="lvscStatusFight" type="checkbox" checked>战斗</label>' +
@@ -8304,12 +9811,28 @@ function stop(reason) {
             '<label>世界消息<input id="lvscWecomWorldWebhook" type="text" placeholder="世界频道聊天"></label>' +
             '<label>私信<input id="lvscWecomPrivateWebhook" type="text" placeholder="师门/道友私聊"></label>' +
             '<button id="lvscWecomTestBtn">测试发送</button>' +
-            '<div class="lvsc-help">在企业微信内部群添加群机器人获取 webhook URL。</div>' +
+            '<div class=\"lvsc-help\">在企业微信内部群添加群机器人获取 webhook URL。</div>' +
+            '<div class=\"lvsc-help\" style=\"margin-top:6px;\">通知类别开关（默认全开，取消勾选不发送）：</div>' +
+            '<div style=\"display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0 8px;\">' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyClean\" type=\"checkbox\" checked>清理</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyMeditate\" type=\"checkbox\" checked>冥想</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyCombat\" type=\"checkbox\" checked>战斗/死亡</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyBuff\" type=\"checkbox\" checked>Buff</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyEquip\" type=\"checkbox\" checked>装备</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyMaster\" type=\"checkbox\" checked>师门</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyInsc\" type=\"checkbox\" checked>铭文</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyMisc\" type=\"checkbox\" checked>其他</label>' +
+            '<label class=\"lvsc-check\" style=\"font-size:11px;\"><input id=\"lvscNotifyHourly\" type=\"checkbox\">整点统计</label>' +
+            '</div>' +
             '</div></div>' +
             '<div class="lvsc-section"><div class="lvsc-section-title-row lvsc-big-cat-title-row"><span>配置</span></div>' +
             '<div style="display:flex;gap:6px;margin-top:6px">' +
             '<button id="lvscExportConfigBtn" style="flex:1;height:32px;background:rgba(219,185,112,.16);color:#dbb970;border:1px solid rgba(219,185,112,.3);border-radius:6px;cursor:pointer;font-weight:700;">导出配置</button>' +
-            '<button id="lvscImportConfigBtn" style="flex:1;height:32px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:6px;cursor:pointer;font-weight:700;">导入配置</button>' +
+            '<button id=\"lvscImportConfigBtn\" style=\"flex:1;height:32px;background:rgba(107,201,160,.16);color:#6bc9a0;border:1px solid rgba(107,201,160,.3);border-radius:6px;cursor:pointer;font-weight:700;\">导入配置</button>' +
+            '</div>' +
+            '<div style=\"display:flex;gap:6px;margin-top:6px\">' +
+            '<button id=\"lvscExportSiteDataBtn\" style=\"flex:1;height:32px;background:rgba(150,180,255,.16);color:#96b4ff;border:1px solid rgba(150,180,255,.3);border-radius:6px;cursor:pointer;font-weight:700;\">导出网站数据</button>' +
+            '<button id=\"lvscImportSiteDataBtn\" style=\"flex:1;height:32px;background:rgba(255,180,150,.16);color:#ffb496;border:1px solid rgba(255,180,150,.3);border-radius:6px;cursor:pointer;font-weight:700;\">导入网站数据</button>' +
             '</div>' +
             '<div style="display:flex;gap:4px;margin-top:6px">' +
             '<button id="lvscSaveSlotA" style="flex:1;height:26px;background:rgba(219,185,112,.12);color:#dbb970;border:1px solid rgba(219,185,112,.22);border-radius:4px;cursor:pointer;font-size:11px">保存到A</button>' +
@@ -8332,6 +9855,8 @@ function stop(reason) {
             '<label class=\"lvsc-check\" style=\"display:flex!important;align-items:center;gap:4px;cursor:pointer\"><input id=\"lvscThemeEmbed\" type=\"radio\" name=\"lvscThemeMode\" value=\"embed\"> 内嵌</label>' +
             '</div>' +
             '<div class=\"lvsc-help\" style=\"margin-top:4px\">内嵌模式关闭后可点击左上角「灵界」或右上角「更多」重新打开面板</div>' +
+            '<label class=\"lvsc-check\" style=\"margin-top:8px\"><input id=\"lvscAreaCollapse\" type=\"checkbox\">开启操作区折叠</label>' +
+            '<div class=\"lvsc-help\" style=\"margin-top:4px\">可在游戏界面收起/展开操作区域、左侧各区块、左侧面板</div>' +
             '</div>' +
             '<div class=\"lvsc-section\"><div class=\"lvsc-section-title-row lvsc-big-cat-title-row\"><span>模式</span></div>' +
             '<label class=\"lvsc-check\"><input id=\"lvscPowerSave\" type=\"checkbox\">开启省电模式</label>' +
@@ -8347,9 +9872,10 @@ function stop(reason) {
 			'<div id="lvscActions" style="flex-wrap:wrap"><button id="lvscRunBtn">开始清理</button><button id="lvscMonitorBtn">监测神识</button><span id="lvscActionsQuickStatus" style="display:none;color:#9be7c3;font-size:11px;white-space:nowrap"></span><button id="lvscActionsQuickBtn" style="display:none;height:30px;padding:0 10px;font-size:11px;background:linear-gradient(135deg,#6bc9a0,#4a8);color:#17141d;border:0;border-radius:6px;cursor:pointer;font-weight:700;margin-right:4px">快速清理</button><label class="lvsc-check" style="font-size:11px;white-space:nowrap"><input id="lvscAutoRestart" type="checkbox">异常自启</label></div>' +
             '<div id="lvscResizeHandle" title="拖拽调节面板大小"></div>';
 	document.body.appendChild(panel);
+    applyNewBadges();
 		var psOverlay = document.createElement('div');
 		psOverlay.id = 'lvscPowerSaveOverlay';
-					psOverlay.innerHTML = '<div class=\"ps-info\" id=\"psInfo\"><div id=\"psSpiritLine\">读取中...</div><div id=\"psRealmLine\"></div><div id=\"psStatusLine\"></div></div><div class=\"ps-switch-area\"><label style=\"margin-right:16px\"><input type=\"checkbox\" id=\"lvscPowerSaveOverlayCb\" checked> 省电模式</label><label><input type=\"checkbox\" id=\"lvscPowerSaveFullscreen\" checked> 全屏</label></div>';
+					psOverlay.innerHTML = '<div class=\"ps-info\" id=\"psInfo\"><div id=\"psSpiritLine\">读取中...</div><div id=\"psRealmLine\"></div><div id=\"psStatusLine\"></div></div><div class=\"ps-switch-area\"><label style=\"margin-right:16px\"><input type=\"checkbox\" id=\"lvscPowerSaveOverlayCb\" checked> 省电模式</label><label style=\"margin-right:16px\"><input type=\"checkbox\" id=\"lvscPowerSaveFullscreen\" checked> 全屏</label><label><input type=\"checkbox\" id=\"lvscPowerSaveKeep\"> 刷新保持</label></div>';
 
 		document.body.appendChild(psOverlay);
 		panel.style.display = 'flex';
@@ -8445,6 +9971,14 @@ function stop(reason) {
             embedRadio.checked = (savedThemeMode === 'embed');
             floatRadio.onchange = function () { if (this.checked) applyThemeMode('float'); };
             embedRadio.onchange = function () { if (this.checked) applyThemeMode('embed'); };
+            var acEl = document.getElementById('lvscAreaCollapse');
+            if (acEl) {
+                acEl.checked = localStorage.getItem('lvSpiritCleaner.areaCollapse') === '1';
+                acEl.onchange = function() {
+                    localStorage.setItem('lvSpiritCleaner.areaCollapse', this.checked ? '1' : '0');
+                    if (this.checked) startAreaCollapse(); else location.reload();
+                };
+            }
         }
                 // 窗口缩放时自动适配手机/桌面（仅内嵌模式）
         window.addEventListener('resize', function () {
@@ -8460,6 +9994,106 @@ function stop(reason) {
                 if (gb && p.parentElement !== gb) gb.appendChild(p);
             }
         });
+        // 操作区折叠功能
+        function startAreaCollapse() {
+            var PANEL_KEY = 'ling_meditation_toggle_collapsed';
+            var SECTION_KEY_PREFIX = 'ling_section_collapsed_';
+            var PANEL_KEY_LEFT = 'ling_player_panel_collapsed';
+
+            // 样式
+            if (!document.getElementById('lvsc-collapse-style')) {
+                var s = document.createElement('style'); s.id = 'lvsc-collapse-style';
+                s.textContent = '#meditation-toggle-btn{display:flex;align-items:center;justify-content:center;width:100%;height:24px;background:rgba(138,94,30,.06);border:1px solid rgba(138,94,30,.15);border-radius:5px;color:rgb(138,94,30);font-size:11px;font-weight:500;font-family:inherit;letter-spacing:.5px;cursor:pointer;user-select:none;transition:background .2s;flex:0 0 100%;box-sizing:border-box}#meditation-toggle-btn:active{background:rgba(138,94,30,.12)}.meditation-toggle-hide{display:none!important}.section-toggle-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;background:rgba(138,94,30,.06);border:1px solid rgba(138,94,30,.15);border-radius:3px;color:rgb(138,94,30);font-size:9px;cursor:pointer;margin-left:6px;vertical-align:middle;transition:background .2s;flex-shrink:0}.section-toggle-btn:active{background:rgba(138,94,30,.12)}.section-content-hide{display:none!important}#player-panel-side-toggle{position:fixed;left:0;top:50%;width:24px;height:60px;background:rgba(138,94,30,.15);border:1px solid rgba(138,94,30,.25);border-left:none;border-radius:0 5px 5px 0;color:rgb(138,94,30);font-size:10px;writing-mode:vertical-rl;cursor:grab;z-index:100;display:none;align-items:center;justify-content:center}#player-panel-side-toggle:active{cursor:grabbing;background:rgba(138,94,30,.3)}#playerPanel.panel-collapsed{position:fixed;left:-240px;top:0;height:100vh;width:240px;transition:left .3s ease;z-index:99;overflow:visible;margin:0;padding:0}#playerPanel.panel-collapsed .panel-section,#playerPanel.panel-collapsed .player-panel-samsara-entry,#playerPanel.panel-collapsed .panel-server-credit,#playerPanel.panel-collapsed .player-panel-footer{display:none!important}#playerPanel:not(.panel-collapsed){transition:left .3s ease}.main-panel{transition:margin-left .3s ease}body.panel-collapsed-active .main-panel{margin-left:0!important}';
+                document.head.appendChild(s);
+            }
+
+            // 右侧操作区折叠
+            function initCollapse() {
+                var primaryGroup = document.querySelector('.action-group--primary');
+                var secondaryGroup = document.querySelector('#bottomBarActionGroup');
+                var actionBar = document.querySelector('.action-bar');
+                if (!primaryGroup || !actionBar) { setTimeout(initCollapse, 500); return; }
+                if (document.querySelector('#meditation-toggle-btn')) return;
+                var toggleBtn = document.createElement('button');
+                toggleBtn.id = 'meditation-toggle-btn'; toggleBtn.textContent = '收起操作区';
+                actionBar.insertBefore(toggleBtn, primaryGroup);
+                var wasCollapsed = localStorage.getItem(PANEL_KEY) === '1';
+                if (wasCollapsed) {
+                    primaryGroup.classList.add('meditation-toggle-hide');
+                    if (secondaryGroup) secondaryGroup.classList.add('meditation-toggle-hide');
+                    toggleBtn.textContent = '展开操作区';
+                }
+                toggleBtn.addEventListener('click', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    var isHidden = primaryGroup.classList.contains('meditation-toggle-hide');
+                    if (isHidden) {
+                        primaryGroup.classList.remove('meditation-toggle-hide');
+                        if (secondaryGroup) secondaryGroup.classList.remove('meditation-toggle-hide');
+                        toggleBtn.textContent = '收起操作区'; localStorage.setItem(PANEL_KEY, '0');
+                    } else {
+                        primaryGroup.classList.add('meditation-toggle-hide');
+                        if (secondaryGroup) secondaryGroup.classList.add('meditation-toggle-hide');
+                        toggleBtn.textContent = '展开操作区'; localStorage.setItem(PANEL_KEY, '1');
+                    }
+                });
+            }
+
+            // 左侧区块折叠
+            function initSections() {
+                var playerPanel = document.querySelector('#playerPanel');
+                if (!playerPanel) { setTimeout(initSections, 500); return; }
+                if (document.querySelector('.section-toggle-btn')) return;
+                var sections = playerPanel.querySelectorAll('.panel-section');
+                sections.forEach(function(section, i) {
+                    var title = section.querySelector('h3'); if (!title) return;
+                    var contentElements = Array.from(section.children).filter(function(c) { return c.tagName !== 'H3'; });
+                    if (contentElements.length === 0) return;
+                    var btn = document.createElement('button');
+                    btn.className = 'section-toggle-btn'; btn.textContent = '▲'; btn.title = '收起/展开';
+                    title.appendChild(btn);
+                    var storageKey = SECTION_KEY_PREFIX + i;
+                    if (localStorage.getItem(storageKey) === '1') {
+                        contentElements.forEach(function(c) { c.classList.add('section-content-hide'); }); btn.textContent = '▼';
+                    }
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault(); e.stopPropagation();
+                        var isHidden = contentElements[0].classList.contains('section-content-hide');
+                        if (isHidden) { contentElements.forEach(function(c) { c.classList.remove('section-content-hide'); }); btn.textContent = '▲'; localStorage.setItem(storageKey, '0'); }
+                        else { contentElements.forEach(function(c) { c.classList.add('section-content-hide'); }); btn.textContent = '▼'; localStorage.setItem(storageKey, '1'); }
+                    });
+                });
+            }
+
+            // 左侧面板整体折叠（PC）
+            function initPanelCollapse() {
+                if (window.innerWidth <= 768) return;
+                var playerPanel = document.querySelector('#playerPanel');
+                if (!playerPanel) { setTimeout(initPanelCollapse, 500); return; }
+                if (document.querySelector('#player-panel-side-toggle')) return;
+                var sideBtn = document.createElement('button');
+                sideBtn.id = 'player-panel-side-toggle'; sideBtn.textContent = '展开面板';
+                document.body.appendChild(sideBtn);
+                var savedTop = localStorage.getItem('ling_panel_btn_top');
+                if (savedTop) sideBtn.style.top = savedTop + 'px'; else sideBtn.style.top = '50%';
+                if (localStorage.getItem(PANEL_KEY_LEFT) === '1') { playerPanel.classList.add('panel-collapsed'); sideBtn.style.display = 'flex'; }
+                sideBtn.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); playerPanel.classList.remove('panel-collapsed'); document.body.classList.remove('panel-collapsed-active'); sideBtn.style.display = 'none'; localStorage.setItem(PANEL_KEY_LEFT, '0'); });
+                var isDragging = false, startY = 0, startTop = 0;
+                sideBtn.addEventListener('mousedown', function(e) { isDragging = true; startY = e.clientY; startTop = sideBtn.getBoundingClientRect().top; e.preventDefault(); });
+                document.addEventListener('mousemove', function(e) { if (!isDragging) return; var newTop = Math.max(0, Math.min(window.innerHeight - 60, startTop + (e.clientY - startY))); sideBtn.style.top = newTop + 'px'; });
+                document.addEventListener('mouseup', function() { if (isDragging) { isDragging = false; localStorage.setItem('ling_panel_btn_top', Math.round(sideBtn.getBoundingClientRect().top)); } });
+                var firstTitle = playerPanel.querySelector('.panel-section h3');
+                if (firstTitle) {
+                    var collapseAllBtn = document.createElement('button');
+                    collapseAllBtn.className = 'section-toggle-btn'; collapseAllBtn.textContent = '◁'; collapseAllBtn.title = '收起整个面板'; collapseAllBtn.style.marginLeft = 'auto';
+                    firstTitle.insertBefore(collapseAllBtn, firstTitle.firstChild);
+                    collapseAllBtn.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); playerPanel.classList.add('panel-collapsed'); document.body.classList.add('panel-collapsed-active'); sideBtn.style.display = 'flex'; localStorage.setItem(PANEL_KEY_LEFT, '1'); });
+                }
+            }
+
+            initCollapse(); initSections(); initPanelCollapse();
+            setTimeout(function() { initCollapse(); initSections(); initPanelCollapse(); }, 2000);
+        }
+        if (localStorage.getItem('lvSpiritCleaner.areaCollapse') === '1') startAreaCollapse();
         restorePanelSize(panel);
         makePanelDraggable(panel);
         makePanelResizable(panel);
@@ -8509,6 +10143,8 @@ function stop(reason) {
         document.getElementById('lvscUseAdvancedMeditate').checked = state.useAdvancedMeditate;
         document.getElementById('lvscSummerOnlyAdvancedMeditate').checked = state.summerOnlyAdvMeditate;
         document.getElementById('lvscQuickClearTargetPct').value = String(state.quickClearTargetPct);
+        document.getElementById('lvscNightCheckIntervalQuick').value = String(state.nightCheckIntervalQuick);
+        document.getElementById('lvscNightCheckIntervalExplore').value = String(state.nightCheckIntervalExplore);
         document.getElementById('lvscAutoReloadMin').value = String(state.autoReloadMin);
         document.getElementById('lvscAggressiveMode').checked = state.aggressiveMode;
         var emApi = document.getElementById('lvscExploreModeApi');
@@ -8580,6 +10216,44 @@ function stop(reason) {
         document.getElementById('lvscDesktopNotify').checked = state.desktopNotify;
         document.getElementById('lvscChatOnTop').checked = state.chatOnTop;
         document.getElementById('lvscWecomNotify').checked = state.wecomNotify;
+        document.getElementById('lvscNotifyClean').checked = state.notifyClean;
+        document.getElementById('lvscNotifyMeditate').checked = state.notifyMeditate;
+        document.getElementById('lvscNotifyCombat').checked = state.notifyCombat;
+        document.getElementById('lvscNotifyBuff').checked = state.notifyBuff;
+        document.getElementById('lvscNotifyEquip').checked = state.notifyEquip;
+        document.getElementById('lvscNotifyMaster').checked = state.notifyMaster;
+        document.getElementById('lvscNotifyInsc').checked = state.notifyInsc;
+        document.getElementById('lvscNotifyMisc').checked = state.notifyMisc;
+        var hourlyCb = document.getElementById('lvscNotifyHourly');
+        if (hourlyCb) {
+            hourlyCb.checked = state.notifyHourly;
+            hourlyCb.onchange = function() { state.notifyHourly = this.checked; persistSetting('lvSpiritCleaner.notifyHourly', this.checked); };
+        }
+        // 整点通知
+        setInterval(function() {
+            if (!state.notifyHourly || !state.wecomNotify || !state.wecomNotifyWebhook) return;
+            var now = new Date();
+            if (now.getMinutes() !== 0) return;
+            var _p = getPlayer() || {};
+            var curExp = _p.cultivation || 0, maxExp = _p.cultivationNeeded || 0;
+            var pct = maxExp > 0 ? (curExp * 100 / maxExp).toFixed(1) : 0;
+            var realm = _p.realmLevelName || _p.realmName || '-';
+            var dayData = null;
+            try { dayData = JSON.parse(localStorage.getItem('lvscExpToday') || 'null'); } catch(_) {}
+            var todayGain = '';
+            if (dayData && dayData.date === new Date().toISOString().split('T')[0]) {
+                todayGain = '\n今日修为: +' + fmtNum(curExp - dayData.startExp);
+            }
+            var hist = null;
+            try { hist = JSON.parse(localStorage.getItem('lvscExpHistory') || '[]'); } catch(_) {}
+            var histSummary = '';
+            if (hist && hist.length > 0) {
+                var h = hist[hist.length - 1];
+                histSummary = '\n昨日: ' + (h.gain >= 0 ? '+' : '') + fmtNum(h.gain) + ' 修为';
+            }
+            var msg = '⏰ 整点统计 ' + now.getHours() + ':00\n境界: ' + realm + '\n修为: ' + fmtNum(curExp) + '/' + fmtNum(maxExp) + ' (' + pct + '%)' + todayGain + histSummary;
+            wecomEnqueue('整点统计', msg);
+        }, 60000);
         document.getElementById('lvscWecomNotifyWebhook').value = String(state.wecomNotifyWebhook);
         document.getElementById('lvscWecomWorldWebhook').value = String(state.wecomWorldWebhook);
         document.getElementById('lvscWecomPrivateWebhook').value = String(state.wecomPrivateWebhook);
@@ -8590,6 +10264,10 @@ function stop(reason) {
         document.getElementById('lvscGiftStonesQty').value = String(state.giftStonesQty);
         document.getElementById('lvscGiftItemQty').value = String(state.giftItemQty);
         document.getElementById('lvscGiftItemSelected').textContent = state.giftItemName || '未选择';
+        document.getElementById('lvscAutoWenDaoDaily').checked = state.autoWenDaoDaily;
+        document.getElementById('lvscAutoOfferingDaily').checked = state.autoOfferingDaily;
+        document.getElementById('lvscOfferingItemSelected').textContent = state.offeringItemName || '未选择';
+        document.getElementById('lvscOfferingItemQty').value = String(state.offeringQty);
         document.getElementById('lvscGiftItemsMode').value = state.giftItemsMode;
         document.getElementById('lvscGiftStonesMode').value = state.giftStonesMode;
         document.getElementById('lvscAutoHudaoBreakMeditate').checked = state.autoHudaoBreakMeditate;
@@ -8635,7 +10313,7 @@ function stop(reason) {
             if (!state.autoRestart) return;
             if (running || monitoringSpirit || quickClearRunning) return;
             // 手动停止标记，不清除的话不自动重启
-            if (window._lvscManualStop) { window._lvscManualStop = false; return; }
+            if (window._lvscManualStop) return;
             // 检查是否有其他正在运行的任务
             if (autoTrialRunning || autoTreasureRunning || autoInscriptionRunning || autoCraftRunning || autoPavilionRunning || autoBailRunning) return;
             // 检测到脚本非正常停止，自动重启
@@ -8675,6 +10353,69 @@ function stop(reason) {
             };
             if (state.redPacketEnabled) setTimeout(startRedPacketMonitor, 3000);
             updateRedPacketStats();
+            var rpMinEl = document.getElementById('lvscRedPacketMinAmount');
+            if (rpMinEl) {
+                rpMinEl.value = state.redPacketMinAmount;
+                rpMinEl.onchange = function() {
+                    state.redPacketMinAmount = Math.max(0, parseInt(this.value) || 0);
+                    localStorage.setItem('lvSpiritCleaner.redPacketMinAmount', String(state.redPacketMinAmount));
+                };
+            }
+            var rpChatEl = document.getElementById('lvscRedPacketChatMsgs');
+            if (rpChatEl) {
+                rpChatEl.value = state.redPacketChatMsgs.join(' ');
+                rpChatEl.onchange = function() {
+                    var msgs = this.value.trim().split(/\s+/).filter(Boolean);
+                    state.redPacketChatMsgs = msgs;
+                    localStorage.setItem('lvSpiritCleaner.redPacketChatMsgs', msgs.join('|'));
+                };
+            }
+            // 授箓
+            var otEl = document.getElementById('lvscOrdainTargetCount');
+            if (otEl) { otEl.value = state.ordainTargetCount || 10; otEl.onchange = function() { state.ordainTargetCount = Math.max(10, Number(this.value) || 10); persistSetting('lvSpiritCleaner.ordainTargetCount', String(state.ordainTargetCount)); }; }
+            var obqEl = document.getElementById('lvscOrdainBuyQty');
+            if (obqEl) { obqEl.value = state.ordainBuyQty || 1000; obqEl.onchange = function() { state.ordainBuyQty = Math.min(1000, Math.max(1, Number(this.value) || 1000)); persistSetting('lvSpiritCleaner.ordainBuyQty', String(state.ordainBuyQty)); }; }
+            var oiEl = document.getElementById('lvscOrdainInterval');
+            if (oiEl) { oiEl.value = state.ordainInterval || 5; oiEl.onchange = function() { state.ordainInterval = Math.max(1, Number(this.value) || 5); persistSetting('lvSpiritCleaner.ordainInterval', String(state.ordainInterval)); }; }
+            var oabEl = document.getElementById('lvscOrdainAutoBuy');
+            if (oabEl) { oabEl.checked = state.ordainAutoBuy; oabEl.onchange = function() { state.ordainAutoBuy = this.checked; localStorage.setItem('lvSpiritCleaner.ordainAutoBuy', this.checked ? '1' : '0'); }; }
+            var opmEl = document.getElementById('lvscOrdainPauseMeditate');
+            if (opmEl) { opmEl.checked = state.ordainPauseMeditate; opmEl.onchange = function() { state.ordainPauseMeditate = this.checked; localStorage.setItem('lvSpiritCleaner.ordainPauseMeditate', this.checked ? '1' : '0'); }; }
+            var opb = document.getElementById('lvscOrdainPreviewBtn');
+            if (opb) { opb.onclick = updateOrdainPreview; }
+            var osb = document.getElementById('lvscOrdainStartBtn');
+            if (osb) { osb.onclick = function() {
+                if (autoOrdainRunning) return;
+                osb.style.display = 'none';
+                var stopBtn = document.getElementById('lvscOrdainStopBtn');
+                if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; }
+                autoOrdainLoop().finally(function() { osb.style.display = ''; if (stopBtn) stopBtn.style.display = 'none'; });
+            }; }
+            var obb = document.getElementById('lvscOrdainStopBtn');
+                        // 试炼塔
+            var tar = document.getElementById('lvscTrialAutoRetry');
+            if (tar) { tar.checked = state.trialAutoRetry; tar.onchange = function() { state.trialAutoRetry = this.checked; localStorage.setItem('lvSpiritCleaner.trialAutoRetry', this.checked ? '1' : '0'); }; }
+            var tam = document.getElementById('lvscTrialAutoMeditate');
+            if (tam) { tam.checked = state.trialAutoMeditate; tam.onchange = function() { state.trialAutoMeditate = this.checked; localStorage.setItem('lvSpiritCleaner.trialAutoMeditate', this.checked ? '1' : '0'); }; }
+            var tsc = document.getElementById('lvscTrialSkipCombat');
+            if (tsc) { tsc.checked = state.trialSkipCombat; tsc.onchange = function() { state.trialSkipCombat = this.checked; localStorage.setItem('lvSpiritCleaner.trialSkipCombat', this.checked ? '1' : '0'); }; }
+            var tsf = document.getElementById('lvscTrialStopFloor');
+            if (tsf) { tsf.value = state.trialStopFloor || 0; tsf.onchange = function() { state.trialStopFloor = Math.max(0, Number(this.value) || 0); localStorage.setItem('lvSpiritCleaner.trialStopFloor', String(state.trialStopFloor)); }; }
+            var tsb = document.getElementById('lvscTrialStartBtn');
+            if (tsb) { tsb.onclick = function() {
+                if (autoTrialRunning) return;
+                tsb.style.display = 'none';
+                var stopBtn = document.getElementById('lvscTrialStopBtn');
+                if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; }
+                autoTrialLoop().finally(function() { tsb.style.display = ''; if (stopBtn) stopBtn.style.display = 'none'; });
+            }; }
+            var tstb = document.getElementById('lvscTrialStopBtn');
+            if (tstb) { tstb.onclick = function() { if (!autoTrialRunning) return; autoTrialRunning = false; tstb.disabled = true; }; }
+            var tiEl = document.getElementById('lvscTrialInterval');
+            if (tiEl) { tiEl.value = state.trialInterval || 3; tiEl.onchange = function() { state.trialInterval = Math.max(1, Number(this.value) || 3); localStorage.setItem('lvSpiritCleaner.trialInterval', String(state.trialInterval)); }; }
+            var trdEl = document.getElementById('lvscTrialRetryDelay');
+            if (trdEl) { trdEl.value = state.trialRetryDelay || 30; trdEl.onchange = function() { state.trialRetryDelay = Math.max(5, Number(this.value) || 30); localStorage.setItem('lvSpiritCleaner.trialRetryDelay', String(state.trialRetryDelay)); }; }
+            if (obb) { obb.onclick = function() { autoOrdainRunning = false; ordainLog('正在停止...'); obb.disabled = true; }; }
         }
         document.getElementById('lvscFeedbackBtn').onclick = function () {
             var old = document.getElementById('lvscFeedbackModal');
@@ -8714,6 +10455,287 @@ function stop(reason) {
         var arenaRefreshBtn = document.getElementById('lvscArenaRefreshBtn'); if (arenaRefreshBtn) arenaRefreshBtn.onclick = loadArenaOpponents;
         var arenaStartBtn = document.getElementById('lvscArenaStartBtn'); if (arenaStartBtn) arenaStartBtn.onclick = startArenaSimulation;
         var arenaStopBtn = document.getElementById('lvscArenaStopBtn'); if (arenaStopBtn) arenaStopBtn.onclick = stopArenaSimulation;
+                // 统计面板刷新（延迟到DOM就绪）
+        setTimeout(function() {
+            var statsEl = document.getElementById('lvscStatsPanel');
+            var expTrackerEl = document.getElementById('lvscExpTracker');
+            if (!statsEl) return;
+            function fmt(n) { return fmtNum(n); }
+            function parseNum(s) {
+                if (!s) return 0;
+                s = s.replace(/,/g, '');
+                if (s.indexOf('亿') >= 0) return Math.round(parseFloat(s) * 100000000);
+                if (s.indexOf('万') >= 0) return Math.round(parseFloat(s) * 10000);
+                return parseInt(s, 10) || 0;
+            }
+            // === 修为统计系统 ===
+            var EXP_KEY = 'lvscExpRecords';
+            var DAY_KEY = 'lvscExpToday';
+            var HISTORY_KEY = 'lvscExpHistory';
+            function loadExpData() { try { return JSON.parse(localStorage.getItem(EXP_KEY) || '[]'); } catch(_) { return []; } }
+            function saveExpData(arr) { try { localStorage.setItem(EXP_KEY, JSON.stringify(arr.slice(-100))); } catch(_) {} }
+            function loadDayData() { try { return JSON.parse(localStorage.getItem(DAY_KEY) || 'null'); } catch(_) { return null; } }
+            function saveDayData(obj) { try { localStorage.setItem(DAY_KEY, JSON.stringify(obj)); } catch(_) {} }
+            function loadHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch(_) { return []; } }
+            function saveHistory(arr) { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(arr.slice(-90))); } catch(_) {} }
+            function getTodayStr() { return new Date().toISOString().split('T')[0]; }
+            window._lvscRecordExp = function(exp, maxExp, realmName) { recordExpSnapshot(exp, maxExp, realmName); };
+            function recordExpSnapshot(exp, maxExp, realmName) {
+                var now = Date.now();
+                var today = getTodayStr();
+                var records = loadExpData();
+                var dayData = loadDayData();
+                // 每天首次记录时保存起始值，同时存昨天的历史
+                if (!dayData || dayData.date !== today) {
+                    // 如果有昨天的数据，计算昨天总修为存入历史
+                    if (dayData && dayData.date) {
+                        var lastExp = records.length > 0 ? records[records.length - 1].exp : dayData.startExp;
+                        var dailyGain = lastExp - dayData.startExp;
+                        var hist = loadHistory();
+                        hist.push({ date: dayData.date, gain: dailyGain, startExp: dayData.startExp, endExp: lastExp, realm: dayData.startRealm });
+                        saveHistory(hist);
+                    }
+                    dayData = { date: today, startExp: exp, startRealm: realmName };
+                    saveDayData(dayData);
+                    records = [];
+                }
+                records.push({ time: now, exp: exp, maxExp: maxExp });
+                saveExpData(records);
+            }
+            function renderExpTracker() {
+                if (!expTrackerEl) return;
+                var records = loadExpData();
+                var dayData = loadDayData();
+                var hist = loadHistory();
+                var html = '';
+                // 今日统计
+                if (dayData && dayData.date === getTodayStr()) {
+                    var latest = records.length > 0 ? records[records.length - 1] : null;
+                    var todayGain = latest ? latest.exp - dayData.startExp : 0;
+                    html += '<div style="margin:4px 0 6px;padding:6px 8px;background:rgba(155,231,195,.08);border-radius:6px;border:1px solid rgba(155,231,195,.15)">';
+                    html += '📅 <b>今日修为</b>: <span style="color:' + (todayGain >= 0 ? '#9be7c3' : '#f66') + ';font-weight:700">' + (todayGain >= 0 ? '+' : '') + fmt(todayGain) + '</span>';
+                    if (dayData.startRealm) html += '　🏵️ ' + dayData.startRealm;
+                    html += '</div>';
+                }
+                // 历史下拉
+                if (hist.length > 0) {
+                    html += '<div style="margin:4px 0">';
+                    html += '<select id="lvscHistSelect" style="height:24px;background:#1a1d2a;color:#eee;border:1px solid rgba(255,255,255,.2);border-radius:4px;font-size:10px;width:100%">';
+                    html += '<option value="">查看历史记录...</option>';
+                    for (var i = hist.length - 1; i >= 0; i--) {
+                        var h = hist[i];
+                        var sign = h.gain >= 0 ? '+' : '';
+                        html += '<option value="' + i + '">' + h.date + '  ' + sign + fmt(h.gain) + ' 修为 (' + (h.realm||'-') + ')</option>';
+                    }
+                    html += '</select>';
+                    html += '<div id="lvscHistDetail" style="margin-top:4px;font-size:10px;color:#aaa"></div>';
+                    html += '</div>';
+                }
+                // 条形图：显示累计增量
+                if (records.length >= 2) {
+                    var recent = records.slice(-10);
+                    var baseExp = recent[0].exp;
+                    var gains = [];
+                    for (var i = 0; i < recent.length; i++) { gains.push(recent[i].exp - baseExp); }
+                    var maxGain = 0;
+                    for (var i = 0; i < gains.length; i++) { if (Math.abs(gains[i]) > maxGain) maxGain = Math.abs(gains[i]); }
+                    if (maxGain <= 0) maxGain = 1;
+                    html += '<div style="font-size:10px;color:#aaa;margin:4px 0">修为增量 (近' + recent.length + '次):</div>';
+                    for (var i = 0; i < recent.length; i++) {
+                        var r = recent[i];
+                        var g = gains[i];
+                        var barW = Math.max(3, Math.min(100, Math.abs(g) / maxGain * 100));
+                        var barColor = g > 0 ? 'linear-gradient(90deg,#2d7,#4a9)' : g < 0 ? 'linear-gradient(90deg,#a64,#c55)' : '#555';
+                        var timeStr = new Date(r.time).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'});
+                        var sign = g > 0 ? '+' : '';
+                        html += '<div style="display:flex;align-items:center;margin:2px 0">'
+                            + '<span style="width:38px;text-align:right;font-size:9px;color:#888;flex-shrink:0">' + timeStr + '</span>'
+                            + '<span style="flex:1;height:16px;background:rgba(255,255,255,.05);border-radius:3px;overflow:hidden;margin:0 4px;position:relative">'
+                            + '<span style="display:block;height:100%;width:' + barW + '%;background:' + barColor + ';border-radius:3px;transition:width .3s"></span>'
+                            + '</span>'
+                            + '<span style="width:80px;text-align:right;font-size:9px;color:' + (g >= 0 ? '#9be7c3' : '#f66') + ';flex-shrink:0">' + sign + fmt(g) + '</span>'
+                            + '</div>';
+                    }
+                } else if (hist.length === 0) {
+                    html += '<div style="color:#888;font-size:10px">等待数据积累中...（每30分钟记录一次）</div>';
+                }
+                expTrackerEl.innerHTML = html;
+                // 绑定下拉事件
+                var sel = document.getElementById('lvscHistSelect');
+                if (sel) {
+                    sel.onchange = function() {
+                        var detail = document.getElementById('lvscHistDetail');
+                        if (!detail) return;
+                        var idx = parseInt(this.value, 10);
+                        if (isNaN(idx) || !hist[idx]) { detail.innerHTML = ''; return; }
+                        var h = hist[idx];
+                        var sign = h.gain >= 0 ? '+' : '';
+                        detail.innerHTML = '📊 ' + h.date + ': 修为 <span style="color:' + (h.gain >= 0 ? '#9be7c3' : '#f66') + '">' + sign + fmt(h.gain) + '</span>'
+                            + '<br>起始: ' + fmt(h.startExp) + ' → 结束: ' + fmt(h.endExp)
+                            + (h.realm ? '<br>境界: ' + h.realm : '');
+                    };
+                }
+            }
+            // 记录间隔：由外部调用
+            async function refreshStats() {
+                try {
+                    // 直接调API获取修为数据
+                    var res = await gameApi().get('/api/game/player/info');
+                    var p = getPlayer() || {};
+                    var curExp = p.cultivation || 0;
+                    var maxExp = p.cultivationNeeded || 0;
+                    var realm = p.realmLevelName || p.realmName || p.realm || '-';
+                    var realmStage = p.realmStageName || p.stageName || '';
+                    var pct = maxExp > 0 ? (curExp * 100 / maxExp).toFixed(1) : 0;
+                    statsEl.innerHTML = '💎 修为进度:<br>' + fmt(curExp) + ' / ' + fmt(maxExp) + ' (' + pct + '%)'
+                        + '<br>🏵️ ' + realm + ' ' + realmStage;
+                    renderExpTracker();
+                } catch(e) { statsEl.innerHTML = '统计加载失败: ' + (e.message || ''); }
+            }
+            window._lvscRefreshStats = function() { try { refreshStats(); } catch(_) {} };
+            refreshStats();
+            // 自动刷新 + 仅首尾记录
+            var autoRefreshEl = document.getElementById('lvscExpAutoRefresh');
+            var dayOnlyEl = document.getElementById('lvscExpDayOnly');
+            var _statsAutoTimer = null;
+            var _statsDayOnlyTimer = null;
+            var _dayOnlyRecorded = { start: '', end: '' };
+            function _startNormalTimer() {
+                clearInterval(_statsAutoTimer);
+                _statsAutoTimer = setInterval(refreshStats, 600000);
+            }
+            function _startDayOnlyTimer() {
+                clearInterval(_statsDayOnlyTimer);
+                _statsDayOnlyTimer = setInterval(function() {
+                    var now = new Date();
+                    var today = getTodayStr();
+                    var h = now.getHours(), m = now.getMinutes();
+                    // 0:00~0:05 记录一天开始
+                    if (h === 0 && m <= 5 && _dayOnlyRecorded.start !== today) {
+                        _dayOnlyRecorded.start = today;
+                        refreshStats();
+                    }
+                    // 23:55~23:59 记录一天结束
+                    if (h === 23 && m >= 55 && _dayOnlyRecorded.end !== today) {
+                        _dayOnlyRecorded.end = today;
+                        refreshStats();
+                    }
+                }, 60000);
+            }
+            function _stopAllTimers() {
+                clearInterval(_statsAutoTimer); _statsAutoTimer = null;
+                clearInterval(_statsDayOnlyTimer); _statsDayOnlyTimer = null;
+            }
+            // 初始化：根据开关启动
+            if (dayOnlyEl && dayOnlyEl.checked) {
+                _startDayOnlyTimer();
+            } else {
+                autoRefreshEl.checked = true;
+                _startNormalTimer();
+            }
+            if (autoRefreshEl) {
+                autoRefreshEl.onchange = function() {
+                    if (this.checked) {
+                        if (dayOnlyEl) dayOnlyEl.checked = false;
+                        _startNormalTimer();
+                    } else {
+                        _stopAllTimers();
+                    }
+                };
+            }
+            if (dayOnlyEl) {
+                dayOnlyEl.onchange = function() {
+                    if (this.checked) {
+                        if (autoRefreshEl) autoRefreshEl.checked = false;
+                        _stopAllTimers();
+                        _startDayOnlyTimer();
+                    } else {
+                        _stopAllTimers();
+                    }
+                };
+            }
+            // 刷新统计按钮
+            var refreshBtn = document.getElementById('lvscExpRefreshBtn');
+            if (refreshBtn) { refreshBtn.onclick = function() { refreshStats(); }; }
+            // 手动记录按钮
+            var manualBtn = document.getElementById('lvscExpManualBtn');
+            if (manualBtn) {
+                manualBtn.onclick = async function() {
+                    try {
+                        await gameApi().get('/api/game/player/info');
+                        var p = getPlayer() || {};
+                        var curExp = p.cultivation || 0;
+                        var maxExp = p.cultivationNeeded || 0;
+                        var realm = p.realmLevelName || p.realmName || p.realm || '';
+                        recordExpSnapshot(curExp, maxExp, realm);
+                        renderExpTracker();
+                        refreshStats();
+                    } catch(e) {}
+                };
+            }
+            // 清空修为记录按钮
+            var clearBtn = document.getElementById('lvscExpClearBtn');
+            if (clearBtn) {
+                clearBtn.onclick = function() {
+                    localStorage.removeItem(EXP_KEY);
+                    localStorage.removeItem(DAY_KEY);
+                    renderExpTracker();
+                    statsEl.innerHTML = '记录已清空';
+                };
+            }
+            // 每天零点清理旧日期数据
+            setInterval(function() {
+                var dayData = loadDayData();
+                if (dayData && dayData.date !== getTodayStr()) {
+                    var records = loadExpData();
+                    if (records.length > 0) {
+                        var latest = records[records.length - 1];
+                        dayData = { date: getTodayStr(), startExp: latest.exp, startRealm: '' };
+                        saveDayData(dayData);
+                    }
+                }
+            }, 60000);
+        }, 3000);
+        // ---- 秘境仙缘刷新 ----
+        (function() {
+            var startBtn = document.getElementById('lvscDungeonRefillStartBtn');
+            var stopBtn = document.getElementById('lvscDungeonRefillStopBtn');
+            var maxAdEl = document.getElementById('lvscDungeonRefillMaxAd');
+            var intervalEl = document.getElementById('lvscDungeonRefillInterval');
+            var selectEl = document.getElementById('lvscDungeonSelect');
+            var refreshBtn = document.getElementById('lvscDungeonRefreshBtn');
+            if (maxAdEl) { maxAdEl.value = state.dungeonRefillMaxAd || 5; maxAdEl.onchange = function() { state.dungeonRefillMaxAd = Math.max(1, Number(this.value)||5); persistSetting('lvSpiritCleaner.dungeonRefillMaxAd', String(state.dungeonRefillMaxAd)); }; }
+            if (intervalEl) { intervalEl.value = state.dungeonRefillInterval || 3; intervalEl.onchange = function() { state.dungeonRefillInterval = Math.max(1, Number(this.value)||3); persistSetting('lvSpiritCleaner.dungeonRefillInterval', String(state.dungeonRefillInterval)); }; }
+            if (selectEl) { selectEl.value = state.dungeonSelectedId || ''; selectEl.onchange = function() { state.dungeonSelectedId = this.value; persistSetting('lvSpiritCleaner.dungeonSelectedId', this.value); }; }
+            async function refreshDungeonList() {
+                if (!selectEl || !gameApi()) return;
+                selectEl.innerHTML = '<option value="">加载中...</option>';
+                var dungeons = await fetchDungeonList();
+                selectEl.innerHTML = '<option value="">全部可刷新</option>';
+                if (!dungeons.length) { selectEl.innerHTML = '<option value="">无秘境数据</option>'; return; }
+                for (var i = 0; i < dungeons.length; i++) {
+                    var d = dungeons[i];
+                    if (!d.refillable) continue;
+                    var suffix = d.remainingToday > 0 ? '(剩余' + d.remainingToday + '次)' : '(已用完)';
+                    var costStr = d.nextRefillCost ? ' 费用' + d.nextRefillCost + '仙缘' : '';
+                    selectEl.innerHTML += '<option value="' + d.id + '"' + (state.dungeonSelectedId === String(d.id) ? ' selected' : '') + '>' + d.name + suffix + costStr + '</option>';
+                }
+                if (state.dungeonSelectedId) selectEl.value = state.dungeonSelectedId;
+            }
+            if (refreshBtn) refreshBtn.onclick = refreshDungeonList;
+            if (startBtn) startBtn.onclick = function() {
+                if (autoDungeonRunning) return;
+                syncSettingsFromUi();
+                autoDungeonLoop().finally(function() {
+                    if (startBtn) startBtn.style.display = '';
+                    if (stopBtn) stopBtn.style.display = 'none';
+                });
+            };
+            if (stopBtn) stopBtn.onclick = stopDungeon;
+            var dailyCb = document.getElementById('lvscDungeonAutoDaily');
+            if (dailyCb) { dailyCb.checked = state.dungeonAutoDaily; dailyCb.onchange = function() { state.dungeonAutoDaily = this.checked; persistSetting('lvSpiritCleaner.dungeonAutoDaily', this.checked ? '1' : '0'); }; }
+            setTimeout(refreshDungeonList, 2000);
+        })();
         // ---- 省电模式 ----
         var _powerSaveTimer = null;
         function updatePowerSaveInfo() {
@@ -8766,21 +10788,32 @@ function stop(reason) {
         }
         var psCb = document.getElementById('lvscPowerSave');
         if (psCb) psCb.onchange = function() { if (this.checked) enablePowerSave(); else disablePowerSave(); };
-        var psOcb = document.getElementById('lvscPowerSaveOverlayCb');
-        if (psOcb) psOcb.onchange = function() { if (this.checked) enablePowerSave(); else disablePowerSave(); };
-        var psFsCb = document.getElementById('lvscPowerSaveFullscreen');
-        if (psFsCb) psFsCb.onchange = function() {
-            if (this.checked) {
-                try { var p2 = document.documentElement.requestFullscreen(); if (p2 && p2.catch) p2.catch(function(){}); } catch(e) {}
-            } else {
-                try { if (document.fullscreenElement) document.exitFullscreen(); } catch(e) {}
-            }
-        };
-        document.addEventListener('fullscreenchange', function() {
-            var fsCb2 = document.getElementById('lvscPowerSaveFullscreen');
-            if (!document.fullscreenElement && isPowerSave && (fsCb2 && fsCb2.checked)) disablePowerSave();
-        });
-        // ---- 省电模式结束 ----
+	        var psOcb = document.getElementById('lvscPowerSaveOverlayCb');
+	        if (psOcb) psOcb.onchange = function() { if (this.checked) enablePowerSave(); else disablePowerSave(); };
+	        var psFsCb = document.getElementById('lvscPowerSaveFullscreen');
+	        if (psFsCb) psFsCb.onchange = function() {
+	            if (this.checked) {
+	                try { var p2 = document.documentElement.requestFullscreen(); if (p2 && p2.catch) p2.catch(function(){}); } catch(e) {}
+	            } else {
+	                try { if (document.fullscreenElement) document.exitFullscreen(); } catch(e) {}
+	            }
+	        };
+	        var psKeepCb = document.getElementById('lvscPowerSaveKeep');
+	        if (psKeepCb) {
+	            psKeepCb.checked = localStorage.getItem('lvSpiritCleaner.powerSaveKeep') === '1';
+	            psKeepCb.onchange = function() {
+	                try { localStorage.setItem('lvSpiritCleaner.powerSaveKeep', this.checked ? '1' : '0'); } catch(_) {}
+	            };
+	        }
+	        document.addEventListener('fullscreenchange', function() {
+	            var fsCb2 = document.getElementById('lvscPowerSaveFullscreen');
+	            if (!document.fullscreenElement && isPowerSave && (fsCb2 && fsCb2.checked)) disablePowerSave();
+	        });
+	        // 刷新保持：页面加载时自动恢复省电模式
+	        if (localStorage.getItem('lvSpiritCleaner.powerSaveKeep') === '1') {
+	            setTimeout(function() { enablePowerSave(); }, 300);
+	        }
+	        // ---- 省电模式结束 ----
                 // ---- 画中画模式 ----
         var _pipWindow = null;
         var _pipFloat = null;
@@ -9048,6 +11081,158 @@ function stop(reason) {
         document.getElementById('lvscCheckUpdateBtn').onclick = function () {
             checkCloudUpdate(true);
         };
+        // ===== 全部日志：版本号点击5次解锁 =====
+        var _vTag = document.getElementById('lvscVersionTag');
+        if (_vTag) {
+            _vTag.onclick = function() {
+                _versionClickCount++;
+                if (_versionClickCount >= 5) {
+                    _allLogUnlocked = true;
+                    localStorage.setItem('lvSpiritCleaner.allLogUnlocked', '1');
+                    var sec = document.getElementById('lvscAllLogSection');
+                    if (sec) sec.style.display = '';
+                    _versionClickCount = 0;
+                    setStatus('全部日志功能已解锁！', 'run');
+                } else {
+                    _vTag.title = '再点' + (5 - _versionClickCount) + '次解锁';
+                }
+            };
+        }
+        // 全部日志开关
+        var allLogToggle = document.getElementById('lvscAllLogToggle');
+        if (allLogToggle) {
+            allLogToggle.checked = _allLogEnabled;
+            allLogToggle.onchange = function() {
+                _allLogEnabled = this.checked;
+                localStorage.setItem('lvSpiritCleaner.allLogEnabled', this.checked ? '1' : '0');
+                allLog('系统', this.checked ? '日志记录已开启' : '日志记录已关闭');
+            };
+        }
+        // 查看全部日志按钮
+        var allLogViewBtn = document.getElementById('lvscAllLogViewBtn');
+        if (allLogViewBtn) {
+            allLogViewBtn.onclick = function() {
+                if (document.getElementById('lvscAllLogModal')) return;
+                var modal = document.createElement('div');
+                modal.id = 'lvscAllLogModal';
+                modal.innerHTML = '<div class="lvsc-log-card"><h3><span>全部日志 (共' + _allLogs.length + '条)</span><div><button id="lvscAllLogFloatBtn">📌 浮窗</button><button id="lvscAllLogCloseBtn">✕ 退出</button></div></h3>' +
+                    '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:center">' +
+                    '<input id="lvscAllLogSearch" type="text" placeholder="搜索日志..." style="flex:1;height:26px;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.2);border-radius:4px;color:#eee;padding:0 6px;font-size:11px">' +
+                    '<select id="lvscAllLogFilter" style="height:26px;background:#1a1d2a;color:#eee;border:1px solid rgba(255,255,255,.2);border-radius:4px;font-size:11px"><option value="">全部分类</option></select>' +
+                    '<button id="lvscAllLogRefresh" style="height:26px;padding:0 8px;background:rgba(219,185,112,.15);color:#dbb970;border:1px solid rgba(219,185,112,.3);border-radius:4px;cursor:pointer;font-size:11px">刷新</button>' +
+                    '</div><div id="lvscAllLogContent"></div></div>';
+                document.body.appendChild(modal);
+                // 用textContent填充，避免HTML注入
+                var logEl = document.getElementById('lvscAllLogContent');
+                logEl.textContent = _allLogs.length ? _allLogs.join('\n') : '暂无日志记录，请先开启日志记录功能';
+                // 填充分类下拉
+                var filterSel = document.getElementById('lvscAllLogFilter');
+                var tags = [];
+                _allLogs.forEach(function(line) { var m = line.match(/^\[[^\]]+\]\s*\[([^\]]+)\]/); if (m && m[1] && tags.indexOf(m[1]) < 0) tags.push(m[1]); });
+                tags.forEach(function(tag) { var o = document.createElement('option'); o.value = tag; o.textContent = tag; filterSel.appendChild(o); });
+                // 搜索+筛选
+                function applyLogFilter() {
+                    var keyword = (document.getElementById('lvscAllLogSearch').value || '').toLowerCase();
+                    var tagFilter = document.getElementById('lvscAllLogFilter').value;
+                    var filtered = _allLogs.filter(function(line) {
+                        if (tagFilter && line.indexOf('[' + tagFilter + ']') < 0) return false;
+                        if (keyword && line.toLowerCase().indexOf(keyword) < 0) return false;
+                        return true;
+                    });
+                    document.getElementById('lvscAllLogContent').textContent = filtered.length ? filtered.join('\n') : '无匹配日志';
+                }
+                document.getElementById('lvscAllLogSearch').oninput = applyLogFilter;
+                filterSel.onchange = applyLogFilter;
+                document.getElementById('lvscAllLogRefresh').onclick = applyLogFilter;
+                document.body.appendChild(modal);
+                modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+                document.getElementById('lvscAllLogCloseBtn').onclick = function() { modal.remove(); };
+                // 浮窗按钮
+                document.getElementById('lvscAllLogFloatBtn').onclick = function() {
+                    modal.remove();
+                    if (document.getElementById('lvscAllLogFloat')) return;
+                    var fl = document.createElement('div');
+                    fl.id = 'lvscAllLogFloat';
+                    fl.innerHTML = '<div class="lvsc-fl-hdr"><span>日志 (' + _allLogs.length + ')</span><div><button id="lvscFlClearBtn">清空</button><button id="lvscFlMaxBtn">最大化</button><button id="lvscFlCloseBtn">✕</button></div></div>' +
+                        '<div style="display:flex;gap:4px;padding:4px 6px;border-bottom:1px solid rgba(219,185,112,.2);flex-shrink:0">' +
+                        '<input id="lvscFlSearch" type="text" placeholder="搜索..." style="flex:1;height:22px;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.2);border-radius:3px;color:#eee;padding:0 4px;font-size:10px">' +
+                        '<select id="lvscFlFilter" style="height:22px;background:#1a1d2a;color:#eee;border:1px solid rgba(255,255,255,.2);border-radius:3px;font-size:10px"><option value="">全部</option></select>' +
+                        '</div><div class="lvsc-fl-body"></div>';
+                    document.body.appendChild(fl);
+                    var body = fl.querySelector('.lvsc-fl-body');
+                    // 填充分类下拉
+                    var flSel = document.getElementById('lvscFlFilter');
+                    var flTags = [];
+                    _allLogs.forEach(function(line) { var m = line.match(/^\[[^\]]+\]\s*\[([^\]]+)\]/); if (m && m[1] && flTags.indexOf(m[1]) < 0) flTags.push(m[1]); });
+                    flTags.forEach(function(tag) { var o = document.createElement('option'); o.value = tag; o.textContent = tag; flSel.appendChild(o); });
+                    // 浮窗筛选函数
+                    function flApplyFilter() {
+                        var kw = (document.getElementById('lvscFlSearch').value || '').toLowerCase();
+                        var tf = document.getElementById('lvscFlFilter').value;
+                        var lines = _allLogs.filter(function(l) {
+                            if (tf && l.indexOf('[' + tf + ']') < 0) return false;
+                            if (kw && l.toLowerCase().indexOf(kw) < 0) return false;
+                            return true;
+                        });
+                        body.textContent = lines.length ? lines.join('\n') : '无匹配日志';
+                    }
+                    document.getElementById('lvscFlSearch').oninput = flApplyFilter;
+                    flSel.onchange = flApplyFilter;
+                    flApplyFilter();
+                    // 拖拽
+                    var hdr = fl.querySelector('.lvsc-fl-hdr'), dragX, dragY, isDrag = false;
+                    hdr.onmousedown = function(e) { if (e.target.tagName === 'BUTTON') return; isDrag = true; dragX = e.clientX - fl.offsetLeft; dragY = e.clientY - fl.offsetTop; fl.style.transition = 'none'; };
+                    document.addEventListener('mousemove', function(e) { if (!isDrag) return; fl.style.left = (e.clientX - dragX) + 'px'; fl.style.top = (e.clientY - dragY) + 'px'; fl.style.right = 'auto'; fl.style.bottom = 'auto'; });
+                    document.addEventListener('mouseup', function() { isDrag = false; });
+                    // 关闭
+                    document.getElementById('lvscFlCloseBtn').onclick = function() { fl.remove(); };
+                    document.getElementById('lvscFlClearBtn').onclick = function() { _allLogs = []; try { localStorage.removeItem('lvscAllLogs'); } catch(_){} body.textContent = '已清空'; };
+                    // 最大化→重新打开模态框
+                    document.getElementById('lvscFlMaxBtn').onclick = function() { fl.remove(); allLogViewBtn.onclick(); };
+                    // 实时更新
+                    fl._updateInterval = setInterval(function() {
+                        if (!document.getElementById('lvscAllLogFloat')) { clearInterval(fl._updateInterval); return; }
+                        flApplyFilter();
+                        var hdrSpan = fl.querySelector('.lvsc-fl-hdr span');
+                        if (hdrSpan) hdrSpan.textContent = '日志 (' + _allLogs.length + ')';
+                        // 刷新分类下拉（可能有新分类出现）
+                        var flSelNow = document.getElementById('lvscFlFilter');
+                        if (flSelNow) {
+                            var currentVal = flSelNow.value;
+                            var nowTags = [];
+                            _allLogs.forEach(function(line) { var m = line.match(/^\[[^\]]+\]\s*\[([^\]]+)\]/); if (m && m[1] && nowTags.indexOf(m[1]) < 0) nowTags.push(m[1]); });
+                            if (nowTags.length !== flSelNow.options.length - 1) {
+                                while (flSelNow.options.length > 1) flSelNow.remove(1);
+                                nowTags.forEach(function(tag) { var o = document.createElement('option'); o.value = tag; o.textContent = tag; flSelNow.appendChild(o); });
+                                flSelNow.value = currentVal;
+                            }
+                        }
+                    }, 2000);
+                };
+            };
+        }
+        // 清空日志按钮
+        var allLogClearBtn = document.getElementById('lvscAllLogClearBtn');
+        if (allLogClearBtn) {
+            allLogClearBtn.onclick = function() {
+                _allLogs = [];
+                setStatus('全部日志已清空', 'run');
+            };
+        }
+        // 关闭/锁定全部日志
+        var allLogLockBtn = document.getElementById('lvscAllLogLockBtn');
+        if (allLogLockBtn) {
+            allLogLockBtn.onclick = function() {
+                _allLogEnabled = false;
+                _allLogUnlocked = false;
+                localStorage.setItem('lvSpiritCleaner.allLogEnabled', '0');
+                localStorage.setItem('lvSpiritCleaner.allLogUnlocked', '0');
+                var sec = document.getElementById('lvscAllLogSection');
+                if (sec) sec.style.display = 'none';
+                _versionClickCount = 0;
+                setStatus('全部日志已锁定，需再次点击版本号5次解锁', 'run');
+            };
+        }
         // 测试通知按钮
         document.getElementById('lvscTestNotifyBtn').onclick = function () {
             var pName = (getPlayer() || {}).name || '测试角色';
@@ -9084,6 +11269,8 @@ function stop(reason) {
             });
         };
         var cbm = document.getElementById('lvscCraftAutoBuyMats'); if (cbm) { cbm.checked = state.craftAutoBuyMats; cbm.onchange = function () { state.craftAutoBuyMats = this.checked; persistSetting('lvSpiritCleaner.craftAutoBuyMats', this.checked); }; }
+        var cbd = document.getElementById('lvscCraftBuyDelay'); if (cbd) { cbd.value = String(state.craftBuyDelay || 3); cbd.onchange = function() { state.craftBuyDelay = Math.max(1, Number(this.value) || 3); persistSetting('lvSpiritCleaner.craftBuyDelay', String(state.craftBuyDelay)); }; }
+        var cba = document.getElementById('lvscCraftBuyAmount'); if (cba) { cba.value = String(state.craftBuyAmount || ''); cba.onchange = function() { state.craftBuyAmount = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.craftBuyAmount', String(state.craftBuyAmount)); }; }
         var ctm = document.getElementById('lvscCraftAutoTimer'); if (ctm) { ctm.checked = state.craftAutoTimer; ctm.onchange = function () { state.craftAutoTimer = this.checked; persistSetting('lvSpiritCleaner.craftAutoTimer', this.checked); if (this.checked) updateNextAutoCraftTime(); }; }
         var ctm2 = document.getElementById('lvscCraftTimerMin'); if (ctm2) { ctm2.value = String(state.craftTimerMin); ctm2.onchange = function () { state.craftTimerMin = Math.max(1, Number(this.value) || 10); persistSetting('lvSpiritCleaner.craftTimerMin', String(state.craftTimerMin)); if (state.craftAutoTimer) updateNextAutoCraftTime(); }; }
         var cDelayMin = document.getElementById('lvscCraftDelayMin');
@@ -9127,6 +11314,7 @@ function stop(reason) {
         var ab = document.getElementById('lvscAutoBail'); if (ab) { ab.checked = state.autoBail; ab.onchange = function () { state.autoBail = this.checked; persistSetting('lvSpiritCleaner.autoBail', state.autoBail); }; }
         var bm = document.getElementById('lvscBailMethod'); if (bm) { bm.value = state.bailMethod; bm.onchange = function () { state.bailMethod = this.value; persistSetting('lvSpiritCleaner.bailMethod', this.value); }; }
         var av = document.getElementById('lvscAutoVerify'); if (av) { av.checked = state.autoVerify; av.onchange = function () { state.autoVerify = this.checked; persistSetting('lvSpiritCleaner.autoVerify', this.checked); }; }
+        var vcInit = document.getElementById('lvscVerifyCount'); if (vcInit) vcInit.textContent = _verifyPassCount;
         var sm = document.getElementById('lvscSafeMode'); if (sm) { sm.checked = state.safeMode; sm.onchange = function () { state.safeMode = this.checked; persistSetting('lvSpiritCleaner.safeMode', this.checked ? '1' : '0'); if (state.safeMode) { backupOriginalSettings(); applySafeModeConfig(); stopAllAuto(); setStatus('🛡 安全模式已开启，应用安全配置', 'warn'); setTimeout(function(){ location.reload(); }, 500); } else { restoreOriginalSettings(); setStatus('✅ 安全模式已关闭，还原原配置', 'ok'); setTimeout(function(){ location.reload(); }, 500); } }; window._lvscStopAllAuto = stopAllAuto; }
         var abc = document.getElementById('lvscAutoBailClick'); if (abc) { abc.checked = state.autoBailClick; abc.onchange = function () { state.autoBailClick = this.checked; persistSetting('lvSpiritCleaner.autoBailClick', state.autoBailClick); }; }
         setInterval(function () { if (!state.safeMode && state.autoBail) checkAndAutoBail(false); }, 30000);
@@ -9173,6 +11361,30 @@ function stop(reason) {
             }
         };
         startAutoCraftTimer();
+        // 置顶按钮：仅嵌入模式显示
+        var pinBtn = document.getElementById('lvscPinBtn');
+        if (pinBtn) {
+            // 恢复置顶状态
+            if (localStorage.getItem('lvSpiritCleaner.panelPinned') === '1') {
+                panel.classList.add('lvsc-pinned');
+                pinBtn.style.background = 'rgba(155,231,195,.3)';
+                pinBtn.title = '取消置顶';
+            }
+            pinBtn.onclick = function() {
+                var pinned = panel.classList.contains('lvsc-pinned');
+                if (pinned) {
+                    panel.classList.remove('lvsc-pinned');
+                    pinBtn.style.background = '';
+                    pinBtn.title = '置顶';
+                    localStorage.setItem('lvSpiritCleaner.panelPinned', '0');
+                } else {
+                    panel.classList.add('lvsc-pinned');
+                    pinBtn.style.background = 'rgba(155,231,195,.3)';
+                    pinBtn.title = '取消置顶';
+                    localStorage.setItem('lvSpiritCleaner.panelPinned', '1');
+                }
+            };
+        }
         document.getElementById('lvscCollapseBtn').onclick = function () {
             if (panel.classList.contains('lvsc-embedded')) {
                 panel.classList.add('lvsc-mobile-hidden');
@@ -9472,8 +11684,14 @@ function stop(reason) {
             localStorage.removeItem('lvscMasterLogLastDate');
             renderMasterLog();
         };
+        document.getElementById('lvscClearMasterSelfLog').onclick = function() {
+            localStorage.removeItem('lvscMasterSelfLogArr');
+            localStorage.removeItem('lvscMasterSelfLogLastDate');
+            renderMasterSelfLog();
+        };
         // 恢复日志
         renderMasterLog();
+        renderMasterSelfLog();
 
         // 物品搜索逻辑
         var giftSearchBtn = document.getElementById('lvscGiftItemSearchBtn');
@@ -9529,6 +11747,63 @@ function stop(reason) {
             } catch (_) { giftSearchResults.innerHTML = '搜索失败'; }
         });
         if (giftSearchInput) giftSearchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter' && giftSearchBtn) giftSearchBtn.click(); });
+
+        // 上供物品搜索
+        var offSearchBtn = document.getElementById('lvscOfferingItemSearchBtn');
+        var offSearchInput = document.getElementById('lvscOfferingItemSearch');
+        var offSearchResults = document.getElementById('lvscOfferingItemSearchResults');
+        if (offSearchBtn && offSearchInput && offSearchResults) {
+            offSearchBtn.addEventListener('click', async function() {
+                var q = (offSearchInput.value || '').trim().toLowerCase();
+                if (!q) return;
+                offSearchResults.style.display = 'block';
+                offSearchResults.innerHTML = '搜索中...';
+                try {
+                    var invR = await gameApi().get('/api/game/inventory/category?tab=all&page=1&size=200');
+                    if (!invR || invR.code !== 200 || !invR.data || !Array.isArray(invR.data.items)) {
+                        offSearchResults.innerHTML = '<div style="color:#aaa;padding:2px 6px">获取背包失败</div>';
+                        return;
+                    }
+                    offSearchResults.innerHTML = '';
+                    var items = invR.data.items.filter(function(item) {
+                        var nm = (item.name || item.itemName || '').toLowerCase();
+                        return nm && nm.indexOf(q) >= 0;
+                    });
+                    var RAR = ['','普通','优良','稀有','史诗','传说'];
+                    var found = false;
+                    for (var _oi = 0; _oi < items.length; _oi++) {
+                        var item = items[_oi];
+                        var nm = item.name || item.itemName || '未知';
+                        var pid = parseInt(item.id || item.itemId || item.instanceId || 0, 10);
+                        if (!pid) continue;
+                        var qty = item.quantity || item.count || 1;
+                        var rarityVal = item.rarity || item.quality || 0;
+                        var qualityStr = RAR[rarityVal] ? ' [' + RAR[rarityVal] + ']' : '';
+                        found = true;
+                        var row = document.createElement('div');
+                        row.style.cssText = 'display:flex;align-items:center;padding:3px 8px;cursor:pointer;border-radius:3px';
+                        row.addEventListener('mouseover', function() { this.style.background = 'rgba(107,201,160,.12)'; });
+                        row.addEventListener('mouseout', function() { this.style.background = 'transparent'; });
+                        row.innerHTML = '<span style="flex:1;color:#6bc9a0;font-size:11px">' + nm + qualityStr + ' <span style="color:#888;font-size:9px">x' + qty + '</span></span><span style="color:#6a6560;font-size:9px">ID:' + pid + '</span>';
+                        (function(pid, nm) {
+                            row.addEventListener('click', function() {
+                                state.offeringPlayerItemId = pid;
+                                state.offeringItemName = nm;
+                                localStorage.setItem('lvSpiritCleaner.offeringPlayerItemId', String(pid));
+                                localStorage.setItem('lvSpiritCleaner.offeringItemName', nm);
+                                document.getElementById('lvscOfferingItemSelected').textContent = nm;
+                                offSearchResults.style.display = 'none';
+                            });
+                        })(pid, nm);
+                        offSearchResults.appendChild(row);
+                    }
+                    if (!found) {
+                        offSearchResults.innerHTML = '<div style="color:#aaa;padding:2px 6px">背包中无匹配物品</div>';
+                    }
+                } catch (_) { offSearchResults.innerHTML = '搜索失败'; }
+            });
+            offSearchInput.addEventListener('keydown', function(e) { if (e.key === 'Enter' && offSearchBtn) offSearchBtn.click(); });
+        }
         } catch(e) {}
         document.getElementById('lvscHiddenCharmBtn').onclick = function () {
             ensureHiddenCharm(true);
@@ -9687,6 +11962,8 @@ function stop(reason) {
         };
         })();
         onNum('lvscQuickClearTargetPct', 'quickClearTargetPct', 1, 100);
+        onNum('lvscNightCheckIntervalQuick', 'nightCheckIntervalQuick', 5, 300);
+        onNum('lvscNightCheckIntervalExplore', 'nightCheckIntervalExplore', 5, 300);
         onNum('lvscMeditateStopSpirit', 'meditateStopSpirit', 0, 100);  // %输入限0-100
         onNum('lvscMonitorStartSpirit', 'monitorStartSpirit', 0, 100); // %输入限0-100
         onChk('lvscAutoExploreAfterMeditate', 'autoExploreAfterMeditate');
@@ -9769,6 +12046,19 @@ function stop(reason) {
             if (state.wecomNotify) startRecruitObserver();
         };
         onStr('lvscWecomNotifyWebhook', 'wecomNotifyWebhook');
+        // 通知类别开关
+        var notifyCats = ['Clean','Meditate','Combat','Buff','Equip','Master','Insc','Misc'];
+        for (var nci = 0; nci < notifyCats.length; nci++) {
+            var ncat = notifyCats[nci];
+            var nkey = 'lvSpiritCleaner.notify' + ncat;
+            var ncb = document.getElementById('lvscNotify' + ncat);
+            if (ncb) {
+                ncb.onchange = function (c, k) { return function () {
+                    state['notify' + c] = this.checked;
+                    persistSetting(k, state['notify' + c]);
+                }; }(ncat, nkey);
+            }
+        }
         // 状态栏分类开关
         var statusCats = ['Run','Fight','Merchant','Meditate','Recover','Buff','Insc','Craft','Farm','Dispose','Luck','Break','Origin','Wecom','Equip'];
         for (var sci = 0; sci < statusCats.length; sci++) {
@@ -9784,7 +12074,10 @@ function stop(reason) {
         onChk('lvscAutoMasterRequests', 'autoMasterRequests');
         onChk('lvscAutoTeachDaily', 'autoTeachDaily');
         onChk('lvscAutoGiftItemsDaily', 'autoGiftItemsDaily');
-        onChk('lvscAutoGiftStonesDaily', 'autoGiftStonesDaily');
+        onChk('lvscAutoWenDaoDaily', 'autoWenDaoDaily');
+        onChk('lvscAutoOfferingDaily', 'autoOfferingDaily');
+        onNum('lvscOfferingItemQty', 'offeringQty', 1);
+
         onNum('lvscGiftStonesQty', 'giftStonesQty', 1);
         onNum('lvscGiftItemQty', 'giftItemQty', 1);
         onChk('lvscAutoHudaoBreakMeditate', 'autoHudaoBreakMeditate');
@@ -9868,8 +12161,7 @@ setInterval(function() {
         if (state.autoRecruit || state.wecomNotify) {
             setTimeout(function () { startRecruitObserver(); }, 2000);
         }
-                (function(){document.querySelectorAll('.lvsc-tab-panel>.lvsc-section').forEach(function(sec){var t=(sec.querySelector('.lvsc-section-title-row span')||{}).textContent||'';var target='explore';if(/^(妖兽|护道|商人|冥想|装备|本命|自动刷新)/.test(t))target='explore';else if(/^(炼制|批量炼制|铭文|功法|师徒|监控|其他|出售|洗练石|气运|出狱|灵田|登录|月卡|收徒|藏宝图|珍宝阁|扫荡|竞技场模拟|自动抢红包)/.test(t))target='auto';
-else if(/^(更新|通知|配置|安全|主题|模式)/.test(t))target='other';var panel=document.querySelector('[data-tab-panel="'+target+'"]');if(panel&&sec.parentNode!==panel)panel.appendChild(sec)})})();
+                (function(){document.querySelectorAll('.lvsc-tab-panel>.lvsc-section').forEach(function(sec){var t=(sec.querySelector('.lvsc-section-title-row span')||{}).textContent||'';var target='explore';if(/^(妖兽|护道|商人|冥想|装备|本命|自动刷新)/.test(t))target='explore';else if(/^(炼制|批量炼制|铭文|功法|师徒|监控|其他|出售|洗练石|气运|出狱|灵田|登录|月卡|收徒|藏宝图|珍宝阁|扫荡|竞技场模拟|自动抢红包|秘境自动挑战|统计)/.test(t))target='auto';else if(/^(更新|通知|配置|安全|主题|模式|日志)/.test(t))target='other';var panel=document.querySelector('[data-tab-panel="'+target+'"]');if(panel&&sec.parentNode!==panel)panel.appendChild(sec)})})();
         // ====== 动态功能注入 ======
         try {(function() {
             function el(t, c, h) { var e = document.createElement(t); if (c) e.className = c; if (h) e.innerHTML = h; return e; }
@@ -9973,6 +12265,233 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
         if (stopBtn) stopBtn.onclick = stopNirvana;
     })();
 })();
+    function incarnationSleep(ms) {
+        var start = Date.now();
+        return new Promise(function(resolve) {
+            var timer = setInterval(function() {
+                if (!autoIncarnationRunning || Date.now() - start >= ms) {
+                    clearInterval(timer);
+                    resolve();
+                }
+            }, 200);
+        });
+    }
+    // ==== 化身喂丹 ====
+    (function() {
+        function incarnationLog(msg) {
+            allLog('化身喂丹', msg);
+            var log = document.getElementById('lvscIncarnationLog');
+            if (!log) return;
+            var time = new Date().toLocaleTimeString();
+            log.textContent = '[' + time + '] ' + msg + '\n' + (log.textContent || '');
+            if (log.textContent.length > 5000) log.textContent = log.textContent.substring(0, 5000);
+        }
+        function updateIncarnationDisplay(realm, pct, canBreak) {
+            var el = document.getElementById('lvscIncarnationProgress');
+            if (!el) return;
+            var pctStr = pct !== null ? pct.toFixed(1) + '%' : '--';
+            var breakStr = canBreak ? ' 🔥可突破' : '';
+            el.innerHTML = (realm ? realm + ' | ' : '') + pctStr + breakStr;
+            el.style.color = canBreak ? '#ff6b6b' : '#6bc9a0';
+        }
+        var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
+        var s = sec('化身喂丹', 'manual'), g = el('div', 'lvsc-grid2');
+        g.innerHTML = '<label>配方<select id="lvscIncarnationRecipeSelect" style="min-width:140px"><option value="">点击刷新</option></select><button id="lvscIncarnationRefreshBtn" style="height:29px;padding:0 8px;margin-left:4px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;font-size:11px;">刷新配方</button></label>' +
+        '<label>单次制作数量<input id="lvscIncarnationCraftQty" type="number" min="1" max="999" value="'+(state.incarnationCraftQty||10)+'" style="width:70px"></label>' +
+        '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscIncarnationAutoBuy\" type=\"checkbox\"'+(state.incarnationAutoBuy?' checked':'')+'>自动购买材料</label>' +
+        '<label style=\"font-size:11px;display:flex;align-items:center;gap:4px\"><span style=\"white-space:nowrap\">每次购买量</span><input id=\"lvscIncarnationBuyAmount\" type=\"number\" min=\"0\" step=\"10\" value=\"'+(state.incarnationCraftBuyAmount||0)+'\" placeholder=\"0=全部\" style=\"width:75px;height:20px;flex:none\"></label>' +
+        '<label style=\"font-size:11px;display:flex;align-items:center;gap:4px\"><span style=\"white-space:nowrap\">单次炼制间隔(秒)</span><input id=\"lvscIncarnationCraftDelay\" type=\"number\" min=\"1\" step=\"1\" value=\"'+(state.incarnationCraftBuyDelay||60)+'\" style=\"width:75px;height:20px;flex:none\"></label>' +
+        '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscIncarnationAutoBreak\" type=\"checkbox\"'+(state.incarnationAutoBreak?' checked':'')+'>自动突破</label>' +
+        '<label style=\"font-size:11px;display:flex;align-items:center;gap:4px\"><span style=\"white-space:nowrap\">频繁重试(秒)</span><input id=\"lvscIncarnationRetryDelay\" type=\"number\" min=\"5\" step=\"5\" value=\"'+(state.incarnationRetryDelay||30)+'\" style=\"width:55px;height:20px;flex:none\"></label>' +
+        '<div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6bc9a0"><span>化身修为:</span><span id="lvscIncarnationProgress">获取中...</span></div>' +
+        '<div style="font-size:10px;color:#cfc6b2;margin-top:2px">💡 化身突破时主体不可冥想，将自动暂停冥想后恢复</div>' +
+        '<div style="display:flex;gap:6px;margin-top:4px"><button id="lvscIncarnationStartBtn" style="flex:1;height:32px;background:linear-gradient(135deg,#dbb970,#c9a050);color:#17141d;border:0!important;border-radius:6px;cursor:pointer;font-weight:700;">开始炼制</button><button id="lvscIncarnationStopBtn" style="flex:1;height:32px;background:rgba(255,255,255,.08);color:#cfc6b2;border:1px solid rgba(255,255,255,.1)!important;border-radius:6px;cursor:pointer;font-weight:700;display:none;">停止</button></div>';
+        s.appendChild(g);
+        s.appendChild(logDiv('lvscIncarnationLog'));
+        cat(s, '炼制');
+        // 绑定
+        (function() {
+            var recipeSel = document.getElementById('lvscIncarnationRecipeSelect');
+            if (!recipeSel) return;
+            if (state.incarnationRecipeId) recipeSel.value = state.incarnationRecipeId;
+            recipeSel.onchange = function() { state.incarnationRecipeId = this.value; persistSetting('lvSpiritCleaner.incarnationRecipeId', this.value); };
+            async function refreshIncarnationRecipes() {
+                var recipes = await fetchRecipes('alchemy');
+                recipeSel.innerHTML = '<option value="">选择配方</option>';
+                if (!recipes.length) { recipeSel.innerHTML = '<option value="">无配方或加载失败</option>'; return; }
+                var found = false;
+                for (var ri = 0; ri < recipes.length; ri++) {
+                    var r = recipes[ri];
+                    var name = (getCraftItemName(r, 'alchemy') || '');
+                    if (name.indexOf('分魂') !== 0) continue;
+                    var realId = getCraftItemId(r, 'alchemy');
+                    if (!realId) continue;
+                    found = true;
+                    recipeSel.innerHTML += '<option value="' + realId + '"' + (state.incarnationRecipeId === realId ? ' selected' : '') + '>' + name + '</option>';
+                }
+                if (!found) recipeSel.innerHTML = '<option value="">未找到分魂丹药配方</option>';
+                if (state.incarnationRecipeId && !recipeSel.value) recipeSel.value = state.incarnationRecipeId;
+            }
+            setTimeout(refreshIncarnationRecipes, 2000);
+            var refreshBtn = document.getElementById('lvscIncarnationRefreshBtn');
+            if (refreshBtn) refreshBtn.onclick = refreshIncarnationRecipes;
+            // 绑定其他控件
+            var craftQtyEl = document.getElementById('lvscIncarnationCraftQty');
+            if (craftQtyEl) { craftQtyEl.onchange = function() { state.incarnationCraftQty = Math.max(1, Number(this.value)||10); persistSetting('lvSpiritCleaner.incarnationCraftQty', String(state.incarnationCraftQty)); }; }
+            var autoBuyEl = document.getElementById('lvscIncarnationAutoBuy');
+            if (autoBuyEl) { autoBuyEl.onchange = function() { state.incarnationAutoBuy = this.checked; persistSetting('lvSpiritCleaner.incarnationAutoBuy', this.checked); }; }
+            var buyAmtEl = document.getElementById('lvscIncarnationBuyAmount');
+            if (buyAmtEl) { buyAmtEl.onchange = function() { state.incarnationCraftBuyAmount = Math.max(0, Number(this.value) || 0); persistSetting('lvSpiritCleaner.incarnationCraftBuyAmount', String(state.incarnationCraftBuyAmount)); }; }
+            var craftDelayEl = document.getElementById('lvscIncarnationCraftDelay');
+            if (craftDelayEl) { craftDelayEl.onchange = function() { state.incarnationCraftBuyDelay = Math.max(1, Number(this.value) || 60); persistSetting('lvSpiritCleaner.incarnationCraftBuyDelay', String(state.incarnationCraftBuyDelay)); }; }
+            var autoBreakEl = document.getElementById('lvscIncarnationAutoBreak');
+            if (autoBreakEl) { autoBreakEl.onchange = function() { state.incarnationAutoBreak = this.checked; persistSetting('lvSpiritCleaner.incarnationAutoBreak', this.checked); }; }
+            var retryDelayEl = document.getElementById('lvscIncarnationRetryDelay');
+            if (retryDelayEl) { retryDelayEl.value = String(state.incarnationRetryDelay || 30); retryDelayEl.onchange = function() { state.incarnationRetryDelay = Math.max(5, Number(this.value) || 30); persistSetting('lvSpiritCleaner.incarnationRetryDelay', String(state.incarnationRetryDelay)); }; }
+            // 核心循环
+            async function incarnationLoop() {
+                if (autoIncarnationRunning) return;
+                if (!gameApi()) { incarnationLog('API不可用'); return; }
+                var recipeId = state.incarnationRecipeId;
+                if (!recipeId) { incarnationLog('请先选择配方'); return; }
+                autoIncarnationRunning = true;
+                var recipes = await fetchRecipes('alchemy');
+                var recipe = null;
+                for (var ri = 0; ri < recipes.length; ri++) {
+                    if (getCraftItemId(recipes[ri], 'alchemy') === recipeId) { recipe = recipes[ri]; break; }
+                }
+                if (!recipe) { incarnationLog('未找到配方信息'); autoIncarnationRunning = false; return; }
+                var name = getCraftItemName(recipe, 'alchemy');
+                var craftQty = state.incarnationCraftQty || 10;
+                var autoBuy = state.incarnationAutoBuy;
+                var buyAmt = state.incarnationCraftBuyAmount || 0;
+                var craftDelay = (state.incarnationCraftBuyDelay || 60) * 1000;
+                var autoBreak = state.incarnationAutoBreak;
+                incarnationLog('开始化身喂丹: ' + name + ' | 每批' + craftQty + '个' + (autoBuy ? ' | 自动买材料' : '') + ' | 间隔' + (state.incarnationCraftBuyDelay || 60) + '秒');
+                while (autoIncarnationRunning) {
+                    var iterStart = Date.now();
+                    // 1. 查背包
+                    var invRes = await gameApi().get('/api/game/inventory/category?tab=all&page=1&size=200');
+                    var invCount = 0;
+                    if (invRes && invRes.code === 200 && Array.isArray(invRes.data && invRes.data.items)) {
+                        for (var ii = 0; ii < invRes.data.items.length; ii++) {
+                            var item = invRes.data.items[ii];
+                            if (String(item.templateId || '') === recipeId || (item.name || item.itemName || '').indexOf(name) >= 0) {
+                                invCount += Number(item.quantity || item.count || 1);
+                            }
+                        }
+                    }
+                    // 2. 炼制
+                    if (invCount < craftQty) {
+                        var need = craftQty - invCount;
+                        if (buyAmt > 0) need = Math.min(buyAmt, need);
+                        incarnationLog('背包只有' + invCount + '个，需炼制' + need + '个');
+                        if (autoBuy) {
+                            await buyMaterialsOnce('alchemy', recipeId, need);
+                            await incarnationSleep(5000);
+                        }
+                        var craftRes = await gameApi().post('/api/game/alchemy/batch-craft', { pillId: recipeId, count: need });
+                        if (craftRes && craftRes.code === 200) {
+                            incarnationLog('炼制 ' + name + ' ×' + need + ' 成功');
+                        } else {
+                            var failMsg = (craftRes && craftRes.message) || '未知';
+                            if (failMsg.indexOf('频繁') >= 0 || failMsg.indexOf('稍后') >= 0) {
+                                var retrySec = state.incarnationRetryDelay || 30;
+                                incarnationLog('操作频繁，' + retrySec + '秒后重试...');
+                                await incarnationSleep(retrySec * 1000);
+                            } else {
+                                incarnationLog('炼制失败: ' + failMsg);
+                                await incarnationSleep(2000);
+                            }
+                            continue;
+                        }
+                    }
+                    // 3. 喂丹
+                    var feedRes = await gameApi().post('/api/game/incarnation/consume-pill-all', {});
+                    if (feedRes && feedRes.code === 200 && feedRes.data) {
+                        var status = feedRes.data.status;
+                        var msg = feedRes.data.message || '';
+                        if (msg) incarnationLog(msg);
+                        if (status) {
+                            var pct = status.cultivationNeeded > 0 ? (status.cultivation / status.cultivationNeeded * 100) : 0;
+                            updateIncarnationDisplay(status.realmName, pct, status.canBreakthrough);
+                            // 4. 自动突破（先停冥想→突破→恢复冥想）
+                            if (autoBreak && status.canBreakthrough) {
+                                incarnationLog('化身可突破，检查主体冥想状态...');
+                                var wasMeditating = false;
+                                try {
+                                    var medStatus = await getMeditationStatus();
+                                    wasMeditating = isMeditatingStatus(medStatus);
+                                    if (wasMeditating) {
+                                        incarnationLog('主体冥想中，先收功...');
+                                        await stopMeditationAndRefresh();
+                                        await sleep(500);
+                                    }
+                                } catch(_) {}
+                                incarnationLog('尝试化身突破...');
+                                var breakRes = await gameApi().post('/api/game/incarnation/breakthrough', {});
+                                if (breakRes && breakRes.code === 200 && breakRes.data) {
+                                    incarnationLog(breakRes.data.message || '突破成功');
+                                    var ns = breakRes.data.status;
+                                    if (ns) {
+                                        var npct = ns.cultivationNeeded > 0 ? (ns.cultivation / ns.cultivationNeeded * 100) : 0;
+                                        updateIncarnationDisplay(ns.realmName, npct, ns.canBreakthrough);
+                                    }
+                                } else {
+                                    incarnationLog('突破失败: ' + ((breakRes && breakRes.message) || '未知'));
+                                }
+                                // 恢复冥想
+                                if (wasMeditating) {
+                                    try {
+                                        await gameApi().post('/api/game/meditate/start', {});
+                                        incarnationLog('主体冥想已恢复');
+                                    } catch(_) { incarnationLog('恢复冥想失败'); }
+                                }
+                            }
+                        }
+                    } else {
+                        incarnationLog('喂丹失败: ' + ((feedRes && feedRes.message) || '未知'));
+                    }
+                    await incarnationSleep(craftDelay);
+                }
+                autoIncarnationRunning = false;
+                incarnationLog('化身喂丹已停止');
+            }
+            // 开始/停止
+            var startBtn = document.getElementById('lvscIncarnationStartBtn');
+            if (startBtn) startBtn.onclick = function() {
+                if (autoIncarnationRunning) return;
+                startBtn.style.display = 'none';
+                var stopBtn = document.getElementById('lvscIncarnationStopBtn');
+                if (stopBtn) { stopBtn.style.display = ''; stopBtn.disabled = false; }
+                incarnationLoop().finally(function() {
+                    startBtn.style.display = '';
+                    if (stopBtn) stopBtn.style.display = 'none';
+                });
+            };
+            var stopBtn = document.getElementById('lvscIncarnationStopBtn');
+            if (stopBtn) stopBtn.onclick = function() {
+                if (!autoIncarnationRunning) return;
+                autoIncarnationRunning = false;
+                stopBtn.disabled = true;
+                incarnationLog('正在停止...');
+            };
+            // 定时刷新修为显示
+            async function refreshIncarnationStatus() {
+                if (!gameApi() || autoIncarnationRunning) return;
+                try {
+                    var res = await gameApi().post('/api/game/incarnation/consume-pill-all', {});
+                    if (res && res.code === 200 && res.data && res.data.status) {
+                        var st = res.data.status;
+                        var pct = st.cultivationNeeded > 0 ? (st.cultivation / st.cultivationNeeded * 100) : 0;
+                        updateIncarnationDisplay(st.realmName, pct, st.canBreakthrough);
+                    }
+                } catch(_) {}
+            }
+            setInterval(refreshIncarnationStatus, 60000);
+            setTimeout(refreshIncarnationStatus, 3000);
+        })();
+    })();
 
             // ---------- 铭文洗练 → auto ----------
             (function() {
@@ -10442,6 +12961,60 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                 var fsp = document.getElementById('lvscFarmStopBtn'); if (fsp) fsp.onclick = function() { stopFarm(); var sb = document.getElementById('lvscFarmStartBtn'); if (sb) sb.style.display = ''; this.style.display = 'none'; };
             })();
 
+            // ---------- 自动温养 → 监控 ----------
+            (function() {
+                var c = document.getElementById('lvscMonitorIncubation'); if (!c) return;
+                // 配置区
+                var g = el('div', 'lvsc-grid2');
+                g.innerHTML = '<label>检测间隔(秒)<input id=\"lvscIncubationInterval\" type=\"number\" min=\"10\" step=\"5\" value=\"' + state.autoIncubationInterval + '\"></label>' +
+                    '<label>最低入队品质<select id=\"lvscIncubationMinRarity\">' +
+                    '<option value="1"' + (state.autoIncubationMinRarity===1?' selected':'') + '>普通+</option>' +
+                    '<option value="2"' + (state.autoIncubationMinRarity===2?' selected':'') + '>优良+</option>' +
+                    '<option value="3"' + (state.autoIncubationMinRarity===3?' selected':'') + '>稀有+</option>' +
+                    '<option value="4"' + (state.autoIncubationMinRarity===4?' selected':'') + '>史诗+</option>' +
+                    '<option value="5"' + (state.autoIncubationMinRarity===5?' selected':'') + '>传说+</option>' +
+                    '</select></label>';
+                c.appendChild(g);
+                // 勾选项
+                var cfgHtml = '<div class=\"lvsc-grid2\" style=\"grid-template-columns:1fr 1fr\">' +
+                    '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscIncubationAutoEnqueue\" type=\"checkbox\"' + (state.autoIncubationAutoEnqueue ? ' checked' : '') + '>自动入队温养</label>' +
+                    '<label class=\"lvsc-check\" style=\"font-size:11px\"><input id=\"lvscAutoStartIncubation\" type=\"checkbox\"' + (localStorage.getItem('lvSpiritCleaner.autoStartIncubation') === '1' ? ' checked' : '') + '>刷新后自启</label>' +
+                    '</div>';
+                c.insertAdjacentHTML('beforeend', cfgHtml);
+                // 想要灵兽
+                var beastsStr = (state.autoIncubationDesiredBeasts||[]).join(' ');
+                c.insertAdjacentHTML('beforeend', '<div style=\"margin-top:4px;font-size:11px;color:#dbb970\">想要的灵兽（空格隔开）</div>' +
+                    '<textarea id=\"lvscIncubationDesiredBeasts\" rows=\"2\" style=\"width:100%;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:4px;color:#cfc6b2;padding:4px;font-size:11px;resize:vertical\">' + beastsStr + '</textarea>');
+                // 想要先天属性
+                var traitsStr = (state.autoIncubationDesiredTraits||[]).join(' ');
+                c.insertAdjacentHTML('beforeend', '<div style=\"margin-top:4px;font-size:11px;color:#dbb970\">想要的先天属性（直接填关键词，如"舍生"，"无"表示无属性也要，空格隔开）</div>' +
+                    '<textarea id=\"lvscIncubationDesiredTraits\" rows=\"2\" style=\"width:100%;background:transparent;border:1px solid rgba(255,255,255,.25);border-radius:4px;color:#cfc6b2;padding:4px;font-size:11px;resize:vertical\">' + traitsStr + '</textarea>');
+                // 按钮
+                var btnRow = el('div'); btnRow.style.cssText = 'display:flex;gap:6px;margin-top:4px';
+                btnRow.appendChild(actBtn('lvscIncubationStartBtn', '开始监控'));
+                btnRow.appendChild(stopBtn('lvscIncubationStopBtn'));
+                c.appendChild(btnRow);
+                c.appendChild(logDiv('lvscIncubationLog'));
+                // 绑定控件事件
+                var ii = document.getElementById('lvscIncubationInterval');
+                if (ii) { ii.value = String(state.autoIncubationInterval); ii.onchange = function() { state.autoIncubationInterval = Math.max(10, Number(this.value)||30); persistSetting('lvSpiritCleaner.autoIncubationInterval', String(state.autoIncubationInterval)); }; }
+                var imr = document.getElementById('lvscIncubationMinRarity');
+                if (imr) { imr.onchange = function() { state.autoIncubationMinRarity = Number(this.value); persistSetting('lvSpiritCleaner.autoIncubationMinRarity', String(this.value)); }; }
+                var iae = document.getElementById('lvscIncubationAutoEnqueue');
+                if (iae) { iae.onchange = function() { state.autoIncubationAutoEnqueue = this.checked; persistSetting('lvSpiritCleaner.autoIncubationAutoEnqueue', this.checked); }; }
+                var ias = document.getElementById('lvscAutoStartIncubation');
+                if (ias) { ias.onchange = function() { state.autoStartIncubation = this.checked; persistSetting('lvSpiritCleaner.autoStartIncubation', this.checked ? '1' : '0'); }; }
+                var ib = document.getElementById('lvscIncubationDesiredBeasts');
+                if (ib) { ib.onchange = function() { var arr = this.value.split(/\s+/).filter(function(s){return s.trim()}); state.autoIncubationDesiredBeasts = arr; persistSetting('lvSpiritCleaner.autoIncubationDesiredBeasts', JSON.stringify(arr)); }; }
+                var it = document.getElementById('lvscIncubationDesiredTraits');
+                if (it) { it.onchange = function() { var arr = this.value.split(/\s+/).filter(function(s){return s.trim()}); state.autoIncubationDesiredTraits = arr; persistSetting('lvSpiritCleaner.autoIncubationDesiredTraits', JSON.stringify(arr)); }; }
+                // 开始/停止按钮
+                var isBtn = document.getElementById('lvscIncubationStartBtn');
+                if (isBtn) isBtn.onclick = function() { this.style.display = 'none'; var sb = document.getElementById('lvscIncubationStopBtn'); if (sb) sb.style.display = ''; autoIncubationLoop(); };
+                var ipBtn = document.getElementById('lvscIncubationStopBtn');
+                if (ipBtn) ipBtn.onclick = function() { stopIncubation(); var sb = document.getElementById('lvscIncubationStartBtn'); if (sb) sb.style.display = ''; this.style.display = 'none'; };
+            })();
+
             // ---------- 功法洗练 → craft ----------
             (function() {
                 var p = document.querySelector('[data-tab-panel="auto"]'); if (!p) return;
@@ -10648,6 +13221,8 @@ function rfrBtn(id) { var b = el('button'); b.id = id; b.className = 'lvsc-rfr-b
                     else if (localStorage.getItem('lvSpiritCleaner.washStoneUpgradeRunning') === '1') items.push('洗炼石升品');
                     if (typeof autoTreasureRunning !== 'undefined' && autoTreasureRunning) items.push('藏宝图');
                     if (typeof autoDisposeRunning !== 'undefined' && autoDisposeRunning) items.push('出售&分解');
+                    if (typeof autoIncubationRunning !== 'undefined' && autoIncubationRunning) items.push('自动温养');
+                    else if (localStorage.getItem('lvSpiritCleaner.incubationRunning') === '1') items.push('自动温养');
                     if (state.autoMaintainLuck) items.push('维持气运');
                     if (typeof autoTrialRunning !== 'undefined' && autoTrialRunning) items.push('试练塔');
                     if (typeof autoMysteryBoxRunning !== 'undefined' && autoMysteryBoxRunning) items.push('秘匣');
@@ -10978,8 +13553,10 @@ try{document.querySelectorAll('.lvsc-section-title-row').forEach(function(r){r.s
         autoWashStoneUpgradeRunning = false;
         autoNirvanaRunning = false;
         autoInscriptionRunning = false;
+        autoIncubationRunning = false;
         try { localStorage.setItem('lvSpiritCleaner.farmRunning', '0'); } catch (_) {}
         try { localStorage.setItem('lvSpiritCleaner.disposeRunning', '0'); } catch (_) {}
+        try { localStorage.setItem('lvSpiritCleaner.incubationRunning', '0'); } catch (_) {}
     }
     function waitForGame() {
         if (document.body && (window.api || window._lastPlayerData || document.getElementById('exploreBtn') || location.pathname === '/' || location.pathname === '' || location.pathname === '/game.html')) {
@@ -11307,6 +13884,13 @@ if (localStorage.getItem('lvSpiritCleaner.autoStartWashStone') === '1') {
 if (localStorage.getItem('lvSpiritCleaner.autoStartPillUpgrade') === '1') {
     setTimeout(function() { autoUpgradePillsLoop(); }, 5000);
 }
+if (localStorage.getItem('lvSpiritCleaner.autoStartIncubation') === '1') {
+    setTimeout(function() {
+        autoIncubationLoop();
+        var fb = document.getElementById('lvscIncubationStartBtn'); if (fb) fb.style.display = 'none';
+        var fs = document.getElementById('lvscIncubationStopBtn'); if (fs) fs.style.display = '';
+    }, 5000);
+}
 if (localStorage.getItem('lvSpiritCleaner.quickClearRunning') === '1') {
     setTimeout(function() {
         try {
@@ -11344,6 +13928,17 @@ if (state.autoMysteryBox && !mysteryBoxOpenedToday()) {
     setTimeout(function() { toggleAutoMysteryBox(); }, 4000);
 }
 var _reloadMin = Number(localStorage.getItem('lvSpiritCleaner.autoReloadMin')) || 0;
+// 秘境每天自动执行一次
+if (localStorage.getItem('lvSpiritCleaner.dungeonAutoDaily') === '1') {
+    var _dgToday = new Date().toDateString();
+    var _dgLast = localStorage.getItem('lvSpiritCleaner.dungeonLastDate') || '';
+    if (_dgLast !== _dgToday) {
+        setTimeout(function() {
+            localStorage.setItem('lvSpiritCleaner.dungeonLastDate', _dgToday);
+            autoDungeonLoop();
+        }, 8000);
+    }
+}
 // 登录页 → 允许自动刷新
 if (_reloadMin > 0) {
                 var _lastReload = Number(localStorage.getItem('lvSpiritCleaner.lastReloadTime')) || 0;
@@ -11418,6 +14013,55 @@ setInterval(function() {
             ib._bound = true;
             ib.onclick = function() {
                 try{var inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=function(){var f=this.files[0];if(!f)return;var r=new FileReader();r.onload=function(){try{var d=JSON.parse(r.result);var cnt=0;for(var k in d){if(!_isRuntimeKey(k)){try{localStorage.setItem(k,d[k]);cnt++}catch(e){}}}alert('导入了 '+cnt+' 项配置（已过滤动态数据）');location.reload();}catch(e){alert('导入失败:'+e.message)}};r.readAsText(f)};inp.click();}catch(e){alert('导入失败:'+e.message)}
+            };
+        }
+        // 导出网站数据
+        var esdb = document.getElementById('lvscExportSiteDataBtn');
+        if (esdb && !esdb._bound) {
+            esdb._bound = true;
+            esdb.onclick = function() {
+                if(!confirm('导出当前网站的所有localStorage数据？'))return;
+                try{
+                    var c={};var total=0;
+                    for(var i=0;i<localStorage.length;i++){
+                        var k=localStorage.key(i);
+                        if(k){c[k]=localStorage.getItem(k);total++;}
+                    }
+                    var b=new Blob([JSON.stringify(c,null,2)],{type:'application/json'});
+                    var a=document.createElement('a');
+                    a.href=URL.createObjectURL(b);
+                    a.download='site-data-'+new Date().toISOString().slice(0,10)+'.json';
+                    a.click();URL.revokeObjectURL(a.href);
+                    alert('已导出 '+total+' 项网站数据');
+                }catch(e){alert('导出失败:'+e.message)}
+            };
+        }
+        // 导入网站数据
+        var isdb = document.getElementById('lvscImportSiteDataBtn');
+        if (isdb && !isdb._bound) {
+            isdb._bound = true;
+            isdb.onclick = function() {
+                if(!confirm('导入网站数据会覆盖当前所有localStorage，确定？'))return;
+                try{
+                    var inp=document.createElement('input');inp.type='file';inp.accept='.json';
+                    inp.onchange=function(){
+                        var f=this.files[0];if(!f)return;
+                        var r=new FileReader();
+                        r.onload=function(){
+                            try{
+                                var d=JSON.parse(r.result);var cnt=0;
+                                for(var k in d){
+                                    if(d.hasOwnProperty(k)){
+                                        try{localStorage.setItem(k,d[k]);cnt++}catch(e){}
+                                    }
+                                }
+                                alert('导入了 '+cnt+' 项网站数据');location.reload();
+                            }catch(e){alert('导入失败:'+e.message)}
+                        };
+                        r.readAsText(f)
+                    };
+                    inp.click();
+                }catch(e){alert('导入失败:'+e.message)}
             };
         }
     }, 3000);
